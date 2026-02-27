@@ -84,25 +84,54 @@ type ResolvedSecret struct {
 
 // FetchTemplate obtains a template directory. If source is a local path that
 // exists, it is returned directly. Otherwise it is treated as a git URL and
-// cloned to a temp directory (caller must clean up).
-func FetchTemplate(source string) (dir string, cleanup bool, err error) {
+// cloned to a temp directory. When cleanupDir is non-empty the caller must
+// os.RemoveAll it when done.
+//
+// A fragment suffix selects a subdirectory within a git repo:
+//
+//	https://github.com/org/repo#templates/default
+func FetchTemplate(source string) (dir string, cleanupDir string, err error) {
 	// Local path — use directly
 	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
-		return source, false, nil
+		return source, "", nil
 	}
 
+	// Split url#subdir
+	repoURL, subdir := splitFragment(source)
+
 	// Git URL — clone to temp dir
-	dir, err = os.MkdirTemp("", "angee-tmpl-*")
+	cloneDir, err := os.MkdirTemp("", "angee-tmpl-*")
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
-	cmd := exec.Command("git", "clone", "--depth", "1", source, dir)
+	cmd := exec.Command("git", "clone", "--depth", "1", repoURL, cloneDir)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(dir)
-		return "", false, fmt.Errorf("cloning template %s: %w", source, err)
+		os.RemoveAll(cloneDir)
+		return "", "", fmt.Errorf("cloning template %s: %w", repoURL, err)
 	}
-	return dir, true, nil
+
+	dir = cloneDir
+	if subdir != "" {
+		dir = filepath.Join(cloneDir, subdir)
+		if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+			os.RemoveAll(cloneDir)
+			return "", "", fmt.Errorf("subdirectory %q not found in %s", subdir, repoURL)
+		}
+	}
+
+	return dir, cloneDir, nil
+}
+
+// splitFragment splits "url#subdir" into ("url", "subdir").
+// If there is no '#', subdir is empty.
+func splitFragment(source string) (string, string) {
+	// Only split on a '#' that comes after "://" to avoid mangling
+	// fragments that are actually part of a local path.
+	if idx := strings.LastIndex(source, "#"); idx > 0 {
+		return source[:idx], source[idx+1:]
+	}
+	return source, ""
 }
 
 // Render reads angee.yaml.tmpl from a local directory and renders it with params.

@@ -47,7 +47,7 @@ Examples:
 }
 
 func init() {
-	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee-django-template", "Template source (Git URL or local path)")
+	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee-go#templates/default", "Template source (Git URL, url#subdir, or local path)")
 	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link as 'base'")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing ANGEE_ROOT")
 	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: ~/.angee)")
@@ -84,12 +84,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch template (clone if URL, use directly if local path)
-	templateDir, cleanup, err := tmpl.FetchTemplate(initTemplate)
+	templateDir, cleanupDir, err := tmpl.FetchTemplate(initTemplate)
 	if err != nil {
 		return fmt.Errorf("fetching template: %w", err)
 	}
-	if cleanup {
-		defer os.RemoveAll(templateDir)
+	if cleanupDir != "" {
+		defer os.RemoveAll(cleanupDir)
 	}
 
 	// Load template metadata to know which secrets are needed

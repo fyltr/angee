@@ -202,6 +202,43 @@ func TestResolveSecretsDerived(t *testing.T) {
 	}
 }
 
+func TestSplitFragment(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantURL  string
+		wantSub  string
+	}{
+		{"https://github.com/org/repo#templates/default", "https://github.com/org/repo", "templates/default"},
+		{"https://github.com/org/repo", "https://github.com/org/repo", ""},
+		{"./local/path", "./local/path", ""},
+		{"https://github.com/org/repo#sub/dir", "https://github.com/org/repo", "sub/dir"},
+	}
+	for _, tt := range tests {
+		gotURL, gotSub := splitFragment(tt.input)
+		if gotURL != tt.wantURL || gotSub != tt.wantSub {
+			t.Errorf("splitFragment(%q) = (%q, %q), want (%q, %q)", tt.input, gotURL, gotSub, tt.wantURL, tt.wantSub)
+		}
+	}
+}
+
+func TestFetchTemplateLocal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "angee.yaml.tmpl"), []byte("name: test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, cleanupDir, err := FetchTemplate(dir)
+	if err != nil {
+		t.Fatalf("FetchTemplate() error: %v", err)
+	}
+	if cleanupDir != "" {
+		t.Error("expected empty cleanupDir for local path")
+	}
+	if got != dir {
+		t.Errorf("got = %q, want %q", got, dir)
+	}
+}
+
 func TestFormatEnvFile(t *testing.T) {
 	secrets := []ResolvedSecret{
 		{Name: "db-password", Value: "hunter2", Source: "flag"},
