@@ -151,6 +151,17 @@ func (r *Root) EnsureAgentDir(agentName string) error {
 	return nil
 }
 
+// WriteEnvFile writes secret key=value pairs to ANGEE_ROOT/.env (mode 0600).
+// The .env file is gitignored — it is never committed.
+func (r *Root) WriteEnvFile(content string) error {
+	return os.WriteFile(filepath.Join(r.Path, ".env"), []byte(content), 0600)
+}
+
+// EnvFilePath returns the absolute path to the root .env file.
+func (r *Root) EnvFilePath() string {
+	return filepath.Join(r.Path, ".env")
+}
+
 // InitialCommit stages all files and creates the first commit.
 func (r *Root) InitialCommit() error {
 	if err := r.Git.Add("."); err != nil {
