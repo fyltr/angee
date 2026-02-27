@@ -30,10 +30,15 @@ var initCmd = &cobra.Command{
 Generated secrets (django-secret-key, db-password, etc.) are written to
 ~/.angee/.env which is gitignored. Supply your own values with --secret.
 
+The --template flag accepts a Git URL or a local directory path:
+  angee init --template https://github.com/fyltr/angee-django-template
+  angee init --template ./path/to/local/template
+
 Examples:
-  angee init                                         # guided setup
+  angee init                                         # guided setup (default template)
   angee init --yes                                   # accept all defaults
-  angee init --template official/angee-django        # explicit template
+  angee init --template https://github.com/org/tmpl  # template from GitHub
+  angee init --template ./my-template                # local template directory
   angee init --repo https://github.com/org/app       # link a source repo
   angee init --secret django-secret-key=mysecretkey  # supply a secret
   angee init --secret db-password=mypass --yes       # non-interactive`,
@@ -41,7 +46,7 @@ Examples:
 }
 
 func init() {
-	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "official/angee-django", "Template name")
+	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee-django-template", "Template source (Git URL or local path)")
 	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link as 'base'")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing ANGEE_ROOT")
 	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: ~/.angee)")
@@ -77,9 +82,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Fetch template (clone if URL, use directly if local path)
+	templateDir, cleanup, err := tmpl.FetchTemplate(initTemplate)
+	if err != nil {
+		return fmt.Errorf("fetching template: %w", err)
+	}
+	if cleanup {
+		defer os.RemoveAll(templateDir)
+	}
+
 	// Load template metadata to know which secrets are needed
-	templateShort := strings.TrimPrefix(initTemplate, "official/")
-	meta, err := tmpl.LoadOfficialMeta(templateShort)
+	meta, err := tmpl.LoadMeta(templateDir)
 	if err != nil {
 		return fmt.Errorf("loading template metadata: %w", err)
 	}
@@ -103,9 +116,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	printSuccess("Created .gitignore")
 
 	// Render angee.yaml from template
-	angeeYAML, err := renderTemplate(initTemplate, params)
+	angeeYAML, err := tmpl.Render(templateDir, params)
 	if err != nil {
-		return fmt.Errorf("rendering template %s: %w", initTemplate, err)
+		return fmt.Errorf("rendering template: %w", err)
 	}
 	if initRepo != "" {
 		angeeYAML = patchRepoURL(angeeYAML, initRepo)
@@ -228,15 +241,6 @@ func prompt(r *bufio.Reader, question, defaultVal string) string {
 		return defaultVal
 	}
 	return line
-}
-
-// renderTemplate renders the named template. Only official/* supported in Phase 1.
-func renderTemplate(name string, params tmpl.TemplateParams) (string, error) {
-	if strings.HasPrefix(name, "official/") {
-		shortName := strings.TrimPrefix(name, "official/")
-		return tmpl.RenderOfficial(shortName, params)
-	}
-	return "", fmt.Errorf("template %q: only official/* templates are supported in this version", name)
 }
 
 func deriveProjectName(path string) string {

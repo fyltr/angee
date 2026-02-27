@@ -32,7 +32,8 @@ angee init
 angee up
 ```
 ```
-  → Starting system stack...
+  ✔ Compiled angee.yaml → docker-compose.yaml
+  → Starting stack...
   ✔ Operator started (port 9000)
   ✔ Services deployed
 
@@ -137,7 +138,7 @@ services:
       memory: "1Gi"
 
   postgres:
-    image: pgvector/pgvector:pg16    # pgvector built-in
+    image: pgvector/pgvector:pg17    # pgvector built-in
     lifecycle: sidecar
     volumes:
       - name: pgdata
@@ -182,20 +183,20 @@ After editing: `angee deploy`
 
 ---
 
-## Default template (official/angee-django)
+## Default template (angee-django)
 
 The official Django template includes:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
 | `django` | your app | Web + API |
-| `postgres` | `pgvector/pgvector:pg16` | Database with vector search |
+| `postgres` | `pgvector/pgvector:pg17` | Database with vector search |
 | `redis` | `redis:7-alpine` | Cache + message broker |
 | `celery` | your app | Async task workers |
 | `celery-beat` | your app | Scheduled tasks |
 
 ```sh
-angee init --template official/angee-django --repo https://github.com/org/myapp
+angee init --template https://github.com/fyltr/angee-django-template --repo https://github.com/org/myapp
 ```
 
 ---
@@ -223,7 +224,7 @@ Then `angee deploy` — your source is cloned into `~/.angee/src/base/`.
 ## Full CLI reference
 
 ```
-angee init [--template name] [--repo url] [--dir path]
+angee init [--template url|path] [--repo url] [--dir path]
 angee up
 angee down
 angee ls

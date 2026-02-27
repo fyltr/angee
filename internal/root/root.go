@@ -12,14 +12,13 @@ import (
 )
 
 const (
-	AngeeYAML     = "angee.yaml"
-	OperatorYAML  = "operator.yaml"
-	ComposeFile   = "docker-compose.yaml"
-	Gitignore     = ".gitignore"
-	SystemDir     = ".system"
-	AgentsDir     = "agents"
-	SrcDir        = "src"
-	TemplatesDir  = "templates"
+	AngeeYAML    = "angee.yaml"
+	OperatorYAML = "operator.yaml"
+	ComposeFile  = "docker-compose.yaml"
+	Gitignore    = ".gitignore"
+	AgentsDir    = "agents"
+	SrcDir       = "src"
+	TemplatesDir = "templates"
 )
 
 // Root represents an initialized ANGEE_ROOT directory.
@@ -59,7 +58,6 @@ func Initialize(path string) (*Root, error) {
 		filepath.Join(path, AgentsDir),
 		filepath.Join(path, SrcDir),
 		filepath.Join(path, TemplatesDir),
-		filepath.Join(path, SystemDir),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -82,9 +80,6 @@ operator.yaml
 # Agent credentials (written at deploy time)
 agents/**/.env
 agents/**/workspace/
-
-# System stack (managed by CLI)
-.system/
 
 # Template caches
 templates/*/

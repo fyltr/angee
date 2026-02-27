@@ -45,17 +45,19 @@ const (
 
 // ServiceSpec defines a platform service (web, DB, workers, etc.).
 type ServiceSpec struct {
-	Image     string            `yaml:"image,omitempty"`
-	Build     *BuildSpec        `yaml:"build,omitempty"`
-	Command   string            `yaml:"command,omitempty"`
-	Lifecycle string            `yaml:"lifecycle,omitempty"`
-	Domains   []DomainSpec      `yaml:"domains,omitempty"`
-	Resources ResourceSpec      `yaml:"resources,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	Volumes   []VolumeSpec      `yaml:"volumes,omitempty"`
-	Health    *HealthSpec       `yaml:"health,omitempty"`
-	Replicas  int               `yaml:"replicas,omitempty"`
-	DependsOn []string          `yaml:"depends_on,omitempty"`
+	Image      string            `yaml:"image,omitempty"`
+	Build      *BuildSpec        `yaml:"build,omitempty"`
+	Command    string            `yaml:"command,omitempty"`
+	Lifecycle  string            `yaml:"lifecycle,omitempty"`
+	Domains    []DomainSpec      `yaml:"domains,omitempty"`
+	Resources  ResourceSpec      `yaml:"resources,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty"`
+	Volumes    []VolumeSpec      `yaml:"volumes,omitempty"`
+	Ports      []string          `yaml:"ports,omitempty"`
+	RawVolumes []string          `yaml:"raw_volumes,omitempty"`
+	Health     *HealthSpec       `yaml:"health,omitempty"`
+	Replicas   int               `yaml:"replicas,omitempty"`
+	DependsOn  []string          `yaml:"depends_on,omitempty"`
 }
 
 // BuildSpec defines how to build a service image from source.

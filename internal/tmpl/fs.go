@@ -1,21 +1,19 @@
-// Package tmpl provides embedded official templates and secret generation for angee init.
+// Package tmpl fetches templates from GitHub repos or local directories and renders angee.yaml.
 package tmpl
 
 import (
 	"bytes"
 	"crypto/rand"
-	"embed"
 	"fmt"
 	"math/big"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
-
-//go:embed all:official
-var Official embed.FS
 
 // TemplateParams holds the parameters for rendering an angee.yaml template.
 type TemplateParams struct {
@@ -84,14 +82,38 @@ type ResolvedSecret struct {
 	Source string // "flag" | "generated" | "derived"
 }
 
-// Render renders the template at the given path (relative to Official FS) with params.
-func Render(templatePath string, params TemplateParams) (string, error) {
-	tmplContent, err := Official.ReadFile(templatePath)
-	if err != nil {
-		return "", fmt.Errorf("reading template %s: %w", templatePath, err)
+// FetchTemplate obtains a template directory. If source is a local path that
+// exists, it is returned directly. Otherwise it is treated as a git URL and
+// cloned to a temp directory (caller must clean up).
+func FetchTemplate(source string) (dir string, cleanup bool, err error) {
+	// Local path — use directly
+	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
+		return source, false, nil
 	}
 
-	tmpl, err := template.New("angee").Parse(string(tmplContent))
+	// Git URL — clone to temp dir
+	dir, err = os.MkdirTemp("", "angee-tmpl-*")
+	if err != nil {
+		return "", false, err
+	}
+	cmd := exec.Command("git", "clone", "--depth", "1", source, dir)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.RemoveAll(dir)
+		return "", false, fmt.Errorf("cloning template %s: %w", source, err)
+	}
+	return dir, true, nil
+}
+
+// Render reads angee.yaml.tmpl from a local directory and renders it with params.
+func Render(templateDir string, params TemplateParams) (string, error) {
+	tmplPath := filepath.Join(templateDir, "angee.yaml.tmpl")
+	content, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return "", fmt.Errorf("reading template %s: %w", tmplPath, err)
+	}
+
+	tmpl, err := template.New("angee").Parse(string(content))
 	if err != nil {
 		return "", fmt.Errorf("parsing template: %w", err)
 	}
@@ -104,14 +126,9 @@ func Render(templatePath string, params TemplateParams) (string, error) {
 	return buf.String(), nil
 }
 
-// RenderOfficial renders an official template by short name (e.g. "angee-django").
-func RenderOfficial(name string, params TemplateParams) (string, error) {
-	return Render("official/"+name+"/angee.yaml.tmpl", params)
-}
-
-// LoadMeta reads and parses .angee-template.yaml for a given template prefix.
-func LoadMeta(prefix string) (*TemplateMeta, error) {
-	data, err := Official.ReadFile(prefix + "/.angee-template.yaml")
+// LoadMeta reads and parses .angee-template.yaml from a local directory.
+func LoadMeta(templateDir string) (*TemplateMeta, error) {
+	data, err := os.ReadFile(filepath.Join(templateDir, ".angee-template.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("reading template metadata: %w", err)
 	}
@@ -120,20 +137,6 @@ func LoadMeta(prefix string) (*TemplateMeta, error) {
 		return nil, fmt.Errorf("parsing template metadata: %w", err)
 	}
 	return &meta, nil
-}
-
-// LoadOfficialMeta loads metadata for an official template by short name.
-func LoadOfficialMeta(name string) (*TemplateMeta, error) {
-	return LoadMeta("official/" + name)
-}
-
-// WriteToFile renders a template and writes the result to the destination path.
-func WriteToFile(templatePath string, params TemplateParams, destPath string) error {
-	content, err := Render(templatePath, params)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(destPath, []byte(content), 0644)
 }
 
 // ─── Secret resolution ────────────────────────────────────────────────────────

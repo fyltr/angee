@@ -1,6 +1,6 @@
 # angee.yaml — {{ .ProjectName }}
 # Source of truth. Edit directly or ask your admin agent.
-# Generated from: official/angee-django
+# Generated from: angee-django template
 name: {{ .ProjectName }}
 
 # Source repositories — cloned into src/ as git submodules
@@ -13,6 +13,43 @@ repositories:
 # ─── Platform services ────────────────────────────────────────────────────────
 
 services:
+  operator:
+    image: ghcr.io/fyltr/angee-operator:latest
+    lifecycle: system
+    ports:
+      - "9000:9000"
+    raw_volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env:
+      ANGEE_ROOT: /angee-root
+      DJANGO_URL: "http://django:8000"
+    health:
+      path: /health
+      port: 9000
+      interval: 10s
+      timeout: 5s
+
+  traefik:
+    image: traefik:v3
+    lifecycle: system
+    ports:
+      - "3333:80"
+      - "443:443"
+    raw_volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: >-
+      traefik
+      --providers.docker=true
+      --providers.docker.exposedbydefault=false
+      --entrypoints.web.address=:80
+      --entrypoints.websecure.address=:443
+      --api.dashboard=true
+      --api.insecure=true
+    volumes:
+      - name: traefik-certs
+        path: /certs
+        persistent: true
+
   django:
     build:
       context: src/base
@@ -51,7 +88,7 @@ services:
       - redis
 
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg17
     lifecycle: sidecar
     env:
       POSTGRES_USER: angee

@@ -182,12 +182,16 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 		cs.Environment = append(cs.Environment, k+"="+v)
 	}
 
+	// Ports
+	cs.Ports = svc.Ports
+
 	// Volumes
 	for _, v := range svc.Volumes {
 		if v.Name != "" {
 			cs.Volumes = append(cs.Volumes, v.Name+":"+v.Path)
 		}
 	}
+	cs.Volumes = append(cs.Volumes, svc.RawVolumes...)
 
 	// Health check
 	if svc.Health != nil {
