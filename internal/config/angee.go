@@ -10,11 +10,27 @@ import (
 
 // AngeeConfig is the top-level structure of angee.yaml.
 type AngeeConfig struct {
-	Name       string                 `yaml:"name"`
-	Version    string                 `yaml:"version,omitempty"`
-	Services   map[string]ServiceSpec `yaml:"services,omitempty"`
-	MCPServers map[string]MCPServerSpec `yaml:"mcp_servers,omitempty"`
-	Agents     map[string]AgentSpec   `yaml:"agents,omitempty"`
+	Name         string                     `yaml:"name"`
+	Version      string                     `yaml:"version,omitempty"`
+	Repositories map[string]RepositorySpec  `yaml:"repositories,omitempty"`
+	Services     map[string]ServiceSpec     `yaml:"services,omitempty"`
+	MCPServers   map[string]MCPServerSpec   `yaml:"mcp_servers,omitempty"`
+	Agents       map[string]AgentSpec       `yaml:"agents,omitempty"`
+	Secrets      []SecretRef               `yaml:"secrets,omitempty"`
+}
+
+// RepositorySpec defines a source repository linked to the project.
+type RepositorySpec struct {
+	URL    string `yaml:"url"`
+	Branch string `yaml:"branch,omitempty"`
+	Role   string `yaml:"role,omitempty"` // base | custom | dependency
+}
+
+// SecretRef declares a secret that must exist before deploy.
+type SecretRef struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description,omitempty"`
+	Required    bool   `yaml:"required,omitempty"`
 }
 
 // Lifecycle values for services and agents.

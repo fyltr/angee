@@ -1,0 +1,221 @@
+# angee.yaml — {{ .ProjectName }}
+# Source of truth. Edit directly or ask your admin agent.
+# Generated from: official/angee-django
+name: {{ .ProjectName }}
+
+# Source repositories — cloned into src/ as git submodules
+repositories:
+  base:
+    url: https://github.com/fyltr/angee-django
+    branch: main
+    role: base
+
+# ─── Platform services ────────────────────────────────────────────────────────
+
+services:
+  django:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    lifecycle: platform
+    domains:
+      - host: {{ .Domain }}
+        port: 8000
+        tls: {{ if eq .Domain "localhost" }}false{{ else }}true{{ end }}
+    resources:
+      cpu: "{{ .DjangoCPU }}"
+      memory: "{{ .DjangoMemory }}"
+    env:
+      DATABASE_URL: "postgresql://angee:{{ .DBPassword }}@postgres:5432/{{ .ProjectName }}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+      ALLOWED_HOSTS: "{{ .Domain }},localhost,127.0.0.1"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3333,http://localhost:8000,https://{{ .Domain }}"
+      DEBUG: "false"
+      GUNICORN_WORKERS: "{{ .DjangoWorkers }}"
+    health:
+      path: /health/
+      port: 8000
+      interval: 30s
+      timeout: 5s
+    volumes:
+      - name: django-media
+        path: /app/media
+        persistent: true
+        size: {{ .MediaSize }}
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    lifecycle: sidecar
+    env:
+      POSTGRES_USER: angee
+      POSTGRES_PASSWORD: "{{ .DBPassword }}"
+      POSTGRES_DB: "{{ .ProjectName }}"
+      # Enable pgvector and pg_stat_statements extensions on init
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
+    volumes:
+      - name: pgdata
+        path: /var/lib/postgresql/data
+        persistent: true
+        size: {{ .DBSize }}
+    command: >-
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+
+  redis:
+    image: redis:7-alpine
+    lifecycle: sidecar
+    command: >-
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - name: redis-data
+        path: /data
+        persistent: true
+        size: {{ .RedisSize }}
+
+  celery-worker:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    command: celery -A config worker --loglevel=info --concurrency={{ .CeleryWorkers }} --max-tasks-per-child=500
+    lifecycle: worker
+    resources:
+      cpu: "{{ .CeleryCPU }}"
+      memory: "{{ .CeleryMemory }}"
+    env:
+      DATABASE_URL: "postgresql://angee:{{ .DBPassword }}@postgres:5432/{{ .ProjectName }}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+    depends_on:
+      - postgres
+      - redis
+
+  celery-beat:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    command: celery -A config beat --loglevel=info --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+    lifecycle: worker
+    # Beat must always have exactly 1 replica — multiple instances corrupt the schedule
+    replicas: 1
+    resources:
+      cpu: "0.25"
+      memory: "256Mi"
+    env:
+      DATABASE_URL: "postgresql://angee:{{ .DBPassword }}@postgres:5432/{{ .ProjectName }}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+    depends_on:
+      - postgres
+      - redis
+
+# ─── MCP servers ─────────────────────────────────────────────────────────────
+# MCP servers are credential-bearing connectors between agents and the world.
+# Think of them like docker networks, but with identity and scope.
+
+mcp_servers:
+
+  # The operator's own MCP endpoint — always available
+  # Gives agents the ability to deploy, rollback, scale, read logs, etc.
+  angee-operator:
+    transport: streamable-http
+    url: http://operator:9000/mcp
+    credentials:
+      source: service_account
+      scopes:
+        - config.read
+        - config.write
+        - deploy
+        - rollback
+        - status
+        - logs
+        - scale
+        - secrets.list
+
+  # Read-only filesystem access to ANGEE_ROOT (for context)
+  angee-files:
+    transport: stdio
+    image: ghcr.io/fyltr/angee-filesystem-mcp:latest
+    args:
+      - --root
+      - /workspace
+      - --readonly
+    credentials:
+      source: none
+
+  # The Django app's own MCP server (tools for the platform's data)
+  # Exposes: messages, contacts, agents, settings
+  django-mcp:
+    transport: streamable-http
+    url: http://django:8000/mcp/
+    credentials:
+      source: service_account
+      scopes:
+        - messages.read
+        - messages.write
+        - contacts.read
+        - agents.read
+        - agents.write
+
+# ─── Agents ──────────────────────────────────────────────────────────────────
+# Agents are AI workloads. Like services, but they're always talking to MCP servers.
+
+agents:
+
+  # Admin agent — always running, manages the platform
+  # Equivalent to a DevOps engineer with full infrastructure access
+  admin:
+    image: ghcr.io/fyltr/angee-admin-agent:latest
+    lifecycle: system
+    role: operator
+    description: "Platform admin — manages deployment, config, secrets, and infrastructure"
+    mcp_servers:
+      - angee-operator    # can deploy, rollback, scale, read logs
+      - angee-files       # can read ANGEE_ROOT for context
+      - django-mcp        # can read platform state
+    workspace:
+      path: /angee-root   # ANGEE_ROOT is this agent's workspace
+      persistent: true
+
+  # Developer agent — always running, helps build the product
+  # Has access to source code and can read platform state
+  developer:
+    image: ghcr.io/fyltr/angee-developer-agent:latest
+    lifecycle: system
+    role: user
+    description: "Developer agent — writes code, fixes bugs, reviews PRs"
+    mcp_servers:
+      - angee-files       # can read/write workspace files
+      - django-mcp        # can read platform context
+    workspace:
+      repository: base    # clones src/base (fyltr/angee-django)
+      branch: main
+      persistent: true    # workspace survives restarts — keeps git history
+    resources:
+      cpu: "2.0"
+      memory: "4Gi"
+
+# ─── Secrets ─────────────────────────────────────────────────────────────────
+# These secrets must be set before first deploy.
+# Run: angee ask "set up all required secrets for {{ .ProjectName }}"
+# Or set them manually: angee secret set django-secret-key <value>
+
+secrets:
+  - name: django-secret-key
+    description: "Django SECRET_KEY — generate with: python -c \"from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())\""
+    required: true

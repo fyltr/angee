@@ -1,0 +1,68 @@
+name: official/angee-django
+description: |
+  Django + pgvector + Celery + Redis
+  The Angee standard stack — batteries included.
+  Source: https://github.com/fyltr/angee-django
+version: "1.0"
+author: angee
+
+parameters:
+  - name: ProjectName
+    description: "Project name (lowercase, hyphens)"
+    required: true
+    validate: "^[a-z][a-z0-9-]+$"
+
+  - name: Domain
+    description: "Primary domain (e.g. myapp.io or localhost)"
+    default: "localhost"
+
+  - name: DBPassword
+    description: "Postgres password"
+    default: "angee"
+
+  - name: DBSize
+    description: "Postgres volume size"
+    default: "20Gi"
+
+  - name: RedisSize
+    description: "Redis volume size"
+    default: "2Gi"
+
+  - name: MediaSize
+    description: "Django media volume size"
+    default: "10Gi"
+
+  - name: DjangoWorkers
+    description: "Number of gunicorn workers"
+    default: "3"
+
+  - name: CeleryWorkers
+    description: "Number of Celery worker processes"
+    default: "4"
+
+  - name: DjangoCPU
+    description: "CPU limit for Django"
+    default: "1.0"
+
+  - name: DjangoMemory
+    description: "Memory limit for Django"
+    default: "1Gi"
+
+  - name: CeleryCPU
+    description: "CPU limit for Celery worker"
+    default: "1.0"
+
+  - name: CeleryMemory
+    description: "Memory limit for Celery worker"
+    default: "1Gi"
+
+services:
+  - django
+  - postgres
+  - redis
+  - celery-worker
+  - celery-beat
+
+agents:
+  - admin
+  - developer

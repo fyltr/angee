@@ -1,14 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
 
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/fyltr/angee-go/internal/root"
+	"github.com/fyltr/angee-go/internal/tmpl"
 	"github.com/spf13/cobra"
 )
 
@@ -17,32 +18,39 @@ var (
 	initRepo     string
 	initForce    bool
 	initDir      string
+	initYes      bool // skip interactive prompts
 )
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a new ANGEE_ROOT",
-	Long: `Initialize a new ANGEE_ROOT directory with a default angee.yaml and git repository.
+	Long: `Initialize a new ANGEE_ROOT directory with angee.yaml and a git repository.
 
 Examples:
-  angee init                                          # Init at ~/.angee
-  angee init --dir /opt/myproject                     # Init at a custom path
-  angee init --template official/angee-django         # Use a template
-  angee init --repo https://github.com/org/app        # Link a source repo`,
+  angee init                                               # guided setup at ~/.angee
+  angee init --template official/angee-django              # Django + pgvector + Celery
+  angee init --dir /opt/myproject --yes                    # non-interactive
+  angee init --repo https://github.com/org/app             # link a source repo`,
 	RunE: runInit,
 }
 
 func init() {
-	initCmd.Flags().StringVar(&initTemplate, "template", "", "Template name or URL")
-	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link")
+	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "official/angee-django", "Template name (official/angee-django is the default)")
+	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link as 'base'")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing ANGEE_ROOT")
 	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: ~/.angee)")
+	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "Accept all defaults (non-interactive)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
 	path := resolveRoot()
 	if initDir != "" {
 		path = initDir
+	}
+	// Expand ~
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
 	}
 
 	// Check if already initialized
@@ -52,18 +60,23 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("\n\033[1mangee init\033[0m\n\n")
+	fmt.Printf("\n\033[1m  angee init\033[0m\n\n")
 
-	// Get project name from directory
-	projectName := filepath.Base(path)
-	if projectName == ".angee" || projectName == "angee" {
-		if wd, err := os.Getwd(); err == nil {
-			projectName = filepath.Base(wd)
-		}
+	// Determine project name
+	projectName := deriveProjectName(path)
+
+	// Gather template params (interactive or from flags)
+	params, err := gatherParams(projectName)
+	if err != nil {
+		return err
 	}
-	projectName = strings.ToLower(strings.ReplaceAll(projectName, " ", "-"))
 
-	// Initialize root structure
+	// Override repo if --repo flag provided
+	if initRepo != "" {
+		fmt.Printf("  \033[36m→\033[0m  Linking repo: %s\n\n", initRepo)
+	}
+
+	// Initialize ANGEE_ROOT structure
 	r, err := root.Initialize(path)
 	if err != nil {
 		return fmt.Errorf("initializing ANGEE_ROOT: %w", err)
@@ -76,39 +89,40 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess("Created .gitignore")
 
-	// Generate angee.yaml from template or default
-	var angeeYAML string
-	if initTemplate != "" {
-		angeeYAML, err = fetchTemplate(initTemplate, projectName)
-		if err != nil {
-			return fmt.Errorf("fetching template: %w", err)
-		}
-		printSuccess(fmt.Sprintf("Applied template: %s", initTemplate))
-	} else {
-		angeeYAML = renderDefaultTemplate(projectName)
-		printSuccess("Created angee.yaml (default template)")
+	// Render and write angee.yaml
+	angeeYAML, err := renderTemplate(initTemplate, params)
+	if err != nil {
+		return fmt.Errorf("rendering template %s: %w", initTemplate, err)
+	}
+
+	// If --repo provided, patch the repositories section to use that URL
+	if initRepo != "" {
+		angeeYAML = patchRepoURL(angeeYAML, initRepo)
 	}
 
 	if err := r.WriteAngeeYAML(angeeYAML); err != nil {
 		return err
 	}
+	printSuccess(fmt.Sprintf("Created angee.yaml (template: %s)", initTemplate))
 
-	// Write operator.yaml (not committed)
+	// Write operator.yaml (not committed — local runtime config)
 	opCfg := config.DefaultOperatorConfig(path)
 	if err := r.WriteOperatorConfig(opCfg); err != nil {
 		return err
 	}
-	printSuccess("Created operator.yaml (local runtime config — not committed)")
+	printSuccess("Created operator.yaml (local runtime config — gitignored)")
 
 	// Initial git commit
 	if err := r.InitialCommit(); err != nil {
-		// May fail if git user not configured globally — non-fatal
 		fmt.Printf("  \033[33m!\033[0m  git commit skipped: %s\n", err)
 	} else {
 		printSuccess("Initial git commit: \"angee: initialize project\"")
 	}
 
-	fmt.Printf("\n\033[1mNext steps:\033[0m\n\n")
+	// Print secrets that need to be configured
+	printRequiredSecrets(angeeYAML)
+
+	fmt.Printf("\n\033[1m  Next steps:\033[0m\n\n")
 	printInfo("angee up          Start the platform")
 	printInfo("angee ls          View running agents and services")
 	printInfo("angee admin       Chat with the admin agent")
@@ -117,105 +131,111 @@ func runInit(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// renderDefaultTemplate returns the default angee.yaml content.
-func renderDefaultTemplate(projectName string) string {
-	tmpl := template.Must(template.New("default").Parse(defaultAngeeTemplate))
-	var sb strings.Builder
-	tmpl.Execute(&sb, map[string]string{ //nolint:errcheck
-		"ProjectName": projectName,
-	})
-	return sb.String()
+// gatherParams collects template parameters, prompting if not --yes.
+func gatherParams(projectName string) (tmpl.TemplateParams, error) {
+	params := tmpl.DefaultParams(projectName)
+
+	if initYes {
+		return params, nil
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+
+	params.ProjectName = prompt(reader, "Project name", projectName)
+	params.Domain = prompt(reader, "Primary domain", "localhost")
+
+	if params.Domain != "localhost" {
+		params.DBPassword = prompt(reader, "Postgres password", "angee")
+	}
+
+	fmt.Println()
+	return params, nil
 }
 
-// fetchTemplate retrieves a template by name or URL (stub for Phase 4).
-func fetchTemplate(nameOrURL, projectName string) (string, error) {
-	// TODO Phase 4: fetch from official registry or GitHub URL
-	return renderDefaultTemplate(projectName), nil
+// prompt prints a question and reads a line, returning the default if empty.
+func prompt(r *bufio.Reader, question, defaultVal string) string {
+	fmt.Printf("  \033[1m%s\033[0m [%s]: ", question, defaultVal)
+	line, _ := r.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return defaultVal
+	}
+	return line
 }
 
-// defaultAngeeTemplate is the built-in template for new projects.
-const defaultAngeeTemplate = `# angee.yaml — source of truth for {{ .ProjectName }}
-# Edit this file or ask your admin agent to make changes.
-name: {{ .ProjectName }}
+// renderTemplate renders the named template with the given params.
+// Supports:
+//   - "official/angee-django"  → embedded official template
+//   - "https://..."            → fetch from URL (Phase 4)
+//   - "./path"                 → local filesystem template (Phase 4)
+func renderTemplate(name string, params tmpl.TemplateParams) (string, error) {
+	// Official templates are embedded in the binary
+	if strings.HasPrefix(name, "official/") {
+		shortName := strings.TrimPrefix(name, "official/")
+		content, err := tmpl.RenderOfficial(shortName, params)
+		if err != nil {
+			return "", fmt.Errorf("official template %q not found: %w", name, err)
+		}
+		return content, nil
+	}
 
-# Platform services
-services:
-  web:
-    image: "nginx:alpine"
-    lifecycle: platform
-    domains:
-      - host: localhost
-        port: 80
-    health:
-      path: /
-      port: 80
+	// TODO Phase 4: fetch from GitHub URL or local path
+	return "", fmt.Errorf("template %q: only official/* templates are supported in this version", name)
+}
 
-  postgres:
-    image: "pgvector/pgvector:pg16"
-    lifecycle: sidecar
-    volumes:
-      - name: pgdata
-        path: /var/lib/postgresql/data
-        persistent: true
-    env:
-      POSTGRES_USER: angee
-      POSTGRES_PASSWORD: angee
-      POSTGRES_DB: "{{ .ProjectName }}"
+// deriveProjectName picks a project name from the ANGEE_ROOT path.
+func deriveProjectName(path string) string {
+	name := filepath.Base(path)
+	if name == ".angee" || name == "angee" {
+		if wd, err := os.Getwd(); err == nil {
+			name = filepath.Base(wd)
+		}
+	}
+	// Normalize: lowercase, replace spaces and underscores with hyphens
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, " ", "-")
+	name = strings.ReplaceAll(name, "_", "-")
+	return name
+}
 
-  redis:
-    image: "redis:7-alpine"
-    lifecycle: sidecar
+// patchRepoURL replaces the default repo URL with the user-provided --repo value.
+func patchRepoURL(angeeYAML, repoURL string) string {
+	return strings.ReplaceAll(
+		angeeYAML,
+		"https://github.com/fyltr/angee-django",
+		repoURL,
+	)
+}
 
-# MCP servers available to agents
-mcp_servers:
-  angee-operator:
-    transport: streamable-http
-    url: http://operator:9000/mcp
-    credentials:
-      source: service_account
-      scopes:
-        - config.read
-        - config.write
-        - deploy
-        - rollback
-        - status
-        - logs
-        - scale
+// printRequiredSecrets parses the rendered angee.yaml for a secrets: section
+// and prints the secrets that need to be configured before first deploy.
+func printRequiredSecrets(angeeYAML string) {
+	// Simple scan for "name:" lines under "secrets:" block
+	inSecrets := false
+	var secrets []string
+	for _, line := range strings.Split(angeeYAML, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "secrets:" {
+			inSecrets = true
+			continue
+		}
+		if inSecrets {
+			if len(line) > 0 && line[0] != ' ' && line[0] != '\t' && trimmed != "" {
+				break // left secrets block
+			}
+			if strings.HasPrefix(trimmed, "name: ") {
+				secrets = append(secrets, strings.TrimPrefix(trimmed, "name: "))
+			}
+		}
+	}
 
-  angee-files:
-    transport: stdio
-    image: ghcr.io/fyltr/angee-filesystem-mcp:latest
-    args:
-      - --root
-      - /workspace
-      - --readonly
-    credentials:
-      source: none
+	if len(secrets) == 0 {
+		return
+	}
 
-# Default agents (always running)
-agents:
-  admin:
-    image: ghcr.io/fyltr/angee-admin-agent:latest
-    lifecycle: system
-    role: operator
-    description: "Platform admin — manages deployment, config, and infrastructure"
-    mcp_servers:
-      - angee-operator
-      - angee-files
-    workspace:
-      path: /angee-root
-      persistent: true
-
-  developer:
-    image: ghcr.io/fyltr/angee-developer-agent:latest
-    lifecycle: system
-    role: user
-    description: "Developer agent — writes code, reviews PRs, and helps build features"
-    mcp_servers:
-      - angee-files
-    workspace:
-      persistent: true
-    resources:
-      cpu: "2.0"
-      memory: "4Gi"
-`
+	fmt.Printf("\n  \033[33m!\033[0m  \033[1mRequired secrets\033[0m (set before first deploy):\n\n")
+	for _, s := range secrets {
+		fmt.Printf("      angee secret set %s <value>\n", s)
+	}
+	fmt.Println()
+}
