@@ -1,0 +1,80 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What is angee-go
+
+Self-managed agent containerization and orchestration engine. An extension of docker-compose where AI agents are first-class citizens. Users define services, MCP servers, and AI agents in a single `angee.yaml`, then run one command to get a fully operational platform.
+
+## Build & Development Commands
+
+```sh
+make build            # Build operator + CLI → dist/angee-operator, dist/angee
+make build-cli        # Build CLI only
+make build-operator   # Build operator only
+make test             # go test -v -race ./...
+make test-cover       # Tests with coverage report (opens HTML)
+make lint             # golangci-lint run ./...
+make fmt              # gofmt + goimports
+make vet              # go vet ./...
+make check            # fmt + vet + lint + test (full pre-commit check)
+make run-operator     # Build and run operator against ~/.angee
+make dev ARGS="init"  # Build CLI and run with args
+```
+
+Run a single test: `go test -v -race -run TestName ./internal/compiler/`
+
+Requirements: Go 1.25+, Docker, git, golangci-lint (for linting)
+
+## Architecture
+
+**Two binaries:**
+- `cmd/angee/` — CLI tool. Calls `cli.Execute()` which sets up Cobra commands.
+- `cmd/operator/` — HTTP daemon (port 9000). Owns ANGEE_ROOT, compiles config, manages runtime.
+
+**CLI → Operator → Backend flow:** The CLI never touches containers directly. All mutations go through HTTP calls to the operator, which compiles `angee.yaml` into `docker-compose.yaml` and delegates to a `RuntimeBackend`.
+
+**Key packages:**
+
+| Package | Purpose |
+|---------|---------|
+| `cli/` | Cobra command implementations. Each file = one command. `root.go` has global flags (`--root`, `--operator`, `--json`). |
+| `internal/config/` | YAML types. `angee.go` = `AngeeConfig` (the source of truth). `operator.go` = `OperatorConfig` (local runtime config). |
+| `internal/compiler/` | Translates `AngeeConfig` → `ComposeFile` (docker-compose YAML). Handles Traefik labels, lifecycle policies, agent env injection. |
+| `internal/runtime/` | `RuntimeBackend` interface. Only implementation: `compose/backend.go` (shells out to `docker compose`). Kubernetes backend planned for Phase 2. |
+| `internal/operator/` | HTTP server. `server.go` = setup/routing. `handlers.go` = all endpoint logic (deploy, rollback, status, logs, agent control). |
+| `internal/root/` | ANGEE_ROOT filesystem management (`~/.angee/`). Creates directory structure, reads/writes configs, manages git. |
+| `internal/git/` | Git CLI wrapper. Every deploy = git commit. Rollback = git revert/reset. |
+| `internal/tmpl/` | Template system with embedded templates (`//go:embed`). Official templates in `internal/tmpl/official/`. |
+
+## Key Concepts
+
+**Lifecycles** determine service behavior (restart policy, routing, scaling):
+- `platform` — web-facing, gets Traefik routing labels and domains
+- `sidecar` — internal service (DB, cache), always restarts
+- `worker` — background processing, always restarts
+- `system` — always-on agent, always restarts
+- `agent` — AI agent
+- `job` — one-shot or scheduled
+
+**ANGEE_ROOT** (`~/.angee/`) is a git repo containing:
+- `angee.yaml` — source of truth (users and agents edit this)
+- `docker-compose.yaml` — generated, never manually edited
+- `operator.yaml` — local runtime config, gitignored
+- `.env` — secrets, gitignored
+- `agents/<name>/workspace/` — per-agent persistent workspaces
+- `.system/` — system stack compose file, gitignored
+
+**RuntimeBackend interface** (`internal/runtime/backend.go`): All runtime interaction goes through this interface (Diff, Apply, Status, Logs, Scale, Stop, Down). Adding a new backend means implementing this interface.
+
+## Dependencies
+
+Only two direct dependencies: `github.com/spf13/cobra` (CLI) and `gopkg.in/yaml.v3` (config parsing). Keep it minimal.
+
+## Patterns
+
+- Config structs use `yaml:"field"` and `json:"field"` tags consistently
+- The compiler outputs `map[string]any` for docker-compose compatibility (not typed structs)
+- CLI commands follow the pattern: parse flags → HTTP call to operator → format response (or `--json` for raw)
+- Operator handlers follow: parse request → load angee.yaml → compile → interact with backend → respond
+- Templates use Go `text/template` with a params struct; metadata in `.angee-template.yaml`
