@@ -186,7 +186,7 @@ make run-operator   # run operator against ~/.angee
 make docker         # build Docker images
 ```
 
-**Requirements**: Go 1.23+, Docker, git
+**Requirements**: Go 1.25+, Docker, git
 
 ---
 

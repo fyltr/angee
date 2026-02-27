@@ -12,10 +12,8 @@ env:
 
 jobs:
   release-binaries:
-    name: Build & publish release binaries
+    name: Build release binaries
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     strategy:
       matrix:
         include:
@@ -37,7 +35,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version: "1.25"
           cache: true
 
       - name: Build CLI
@@ -77,12 +75,36 @@ jobs:
             -o "dist/angee-operator-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
             ./cmd/operator
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.exe
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [release-binaries]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
       - name: Create GitHub Release & upload assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.tar.gz
-            dist/*.exe
+            artifacts/*.tar.gz
+            artifacts/*.exe
           generate_release_notes: true
 
   release-docker:
@@ -134,7 +156,7 @@ jobs:
   publish-install-script:
     name: Publish install script
     runs-on: ubuntu-latest
-    needs: [release-binaries, release-docker]
+    needs: [create-release, release-docker]
     permissions:
       contents: write
     steps:
