@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 
+	"github.com/fyltr/angee-go/api"
 	"github.com/spf13/cobra"
 )
 
@@ -122,13 +122,13 @@ func runAsk(cmd *cobra.Command, args []string) error {
 }
 
 func sendMessage(agentName, message string) (string, error) {
-	payload, _ := json.Marshal(map[string]string{
-		"message": message,
-		"agent":   agentName,
+	payload, _ := json.Marshal(api.ChatRequest{
+		Message: message,
+		Agent:   agentName,
 	})
 
 	url := fmt.Sprintf("%s/agents/%s/chat", resolveOperator(), agentName)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+	resp, err := doRequest("POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("connecting to agent: %w", err)
 	}
@@ -146,10 +146,7 @@ func sendMessage(agentName, message string) (string, error) {
 		return "", err
 	}
 
-	var result struct {
-		Response string `json:"response"`
-		Message  string `json:"message"`
-	}
+	var result api.ChatResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		// Return raw text if not JSON
 		return strings.TrimSpace(string(body)), nil

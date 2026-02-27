@@ -39,7 +39,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	addr := ":" + port
+	bind := srv.Cfg.BindAddress
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	addr := bind + ":" + port
 	if err := srv.Start(ctx, addr); err != nil {
 		fmt.Fprintf(os.Stderr, "operator error: %s\n", err)
 		os.Exit(1)

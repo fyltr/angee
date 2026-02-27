@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
@@ -103,7 +106,19 @@ func (s *Server) Handler() http.Handler {
 	// Git history
 	mux.HandleFunc("GET /history", s.handleHistory)
 
-	return corsMiddleware(loggingMiddleware(mux, s.Log))
+	apiKey := s.resolveAPIKey()
+	origins := s.Cfg.CORSOrigins
+
+	return recoveryMiddleware(
+		corsMiddleware(
+			authMiddleware(
+				loggingMiddleware(mux, s.Log),
+				apiKey, s.Log,
+			),
+			origins,
+		),
+		s.Log,
+	)
 }
 
 // Start runs the operator HTTP server.
@@ -135,6 +150,15 @@ func (s *Server) compileAndWrite(cfg *config.AngeeConfig) error {
 	return compiler.Write(cf, s.Root.ComposePath())
 }
 
+// resolveAPIKey returns the API key from environment or config.
+// Environment variable ANGEE_API_KEY takes precedence.
+func (s *Server) resolveAPIKey() string {
+	if key := os.Getenv("ANGEE_API_KEY"); key != "" {
+		return key
+	}
+	return s.Cfg.APIKey
+}
+
 // jsonOK writes a JSON 200 response.
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -148,9 +172,47 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+// ── Middleware ────────────────────────────────────────────────────────────────
+
+// authMiddleware checks for a valid Bearer token when an API key is configured.
+// The /health endpoint always bypasses auth.
+func authMiddleware(next http.Handler, apiKey string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if apiKey == "" || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != apiKey {
+			log.Warn("unauthorized request", "path", r.URL.Path, "remote", r.RemoteAddr)
+			jsonErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// recoveryMiddleware catches panics, logs the stack trace, and returns 500.
+func recoveryMiddleware(next http.Handler, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error("panic recovered", "error", rec, "stack", string(debug.Stack()))
+				jsonErr(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// corsMiddleware sets CORS headers. It supports trailing-* wildcards in origin
+// patterns (e.g. "http://localhost:*" matches any port).
+func corsMiddleware(next http.Handler, origins []string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && matchOrigin(origin, origins) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
@@ -159,6 +221,21 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// matchOrigin checks if origin matches any of the allowed patterns.
+// A pattern ending in "*" acts as a prefix match.
+func matchOrigin(origin string, patterns []string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "*") {
+			if strings.HasPrefix(origin, strings.TrimSuffix(p, "*")) {
+				return true
+			}
+		} else if origin == p {
+			return true
+		}
+	}
+	return false
 }
 
 func loggingMiddleware(next http.Handler, log *slog.Logger) http.Handler {

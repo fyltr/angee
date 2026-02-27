@@ -8,13 +8,14 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/fyltr/angee-go/api"
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/fyltr/angee-go/internal/runtime"
 )
 
 // handleHealth returns operator liveness.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "ok", "root": s.Root.Path, "runtime": s.Cfg.Runtime})
+	jsonOK(w, api.HealthResponse{Status: "ok", Root: s.Root.Path, Runtime: s.Cfg.Runtime})
 }
 
 // handleConfigGet returns the current angee.yaml content.
@@ -29,11 +30,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 
 // handleConfigSet validates, commits, and optionally deploys a new angee.yaml.
 func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content string `json:"content"`
-		Message string `json:"message"`
-		Deploy  bool   `json:"deploy"`
-	}
+	var req api.ConfigSetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, 400, "invalid request body")
 		return
@@ -53,8 +50,15 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify it parses
-	if _, err := s.Root.LoadAngeeConfig(); err != nil {
+	cfg, err := s.Root.LoadAngeeConfig()
+	if err != nil {
 		jsonErr(w, 400, fmt.Sprintf("invalid angee.yaml: %s", err))
+		return
+	}
+
+	// Structural validation
+	if err := cfg.Validate(); err != nil {
+		jsonErr(w, 400, err.Error())
 		return
 	}
 
@@ -65,7 +69,7 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := map[string]any{"sha": sha, "message": req.Message}
+	resp := api.ConfigSetResponse{SHA: sha, Message: req.Message}
 
 	if req.Deploy {
 		result, err := s.deploy(r.Context(), nil)
@@ -73,7 +77,7 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, 500, err.Error())
 			return
 		}
-		resp["deploy"] = result
+		resp.Deploy = applyResultToAPI(result)
 	}
 
 	jsonOK(w, resp)
@@ -81,9 +85,7 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploy compiles angee.yaml and applies it to the runtime.
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Message string `json:"message"`
-	}
+	var req api.DeployRequest
 	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
 
 	result, err := s.deploy(r.Context(), nil)
@@ -92,13 +94,18 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, result)
+	jsonOK(w, applyResultToAPI(result))
 }
 
 // deploy is the internal deploy implementation.
 func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.ApplyResult, error) {
 	angeeConfig, err := s.Root.LoadAngeeConfig()
 	if err != nil {
+		return nil, err
+	}
+
+	// Validate config before deploying
+	if err := angeeConfig.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -131,9 +138,7 @@ func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.Ap
 
 // handleRollback reverts to a previous git commit and redeploys.
 func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SHA string `json:"sha"` // git SHA or relative ref like "HEAD~1"
-	}
+	var req api.RollbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SHA == "" {
 		jsonErr(w, 400, "sha is required")
 		return
@@ -154,9 +159,9 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sha, _ := s.Git.CurrentSHA()
-	jsonOK(w, map[string]any{
-		"rolled_back_to": sha,
-		"deploy":         result,
+	jsonOK(w, api.RollbackResponse{
+		RolledBackTo: sha,
+		Deploy:       applyResultToAPI(result),
 	})
 }
 
@@ -180,7 +185,11 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, changeset)
+	jsonOK(w, api.ChangeSet{
+		Add:    changeset.Add,
+		Update: changeset.Update,
+		Remove: changeset.Remove,
+	})
 }
 
 // handleStatus returns the current runtime state of all services and agents.
@@ -226,9 +235,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 // handleScale adjusts replica count for a service.
 func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 	service := r.PathValue("service")
-	var req struct {
-		Replicas int `json:"replicas"`
-	}
+	var req api.ScaleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Replicas < 0 {
 		jsonErr(w, 400, "replicas must be a non-negative integer")
 		return
@@ -239,7 +246,7 @@ func (s *Server) handleScale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{"service": service, "replicas": req.Replicas})
+	jsonOK(w, api.ScaleResponse{Service: service, Replicas: req.Replicas})
 }
 
 // handleDown brings the entire workspace stack down.
@@ -248,7 +255,7 @@ func (s *Server) handleDown(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	jsonOK(w, map[string]string{"status": "down"})
+	jsonOK(w, api.DownResponse{Status: "down"})
 }
 
 // handleAgentList returns all agents defined in angee.yaml with their status.
@@ -261,27 +268,19 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 
 	statuses, _ := s.Backend.Status(r.Context())
 	statusMap := make(map[string]*runtime.ServiceStatus)
-	for _, s := range statuses {
-		statusMap[s.Name] = s
+	for _, st := range statuses {
+		statusMap[st.Name] = st
 	}
 
-	type AgentInfo struct {
-		Name      string `json:"name"`
-		Lifecycle string `json:"lifecycle"`
-		Role      string `json:"role"`
-		Status    string `json:"status"`
-		Health    string `json:"health"`
-	}
-
-	var agents []AgentInfo
+	var agents []api.AgentInfo
 	for name, agent := range cfg.Agents {
 		status := "stopped"
 		health := "unknown"
-		if s, ok := statusMap["agent-"+name]; ok {
-			status = s.Status
-			health = s.Health
+		if st, ok := statusMap["agent-"+name]; ok {
+			status = st.Status
+			health = st.Health
 		}
-		agents = append(agents, AgentInfo{
+		agents = append(agents, api.AgentInfo{
 			Name:      name,
 			Lifecycle: agent.Lifecycle,
 			Role:      agent.Role,
@@ -324,7 +323,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, result)
+	jsonOK(w, applyResultToAPI(result))
 }
 
 // handleAgentStop stops a running agent.
@@ -334,7 +333,7 @@ func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	jsonOK(w, map[string]string{"status": "stopped", "agent": name})
+	jsonOK(w, api.AgentActionResponse{Status: "stopped", Agent: name})
 }
 
 // handleAgentLogs streams logs for a specific agent.
@@ -373,16 +372,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type CommitResp struct {
-		SHA     string `json:"sha"`
-		Message string `json:"message"`
-		Author  string `json:"author"`
-		Date    string `json:"date"`
-	}
-
-	var resp []CommitResp
+	var resp []api.CommitInfo
 	for _, c := range commits {
-		resp = append(resp, CommitResp{
+		resp = append(resp, api.CommitInfo{
 			SHA:     c.SHA,
 			Message: c.Message,
 			Author:  c.Author,
@@ -393,3 +385,14 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
+// applyResultToAPI converts a runtime.ApplyResult to an api.ApplyResult.
+func applyResultToAPI(r *runtime.ApplyResult) *api.ApplyResult {
+	if r == nil {
+		return nil
+	}
+	return &api.ApplyResult{
+		ServicesStarted: r.ServicesStarted,
+		ServicesUpdated: r.ServicesUpdated,
+		ServicesRemoved: r.ServicesRemoved,
+	}
+}

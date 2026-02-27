@@ -150,6 +150,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading angee.yaml for compilation: %w", err)
 	}
+	// Ensure agent directories + stub .env files exist before compiling,
+	// so docker compose doesn't fail on missing env_file references.
+	for agentName := range cfg.Agents {
+		if err := r.EnsureAgentDir(agentName); err != nil {
+			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
+		}
+	}
+
 	comp := compiler.New(path, opCfg.Docker.Network)
 	cf, err := comp.Compile(cfg)
 	if err != nil {

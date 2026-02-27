@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 
+	"github.com/fyltr/angee-go/api"
 	"github.com/spf13/cobra"
 )
 
@@ -31,9 +31,9 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operator not running — start with 'angee up'")
 	}
 
-	payload, _ := json.Marshal(map[string]string{"message": deployMessage})
+	payload, _ := json.Marshal(api.DeployRequest{Message: deployMessage})
 
-	resp, err := http.Post(resolveOperator()+"/deploy", "application/json", bytes.NewReader(payload))
+	resp, err := doRequest("POST", resolveOperator()+"/deploy", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("deploying: %w", err)
 	}
@@ -49,11 +49,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	var result struct {
-		ServicesStarted []string `json:"services_started"`
-		ServicesUpdated []string `json:"services_updated"`
-		ServicesRemoved []string `json:"services_removed"`
-	}
+	var result api.ApplyResult
 	json.Unmarshal(body, &result) //nolint:errcheck
 
 	printSuccess("Deployed")

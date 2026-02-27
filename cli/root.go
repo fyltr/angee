@@ -3,6 +3,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -13,6 +15,7 @@ var (
 	angeeRoot   string
 	operatorURL string
 	outputJSON  bool
+	apiKey      string
 )
 
 // rootCmd is the base command.
@@ -42,6 +45,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&angeeRoot, "root", "", "ANGEE_ROOT path (default: ~/.angee)")
 	rootCmd.PersistentFlags().StringVar(&operatorURL, "operator", "", "Operator URL (default: http://localhost:9000)")
 	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for operator authentication")
 
 	// Register all subcommands
 	rootCmd.AddCommand(
@@ -85,6 +89,41 @@ func resolveOperator() string {
 		return v
 	}
 	return "http://localhost:9000"
+}
+
+// resolveAPIKey returns the API key from flag, env, or empty.
+func resolveAPIKey() string {
+	if apiKey != "" {
+		return apiKey
+	}
+	if v := os.Getenv("ANGEE_API_KEY"); v != "" {
+		return v
+	}
+	return ""
+}
+
+// newRequest creates an http.Request with auth and content-type headers set.
+func newRequest(method, url string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if key := resolveAPIKey(); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	if body != nil && (method == "POST" || method == "PUT" || method == "PATCH") {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, nil
+}
+
+// doRequest creates and executes an HTTP request with auth headers.
+func doRequest(method, url string, body io.Reader) (*http.Response, error) {
+	req, err := newRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
 }
 
 func printSuccess(msg string) {

@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 
@@ -56,7 +55,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	reqURL := fmt.Sprintf("%s%s?%s", resolveOperator(), path, params.Encode())
-	resp, err := http.Get(reqURL)
+	resp, err := doRequest("GET", reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("fetching logs: %w", err)
 	}

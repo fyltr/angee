@@ -76,7 +76,7 @@ secrets:
     required: true
     generated: true
     length: 50
-    charset: "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)"
+    charset: "abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)"
 
   - name: db-password
     description: "Postgres superuser password"

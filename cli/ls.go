@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"text/tabwriter"
 
+	"github.com/fyltr/angee-go/api"
 	"github.com/spf13/cobra"
 )
 
@@ -18,18 +18,8 @@ var lsCmd = &cobra.Command{
 	RunE:    runLs,
 }
 
-type serviceStatus struct {
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	Status          string `json:"status"`
-	Health          string `json:"health"`
-	ReplicasRunning int    `json:"replicas_running"`
-	ReplicasDesired int    `json:"replicas_desired"`
-	Domains         []string `json:"domains"`
-}
-
 func runLs(cmd *cobra.Command, args []string) error {
-	resp, err := http.Get(resolveOperator() + "/status")
+	resp, err := doRequest("GET", resolveOperator()+"/status", nil)
 	if err != nil {
 		return fmt.Errorf("cannot reach operator at %s — is angee running? (angee up)", resolveOperator())
 	}
@@ -45,7 +35,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	var statuses []serviceStatus
+	var statuses []api.ServiceStatus
 	if err := json.Unmarshal(body, &statuses); err != nil {
 		return fmt.Errorf("parsing response: %w", err)
 	}
@@ -56,7 +46,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	// Split into agents and services
-	var services, agents []serviceStatus
+	var services, agents []api.ServiceStatus
 	for _, s := range statuses {
 		if s.Type == "agent" {
 			agents = append(agents, s)

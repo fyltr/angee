@@ -216,7 +216,7 @@ func resolveDerived(def SecretDef, resolved map[string]string, supplied map[stri
 func generateValue(def SecretDef) (string, error) {
 	charset := def.Charset
 	if charset == "" {
-		charset = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)"
+		charset = "abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)"
 	}
 	length := def.Length
 	if length == 0 {
@@ -243,7 +243,9 @@ func FormatEnvFile(secrets []ResolvedSecret) string {
 	for _, s := range secrets {
 		// Env var name: uppercase, hyphens → underscores
 		envKey := strings.ToUpper(strings.ReplaceAll(s.Name, "-", "_"))
-		sb.WriteString(fmt.Sprintf("%s=%s\n", envKey, s.Value))
+		// Escape $ as $$ so Docker Compose doesn't try to interpolate values
+		val := strings.ReplaceAll(s.Value, "$", "$$")
+		sb.WriteString(fmt.Sprintf("%s=%s\n", envKey, val))
 	}
 	return sb.String()
 }

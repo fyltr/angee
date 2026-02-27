@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fyltr/angee-go/internal/config"
+	"github.com/fyltr/angee-go/internal/root"
 	"github.com/spf13/cobra"
 )
 
@@ -42,6 +43,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 	projectName := cfg.Name
 	if projectName == "" {
 		projectName = "angee"
+	}
+
+	// Ensure agent directories + stub .env files exist before docker compose
+	// tries to mount them (env_file references must exist at compose-up time).
+	r, err := root.Open(path)
+	if err != nil {
+		return fmt.Errorf("opening ANGEE_ROOT: %w", err)
+	}
+	for agentName := range cfg.Agents {
+		if err := r.EnsureAgentDir(agentName); err != nil {
+			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
+		}
 	}
 
 	fmt.Printf("\n\033[1mangee up\033[0m\n\n")
@@ -99,7 +112,11 @@ func printPlatformReady() {
 func isOperatorRunning() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", resolveOperator()+"/health", nil)
+	req, err := newRequest("GET", resolveOperator()+"/health", nil)
+	if err != nil {
+		return false
+	}
+	req = req.WithContext(ctx)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false
@@ -124,10 +141,11 @@ func waitForOperator(timeout time.Duration) error {
 func triggerDeploy() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", resolveOperator()+"/deploy", nil)
+	req, err := newRequest("POST", resolveOperator()+"/deploy", nil)
 	if err != nil {
 		return err
 	}
+	req = req.WithContext(ctx)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

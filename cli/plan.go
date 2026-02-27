@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 
+	"github.com/fyltr/angee-go/api"
 	"github.com/spf13/cobra"
 )
 
@@ -36,7 +36,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operator not running — start with 'angee up'")
 	}
 
-	resp, err := http.Get(resolveOperator() + "/plan")
+	resp, err := doRequest("GET", resolveOperator()+"/plan", nil)
 	if err != nil {
 		return err
 	}
@@ -49,11 +49,7 @@ func runPlan(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	var changeset struct {
-		Add    []string `json:"add"`
-		Update []string `json:"update"`
-		Remove []string `json:"remove"`
-	}
+	var changeset api.ChangeSet
 	json.Unmarshal(body, &changeset) //nolint:errcheck
 
 	total := len(changeset.Add) + len(changeset.Update) + len(changeset.Remove)
@@ -85,7 +81,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operator not running")
 	}
 
-	resp, err := http.Post(resolveOperator()+"/down", "application/json", nil)
+	resp, err := doRequest("POST", resolveOperator()+"/down", nil)
 	if err != nil {
 		return err
 	}

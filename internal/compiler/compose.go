@@ -172,14 +172,14 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 		cs.Deploy.Resources = ComposeResources{
 			Limits: ComposeResourceValues{
 				CPUs:   svc.Resources.CPU,
-				Memory: svc.Resources.Memory,
+				Memory: normalizeMemory(svc.Resources.Memory),
 			},
 		}
 	}
 
-	// Environment
+	// Environment — translate ${secret:name} → ${ENV_NAME} for docker-compose interpolation
 	for k, v := range svc.Env {
-		cs.Environment = append(cs.Environment, k+"="+v)
+		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(v))
 	}
 
 	// Ports
@@ -266,16 +266,16 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 	}
 
 	// Per-agent .env file (written by operator at start time)
-	agentEnvFile := fmt.Sprintf("agents/%s/.env", name)
+	agentEnvFile := fmt.Sprintf("./agents/%s/.env", name)
 	cs.EnvFile = []string{agentEnvFile}
 
 	// Workspace volume mount
 	if agent.Workspace.Path != "" {
 		// Explicit path (e.g. ANGEE_ROOT itself for the admin agent)
-		cs.Volumes = append(cs.Volumes, agent.Workspace.Path+":/workspace")
+		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(agent.Workspace.Path)+":/workspace")
 	} else {
 		// Per-agent workspace directory
-		workspacePath := fmt.Sprintf("agents/%s/workspace", name)
+		workspacePath := fmt.Sprintf("./agents/%s/workspace", name)
 		cs.Volumes = append(cs.Volumes, workspacePath+":/workspace")
 	}
 
@@ -310,13 +310,59 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 			Resources: ComposeResources{
 				Limits: ComposeResourceValues{
 					CPUs:   agent.Resources.CPU,
-					Memory: agent.Resources.Memory,
+					Memory: normalizeMemory(agent.Resources.Memory),
 				},
 			},
 		}
 	}
 
 	return cs, nil
+}
+
+// ensureBindMountPrefix ensures a relative path starts with "./" so Docker
+// Compose treats it as a bind mount rather than a named volume reference.
+func ensureBindMountPrefix(p string) string {
+	if p == "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../") {
+		return p
+	}
+	return "./" + p
+}
+
+// normalizeMemory converts Kubernetes-style IEC suffixes to Docker Compose
+// compatible suffixes: "1Gi" → "1g", "256Mi" → "256m", "512Ki" → "512k".
+// Values already using Docker suffixes (e.g. "512m") are left unchanged.
+func normalizeMemory(v string) string {
+	replacements := []struct{ from, to string }{
+		{"Gi", "g"},
+		{"Mi", "m"},
+		{"Ki", "k"},
+	}
+	for _, r := range replacements {
+		if strings.HasSuffix(v, r.from) {
+			return strings.TrimSuffix(v, r.from) + r.to
+		}
+	}
+	return v
+}
+
+// resolveSecretRefs translates ${secret:name} references into ${ENV_NAME}
+// so Docker Compose can interpolate them from the .env file.
+// e.g. ${secret:db-url} → ${DB_URL}, ${secret:django-secret-key} → ${DJANGO_SECRET_KEY}
+func resolveSecretRefs(v string) string {
+	for {
+		start := strings.Index(v, "${secret:")
+		if start == -1 {
+			return v
+		}
+		end := strings.Index(v[start:], "}")
+		if end == -1 {
+			return v
+		}
+		end += start
+		secretName := v[start+len("${secret:") : end]
+		envKey := strings.ToUpper(strings.ReplaceAll(secretName, "-", "_"))
+		v = v[:start] + "${" + envKey + "}" + v[end+1:]
+	}
 }
 
 // Write serializes a ComposeFile to a YAML file.

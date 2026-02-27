@@ -12,12 +12,15 @@ import (
 // This file is NOT committed to git — it tells the operator which
 // runtime backend to use and how to find the Django control plane.
 type OperatorConfig struct {
-	Runtime    string           `yaml:"runtime"`     // docker-compose | kubernetes
-	Port       int              `yaml:"port,omitempty"`
-	AngeeRoot  string           `yaml:"angee_root,omitempty"`
-	DjangoURL  string           `yaml:"django_url,omitempty"`
-	Docker     DockerConfig     `yaml:"docker,omitempty"`
-	Kubernetes KubernetesConfig `yaml:"kubernetes,omitempty"`
+	Runtime     string           `yaml:"runtime"`     // docker-compose | kubernetes
+	Port        int              `yaml:"port,omitempty"`
+	AngeeRoot   string           `yaml:"angee_root,omitempty"`
+	DjangoURL   string           `yaml:"django_url,omitempty"`
+	APIKey      string           `yaml:"api_key,omitempty"`
+	BindAddress string           `yaml:"bind_address,omitempty"`
+	CORSOrigins []string         `yaml:"cors_origins,omitempty"`
+	Docker      DockerConfig     `yaml:"docker,omitempty"`
+	Kubernetes  KubernetesConfig `yaml:"kubernetes,omitempty"`
 }
 
 // DockerConfig holds Docker Compose backend settings.
@@ -38,10 +41,12 @@ type KubernetesConfig struct {
 // DefaultOperatorConfig returns sensible defaults.
 func DefaultOperatorConfig(angeeRoot string) *OperatorConfig {
 	return &OperatorConfig{
-		Runtime:   "docker-compose",
-		Port:      9000,
-		AngeeRoot: angeeRoot,
-		DjangoURL: "http://localhost:8000",
+		Runtime:     "docker-compose",
+		Port:        9000,
+		AngeeRoot:   angeeRoot,
+		DjangoURL:   "http://localhost:8000",
+		BindAddress: "127.0.0.1",
+		CORSOrigins: []string{"http://localhost:*"},
 		Docker: DockerConfig{
 			Socket:  "/var/run/docker.sock",
 			Network: "angee-net",
