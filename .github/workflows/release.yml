@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  REGISTRY: ghcr.io
+  OPERATOR_IMAGE: ghcr.io/fyltr/angee-operator
+  DJANGO_IMAGE: ghcr.io/fyltr/angee-django
+
+jobs:
+  release-binaries:
+    name: Build & publish release binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+          - os: windows
+            arch: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Build CLI
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${{ github.ref_name }}"
+          EXT=""
+          if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
+
+          go build \
+            -ldflags="-s -w -X main.version=${VERSION}" \
+            -o "dist/angee-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
+            ./cmd/angee
+
+          # Create tarball for unix
+          if [ "${{ matrix.os }}" != "windows" ]; then
+            cd dist
+            tar -czf "angee-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" \
+              "angee-${{ matrix.os }}-${{ matrix.arch }}"
+          fi
+
+      - name: Build operator
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${{ github.ref_name }}"
+          EXT=""
+          if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
+
+          go build \
+            -ldflags="-s -w -X main.version=${VERSION}" \
+            -o "dist/angee-operator-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
+            ./cmd/operator
+
+      - name: Create GitHub Release & upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.exe
+          generate_release_notes: true
+
+  release-docker:
+    name: Build & push Docker images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for multi-arch builds)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for operator image
+        id: meta-operator
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.OPERATOR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Build and push operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.operator
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-operator.outputs.tags }}
+          labels: ${{ steps.meta-operator.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-install-script:
+    name: Publish install script
+    runs-on: ubuntu-latest
+    needs: [release-binaries, release-docker]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update install script with latest version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          sed "s/ANGEE_VERSION=.*/ANGEE_VERSION=${VERSION}/" \
+            scripts/install.sh > /tmp/install.sh
+          cp /tmp/install.sh scripts/install.sh
+
+      - name: Upload install script to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: scripts/install.sh

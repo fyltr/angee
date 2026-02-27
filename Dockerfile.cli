@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1
+# Build the angee CLI binary (multi-arch, distributed as release artifact)
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+RUN apk add --no-cache git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X main.version=${VERSION}" \
+    -o angee \
+    ./cmd/angee
+
+# ─────────────────────────────────────────────────────────
+# The CLI image is primarily used for building release binaries.
+# End users install via: curl https://angee.ai/install.sh | sh
+# or: brew install angee
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates git docker-cli docker-cli-compose
+
+COPY --from=builder /build/angee /usr/local/bin/angee
+
+ENTRYPOINT ["/usr/local/bin/angee"]
