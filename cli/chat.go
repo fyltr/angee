@@ -1,42 +1,49 @@
 package cli
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"strings"
 
-	"github.com/fyltr/angee-go/api"
 	"github.com/spf13/cobra"
 )
 
+// agentContainerNames maps CLI shorthand → docker compose service name.
+var agentContainerNames = map[string]string{
+	"admin":     "agent-angee-admin",
+	"developer": "agent-angee-developer",
+	"dev":       "agent-angee-developer",
+}
+
 var chatCmd = &cobra.Command{
 	Use:   "chat [agent]",
-	Short: "Attach to an agent (default: admin)",
-	Long: `Open an interactive chat session with an agent.
+	Short: "Attach to an agent's terminal (default: admin)",
+	Long: `Open an interactive terminal session inside an agent container.
+
+This runs docker exec -it into the agent's container, giving you direct
+terminal access. The agent can be running OpenCode, Claude Code, or any
+terminal-based coding agent.
 
 Examples:
-  angee chat              # chat with admin agent
-  angee chat developer    # chat with developer agent
-  angee chat my-agent     # chat with any named agent`,
+  angee chat              # attach to admin agent
+  angee chat developer    # attach to developer agent
+  angee chat my-agent     # attach to any named agent`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent := "admin"
 		if len(args) > 0 {
 			agent = args[0]
 		}
-		return runChat(agent)
+		return attachToAgent(agent)
 	},
 }
 
 // adminCmd is a shortcut for `angee chat admin`
 var adminCmd = &cobra.Command{
 	Use:   "admin",
-	Short: "Chat with the admin agent (shortcut for 'angee chat admin')",
+	Short: "Attach to the admin agent's terminal",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runChat("admin")
+		return attachToAgent("admin")
 	},
 }
 
@@ -44,9 +51,9 @@ var adminCmd = &cobra.Command{
 var developCmd = &cobra.Command{
 	Use:     "develop",
 	Aliases: []string{"developer", "dev"},
-	Short:   "Chat with the developer agent (shortcut for 'angee chat developer')",
+	Short:   "Attach to the developer agent's terminal",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runChat("developer")
+		return attachToAgent("developer")
 	},
 }
 
@@ -54,11 +61,11 @@ var developCmd = &cobra.Command{
 var askCmd = &cobra.Command{
 	Use:   "ask [message]",
 	Short: "Send a one-shot message to the admin agent",
-	Long: `Send a single message to an agent and print the response.
+	Long: `Send a single message to an agent by exec-ing a command in the container.
 
 Examples:
-  angee ask "scale web to 3 replicas"
-  angee ask --agent developer "add a health check endpoint"`,
+  angee ask "show me the project status"
+  angee ask --agent developer "run the tests"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runAsk,
 }
@@ -69,90 +76,94 @@ func init() {
 	askCmd.Flags().StringVar(&askAgent, "agent", "admin", "Agent to send the message to")
 }
 
-func runChat(agentName string) error {
-	// Verify operator is reachable
-	if !isOperatorRunning() {
-		return fmt.Errorf("operator not running — start with 'angee up'")
+// attachToAgent runs docker exec -it into the agent's container.
+func attachToAgent(agentName string) error {
+	containerService := resolveAgentService(agentName)
+	projectName := resolveProjectName()
+
+	// Build the container name: <project>-<service>-1
+	containerName := fmt.Sprintf("%s-%s-1", projectName, containerService)
+
+	// Check if the container is running
+	checkCmd := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", containerName)
+	out, err := checkCmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return fmt.Errorf("agent %q is not running (container: %s) — start with 'angee up'", agentName, containerName)
 	}
 
-	fmt.Printf("\n\033[1mConnected to %s agent\033[0m\n", agentName)
-	fmt.Printf("\033[90m(type your message and press Enter — /exit to quit)\033[0m\n\n")
+	fmt.Printf("\n\033[1mAttaching to %s agent\033[0m (%s)\n", agentName, containerName)
+	fmt.Printf("\033[90m(you are now inside the agent container — exit to detach)\033[0m\n\n")
 
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Printf("\033[36myou:\033[0m ")
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if line == "/exit" || line == "/quit" || line == "exit" || line == "quit" {
-			fmt.Println("\n  Disconnected.")
-			break
-		}
+	// docker exec -it <container> /bin/sh (use sh as universal fallback)
+	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/sh")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-		response, err := sendMessage(agentName, line)
-		if err != nil {
-			printError(fmt.Sprintf("error: %s", err))
-			continue
+	if err := cmd.Run(); err != nil {
+		// Exit code from the shell is normal — don't treat as error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
 		}
-
-		fmt.Printf("\n\033[1m%s:\033[0m %s\n\n", agentName, response)
+		return fmt.Errorf("attaching to agent: %w", err)
 	}
+
+	fmt.Println("\n  Detached from agent.")
 	return nil
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
 	message := strings.Join(args, " ")
-	agent := askAgent
+	containerService := resolveAgentService(askAgent)
+	projectName := resolveProjectName()
+	containerName := fmt.Sprintf("%s-%s-1", projectName, containerService)
 
-	if !isOperatorRunning() {
-		return fmt.Errorf("operator not running — start with 'angee up'")
+	// Check if the container is running
+	checkCmd := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", containerName)
+	out, err := checkCmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return fmt.Errorf("agent %q is not running — start with 'angee up'", askAgent)
 	}
 
-	response, err := sendMessage(agent, message)
-	if err != nil {
-		return err
-	}
-
-	fmt.Println(response)
-	return nil
+	// Execute the message as a command inside the container
+	execCmd := exec.Command("docker", "exec", containerName, "sh", "-c", message)
+	execCmd.Stdout = os.Stdout
+	execCmd.Stderr = os.Stderr
+	return execCmd.Run()
 }
 
-func sendMessage(agentName, message string) (string, error) {
-	payload, _ := json.Marshal(api.ChatRequest{
-		Message: message,
-		Agent:   agentName,
-	})
-
-	url := fmt.Sprintf("%s/agents/%s/chat", resolveOperator(), agentName)
-	resp, err := doRequest("POST", url, bytes.NewReader(payload))
-	if err != nil {
-		return "", fmt.Errorf("connecting to agent: %w", err)
+// resolveAgentService maps an agent name to its docker compose service name.
+func resolveAgentService(name string) string {
+	if svc, ok := agentContainerNames[name]; ok {
+		return svc
 	}
-	defer resp.Body.Close()
+	// For custom agents, use the standard prefix
+	return "agent-" + name
+}
 
-	if resp.StatusCode == 404 {
-		return "", fmt.Errorf("agent %q not found — check 'angee ls'", agentName)
+// resolveProjectName gets the docker compose project name from angee.yaml.
+func resolveProjectName() string {
+	path := resolveRoot()
+	cfg, err := loadProjectName(path)
+	if err != nil || cfg == "" {
+		return "angee"
 	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("agent returned status %d", resp.StatusCode)
-	}
+	return cfg
+}
 
-	body, err := io.ReadAll(resp.Body)
+// loadProjectName reads just the name field from angee.yaml.
+func loadProjectName(rootPath string) (string, error) {
+	cfgPath := rootPath + "/angee.yaml"
+	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return "", err
 	}
-
-	var result api.ChatResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Return raw text if not JSON
-		return strings.TrimSpace(string(body)), nil
+	// Quick parse — just find the name field
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "name:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "name:")), nil
+		}
 	}
-	if result.Response != "" {
-		return result.Response, nil
-	}
-	return result.Message, nil
+	return "", nil
 }

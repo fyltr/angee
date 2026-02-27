@@ -98,8 +98,26 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading template metadata: %w", err)
 	}
 
-	// Resolve secrets: flag → generate → derive
-	secrets, err := tmpl.ResolveSecrets(meta, supplied, params.ProjectName)
+	// Build the secret prompt function (nil if --yes for non-interactive)
+	var secretPromptFn tmpl.PromptFunc
+	if !initYes {
+		reader := bufio.NewReader(os.Stdin)
+		secretPromptFn = func(def tmpl.SecretDef) (string, error) {
+			desc := def.Description
+			if desc == "" {
+				desc = def.Name
+			}
+			fmt.Printf("  \033[1m%s\033[0m (%s): ", def.Name, desc)
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(line), nil
+		}
+	}
+
+	// Resolve secrets: flag → generate → prompt → derive
+	secrets, err := tmpl.ResolveSecrets(meta, supplied, params.ProjectName, secretPromptFn)
 	if err != nil {
 		return err
 	}
@@ -157,6 +175,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
 		}
 	}
+
+	// Copy agent workspace files (AGENTS.md, etc.) from template
+	if err := tmpl.CopyAgentFiles(templateDir, path); err != nil {
+		return fmt.Errorf("copying agent workspace files: %w", err)
+	}
+	printSuccess("Copied agent workspace files")
 
 	comp := compiler.New(path, opCfg.Docker.Network)
 	cf, err := comp.Compile(cfg)
@@ -224,6 +248,8 @@ func secretBadge(source string) string {
 		return "\033[32m[generated]\033[0m  "
 	case "derived":
 		return "\033[36m[derived]\033[0m    "
+	case "prompt":
+		return "\033[33m[entered]\033[0m    "
 	default:
 		return "             "
 	}

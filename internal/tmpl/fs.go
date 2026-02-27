@@ -170,10 +170,17 @@ func LoadMeta(templateDir string) (*TemplateMeta, error) {
 
 // ─── Secret resolution ────────────────────────────────────────────────────────
 
+// PromptFunc asks the user for a secret value interactively.
+// It receives the secret definition and returns the user-supplied value.
+// Return empty string to skip (will error if required).
+type PromptFunc func(def SecretDef) (string, error)
+
 // ResolveSecrets processes the secrets declared in a template.
 // supplied maps secret name → value provided via --secret flags.
+// promptFn is called for required non-generated secrets that aren't supplied.
+// Pass nil for non-interactive mode (errors on missing required secrets).
 // Returns resolved secrets in declaration order.
-func ResolveSecrets(meta *TemplateMeta, supplied map[string]string, projectName string) ([]ResolvedSecret, error) {
+func ResolveSecrets(meta *TemplateMeta, supplied map[string]string, projectName string, promptFn PromptFunc) ([]ResolvedSecret, error) {
 	resolved := make(map[string]string)
 	var ordered []ResolvedSecret
 
@@ -201,6 +208,18 @@ func ResolveSecrets(meta *TemplateMeta, supplied map[string]string, projectName 
 			source = "generated"
 
 		case def.Required:
+			// Required secret not supplied and not generated — prompt interactively
+			if promptFn != nil {
+				prompted, err := promptFn(def)
+				if err != nil {
+					return nil, err
+				}
+				if prompted != "" {
+					value = prompted
+					source = "prompt"
+					break
+				}
+			}
 			return nil, fmt.Errorf("secret %q is required — provide it with --secret %s=<value>", def.Name, def.Name)
 
 		default:
@@ -262,6 +281,62 @@ func generateValue(def SecretDef) (string, error) {
 		result[i] = runes[n.Int64()]
 	}
 	return string(result), nil
+}
+
+// CopyAgentFiles copies agent workspace files (AGENTS.md, etc.) from the
+// template's agents/ directory into the ANGEE_ROOT agents/ directory.
+// Only copies files that exist in the template; does not overwrite existing files.
+func CopyAgentFiles(templateDir, angeeRoot string) error {
+	agentsDir := filepath.Join(templateDir, "agents")
+	if _, err := os.Stat(agentsDir); os.IsNotExist(err) {
+		return nil // no agents directory in template — nothing to copy
+	}
+
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return fmt.Errorf("reading template agents dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		agentName := entry.Name()
+		srcDir := filepath.Join(agentsDir, agentName)
+		dstDir := filepath.Join(angeeRoot, "agents", agentName, "workspace")
+
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			return fmt.Errorf("creating agent workspace %s: %w", agentName, err)
+		}
+
+		// Copy all files from the template agent dir
+		files, err := os.ReadDir(srcDir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue // skip subdirectories for now
+			}
+			srcPath := filepath.Join(srcDir, f.Name())
+			dstPath := filepath.Join(dstDir, f.Name())
+
+			// Don't overwrite existing files
+			if _, err := os.Stat(dstPath); err == nil {
+				continue
+			}
+
+			data, err := os.ReadFile(srcPath)
+			if err != nil {
+				return fmt.Errorf("reading %s: %w", srcPath, err)
+			}
+			if err := os.WriteFile(dstPath, data, 0644); err != nil {
+				return fmt.Errorf("writing %s: %w", dstPath, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // FormatEnvFile formats resolved secrets as KEY=VALUE lines for a .env file.

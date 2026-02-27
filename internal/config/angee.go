@@ -116,17 +116,18 @@ type CredentialSpec struct {
 
 // AgentSpec defines an AI agent.
 type AgentSpec struct {
-	Image        string        `yaml:"image,omitempty"`
-	Template     string        `yaml:"template,omitempty"`
-	Version      string        `yaml:"version,omitempty"`
-	Lifecycle    string        `yaml:"lifecycle,omitempty"`  // system | on-demand
-	Role         string        `yaml:"role,omitempty"`       // operator | user
-	MCPServers   []string      `yaml:"mcp_servers,omitempty"`
-	RunAs        string        `yaml:"run_as,omitempty"`
-	Workspace    WorkspaceSpec `yaml:"workspace,omitempty"`
-	Resources    ResourceSpec  `yaml:"resources,omitempty"`
-	SystemPrompt string        `yaml:"system_prompt,omitempty"`
-	Description  string        `yaml:"description,omitempty"`
+	Image        string            `yaml:"image,omitempty"`
+	Template     string            `yaml:"template,omitempty"`
+	Version      string            `yaml:"version,omitempty"`
+	Lifecycle    string            `yaml:"lifecycle,omitempty"`  // system | on-demand
+	Role         string            `yaml:"role,omitempty"`       // operator | user
+	MCPServers   []string          `yaml:"mcp_servers,omitempty"`
+	RunAs        string            `yaml:"run_as,omitempty"`
+	Workspace    WorkspaceSpec     `yaml:"workspace,omitempty"`
+	Resources    ResourceSpec      `yaml:"resources,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	SystemPrompt string            `yaml:"system_prompt,omitempty"`
+	Description  string            `yaml:"description,omitempty"`
 }
 
 // WorkspaceSpec defines the git workspace for an agent.

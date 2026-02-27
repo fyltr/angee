@@ -24,6 +24,8 @@ type ComposeService struct {
 	Build       *ComposeBuild     `yaml:"build,omitempty"`
 	Command     string            `yaml:"command,omitempty"`
 	Restart     string            `yaml:"restart,omitempty"`
+	StdinOpen   bool              `yaml:"stdin_open,omitempty"`
+	Tty         bool              `yaml:"tty,omitempty"`
 	Ports       []string          `yaml:"ports,omitempty"`
 	Environment []string          `yaml:"environment,omitempty"`
 	EnvFile     []string          `yaml:"env_file,omitempty"`
@@ -249,9 +251,11 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 	}
 
 	cs := ComposeService{
-		Image:    image,
-		Networks: []string{c.Network},
-		Restart:  "unless-stopped",
+		Image:     image,
+		Networks:  []string{c.Network},
+		Restart:   "unless-stopped",
+		StdinOpen: true,
+		Tty:       true,
 		Labels: map[string]string{
 			"angee.managed":   "true",
 			"angee.type":      "agent",
@@ -277,6 +281,11 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 		// Per-agent workspace directory
 		workspacePath := fmt.Sprintf("./agents/%s/workspace", name)
 		cs.Volumes = append(cs.Volumes, workspacePath+":/workspace")
+	}
+
+	// Agent-declared environment variables (e.g. ANTHROPIC_API_KEY)
+	for k, v := range agent.Env {
+		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(v))
 	}
 
 	// System prompt via environment

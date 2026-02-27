@@ -126,7 +126,7 @@ func TestResolveSecretsFromFlags(t *testing.T) {
 		"secret-key":  "supplied-key",
 	}
 
-	resolved, err := ResolveSecrets(meta, supplied, "proj")
+	resolved, err := ResolveSecrets(meta, supplied, "proj", nil)
 	if err != nil {
 		t.Fatalf("ResolveSecrets() error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestResolveSecretsGenerated(t *testing.T) {
 		},
 	}
 
-	resolved, err := ResolveSecrets(meta, nil, "proj")
+	resolved, err := ResolveSecrets(meta, nil, "proj", nil)
 	if err != nil {
 		t.Fatalf("ResolveSecrets() error: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestResolveSecretsDerived(t *testing.T) {
 		},
 	}
 
-	resolved, err := ResolveSecrets(meta, nil, "myapp")
+	resolved, err := ResolveSecrets(meta, nil, "myapp", nil)
 	if err != nil {
 		t.Fatalf("ResolveSecrets() error: %v", err)
 	}
