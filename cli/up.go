@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -17,9 +16,9 @@ import (
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Start the Angee platform",
-	Long: `Start the Angee platform by compiling angee.yaml into a single docker-compose
-stack and running it. All services (operator, traefik, app, DB, etc.) are
-defined in angee.yaml — there is no separate system stack.
+	Long: `Start the Angee platform using the docker-compose.yaml compiled during
+init. Once the operator is healthy, the CLI triggers a deploy so the
+operator takes ownership of the compose file from that point on.
 
 Example:
   angee up`,
@@ -29,59 +28,63 @@ Example:
 func runUp(cmd *cobra.Command, args []string) error {
 	path := resolveRoot()
 
-	// Load angee.yaml
-	angeeYAMLPath := filepath.Join(path, "angee.yaml")
-	cfg, err := config.Load(angeeYAMLPath)
-	if err != nil {
-		return fmt.Errorf("loading angee.yaml: %w (run 'angee init' first)", err)
-	}
-
-	fmt.Printf("\n\033[1mangee up\033[0m\n\n")
-
-	// Compile angee.yaml → docker-compose.yaml
-	c := compiler.New(path, "angee-net")
-	cf, err := c.Compile(cfg)
-	if err != nil {
-		return fmt.Errorf("compiling angee.yaml: %w", err)
-	}
-
+	// Verify required files exist
 	composePath := filepath.Join(path, "docker-compose.yaml")
-	if err := compiler.Write(cf, composePath); err != nil {
-		return fmt.Errorf("writing docker-compose.yaml: %w", err)
+	if _, err := os.Stat(composePath); os.IsNotExist(err) {
+		return fmt.Errorf("docker-compose.yaml not found at %s — run 'angee init' first", path)
 	}
-	printSuccess("Compiled angee.yaml → docker-compose.yaml")
 
-	// Use project name from angee.yaml
+	// Load angee.yaml for the project name
+	cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
+	if err != nil {
+		return fmt.Errorf("loading angee.yaml: %w", err)
+	}
 	projectName := cfg.Name
 	if projectName == "" {
 		projectName = "angee"
 	}
 
-	// Check if operator is already running
-	if isOperatorRunning() {
-		printInfo("Operator already running")
-	} else {
-		printInfo("Starting stack...")
-		if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--remove-orphans"); err != nil {
-			return fmt.Errorf("starting stack: %w", err)
-		}
+	fmt.Printf("\n\033[1mangee up\033[0m\n\n")
 
-		// Wait for operator
-		printInfo("Waiting for operator...")
-		if err := waitForOperator(30 * time.Second); err != nil {
-			return fmt.Errorf("operator did not start: %w", err)
+	// If operator is already running, just trigger deploy
+	if isOperatorRunning() {
+		printInfo("Operator already running — triggering deploy")
+		if err := triggerDeploy(); err != nil {
+			printError(fmt.Sprintf("deploy failed: %s (run 'angee logs' to debug)", err))
+		} else {
+			printSuccess("Services deployed")
 		}
-		printSuccess("Operator started (port 9000)")
+		printPlatformReady()
+		return nil
 	}
 
-	// Trigger initial deploy via operator
-	printInfo("Deploying angee.yaml...")
+	// Start the stack using the compose file compiled during init
+	printInfo("Starting stack...")
+	if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--remove-orphans"); err != nil {
+		return fmt.Errorf("starting stack: %w", err)
+	}
+
+	// Wait for operator
+	printInfo("Waiting for operator...")
+	if err := waitForOperator(30 * time.Second); err != nil {
+		return fmt.Errorf("operator did not start: %w", err)
+	}
+	printSuccess("Operator started (port 9000)")
+
+	// Hand off to the operator: trigger deploy so it re-compiles and
+	// reconciles via its RuntimeBackend (--env-file, --pull, agent dirs, etc.)
+	printInfo("Deploying angee.yaml via operator...")
 	if err := triggerDeploy(); err != nil {
 		printError(fmt.Sprintf("deploy failed: %s (run 'angee logs' to debug)", err))
 	} else {
 		printSuccess("Services deployed")
 	}
 
+	printPlatformReady()
+	return nil
+}
+
+func printPlatformReady() {
 	fmt.Printf("\n\033[1mPlatform ready:\033[0m\n\n")
 	printInfo("UI        →  \033[4mhttp://localhost:3333\033[0m")
 	printInfo("API       →  \033[4mhttp://localhost:8000/api\033[0m")
@@ -91,8 +94,6 @@ func runUp(cmd *cobra.Command, args []string) error {
 	printInfo("angee admin       Chat with admin agent")
 	printInfo("angee develop     Chat with developer agent")
 	fmt.Println()
-
-	return nil
 }
 
 func isOperatorRunning() bool {
@@ -144,6 +145,11 @@ func runDockerCompose(composePath, projectDir, projectName string, args ...strin
 		"--project-name", projectName,
 		"--file", composePath,
 		"--project-directory", projectDir,
+	}
+	// Pass .env file if it exists
+	envFile := filepath.Join(projectDir, ".env")
+	if _, err := os.Stat(envFile); err == nil {
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
 	}
 	cmdArgs = append(cmdArgs, args...)
 	cmd := exec.Command("docker", cmdArgs...)

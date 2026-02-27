@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/fyltr/angee-go/internal/root"
 	"github.com/fyltr/angee-go/internal/tmpl"
@@ -142,6 +143,22 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	printSuccess("Created operator.yaml (local runtime config — gitignored)")
+
+	// Compile angee.yaml → docker-compose.yaml so `angee up` can start
+	// the stack immediately without needing the compiler.
+	cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
+	if err != nil {
+		return fmt.Errorf("loading angee.yaml for compilation: %w", err)
+	}
+	comp := compiler.New(path, opCfg.Docker.Network)
+	cf, err := comp.Compile(cfg)
+	if err != nil {
+		return fmt.Errorf("compiling angee.yaml: %w", err)
+	}
+	if err := compiler.Write(cf, filepath.Join(path, "docker-compose.yaml")); err != nil {
+		return fmt.Errorf("writing docker-compose.yaml: %w", err)
+	}
+	printSuccess("Compiled docker-compose.yaml")
 
 	// Initial git commit (only tracks angee.yaml + .gitignore, not .env)
 	if err := r.InitialCommit(); err != nil {

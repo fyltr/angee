@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
@@ -51,15 +50,21 @@ func New(angeeRoot string, logger *slog.Logger) (*Server, error) {
 		Compiler: compiler.New(angeeRoot, cfg.Docker.Network),
 	}
 
+	// Load angee.yaml to get the project name for the compose backend
+	angeeCfg, err := r.LoadAngeeConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading angee.yaml: %w", err)
+	}
+	projectName := angeeCfg.Name
+	if projectName == "" {
+		projectName = "angee"
+	}
+
 	// Select runtime backend
 	switch cfg.Runtime {
 	case "kubernetes":
 		return nil, fmt.Errorf("kubernetes backend not yet implemented")
 	default:
-		projectName := strings.ReplaceAll(strings.ToLower(cfg.AngeeRoot), "/", "-")
-		if projectName == "" {
-			projectName = "angee"
-		}
 		s.Backend = composeruntime.New(angeeRoot, projectName)
 	}
 
