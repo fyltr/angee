@@ -1,195 +1,260 @@
 # angee
 
-**Self-managed agent containerisation and orchestration engine.**
+**The easiest way to spin up, maintain, and develop your AI stack. (docker-compose for AI project).**
 
-Angee is agentic infrastructure as code — an extension of docker-compose where AI agents are first-class citizens alongside your services. Define your entire stack in a single `angee.yaml`, run one command, and get a fully operational platform with built-in AI agents that can manage themselves.
-
-```
-services:        platform workloads  (web app, DB, Redis, workers)
-mcp_servers:     credential connectors  (like networks, but with identity)
-agents:          AI workloads  (admin, developer, researcher, ...)
-```
-
----
-
-## Install
+Define your services, agents, and MCP servers in one file. Run one command. Get a fully operational platform with AI agents that can deploy, debug, and build alongside you.
 
 ```sh
-# macOS / Linux
-curl https://angee.ai/install.sh | sh
-
-# Homebrew (macOS)
-brew install angee
-
-# Windows: download from GitHub Releases
+angee init                    # scaffold your AI stack, generate secrets
+angee up                      # start everything
+angee admin                   # talk to your platform sysadmin agent
 ```
 
-## Quick start
-
-```sh
-angee init        # scaffold ANGEE_ROOT + default angee.yaml
-angee up          # start the platform
-
-angee ls          # list running agents and services
-angee admin       # chat with the admin agent
-angee develop     # chat with the developer agent
-```
-
-UI is at **http://localhost:3333** — ask the admin agent to change anything.
-
----
-
-## How it works
-
-### `angee.yaml` — source of truth
+## What it looks like
 
 ```yaml
-name: my-project
+# angee.yaml — your entire stack in one file
 
 services:
   web:
-    image: ghcr.io/org/myapp:latest
+    image: myapp:latest
     lifecycle: platform
-    domains:
-      - host: myapp.io
-    resources:
-      cpu: "1.0"
-      memory: "1Gi"
+    domains: [{ host: myapp.io, port: 8000, tls: true }]
 
   postgres:
     image: pgvector/pgvector:pg17
     lifecycle: sidecar
-    volumes:
-      - name: pgdata
-        path: /var/lib/postgresql/data
-        persistent: true
+    env:
+      POSTGRES_PASSWORD: "${secret:db-password}"
 
 mcp_servers:
-  github:
-    transport: sse
-    url: https://api.githubcopilot.com/mcp/
-    credentials:
-      source: connect.account
-      account_type: github
-      run_as: requester
+  operator:
+    transport: streamable-http
+    url: http://operator:9000/mcp
+
+skills:
+  deploy:
+    description: "Deploy, rollback, and manage the platform lifecycle"
+    mcp_servers: [operator]
+  code-review:
+    description: "Review code changes and suggest improvements"
 
 agents:
   admin:
-    image: ghcr.io/fyltr/angee-admin-agent:latest
+    image: ghcr.io/anomalyco/opencode:latest
     lifecycle: system
     role: operator
-    mcp_servers: [angee-operator, angee-files]
+    skills: [deploy]
+    mcp_servers: [operator]
+    env:
+      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
 
   developer:
-    image: ghcr.io/fyltr/angee-developer-agent:latest
+    image: ghcr.io/anomalyco/opencode:latest
     lifecycle: system
-    mcp_servers: [github, angee-files]
-    workspace:
-      persistent: true
+    role: user
+    skills: [code-review]
+
+secrets:
+  - name: db-password
+    generated: true
+  - name: anthropic-api-key
+    required: true
 ```
 
-### ANGEE_ROOT — git-backed state
+That's services, agents, skills, MCP tool connections, and secrets — all in one place. Attach skills to agents to give them capabilities. `angee init` generates the passwords, prompts for API keys, and writes a ready-to-run `.env`. No manual credential setup.
 
-Everything lives in `~/.angee/` (a git repo):
+## Install
 
-```
-~/.angee/
-  angee.yaml          ← source of truth (you and agents edit this)
-  docker-compose.yaml ← compiled from angee.yaml (never edit manually)
-  .env                ← secrets at runtime, gitignored
-  agents/
-    admin/workspace/  ← admin agent's git workspace
-    developer/workspace/
-  src/                ← linked source repos (git submodules)
+```sh
+# From source
+go install github.com/fyltr/angee-go/cmd/angee@latest
+
+# Or build locally
+git clone https://github.com/fyltr/angee-go && cd angee-go
+make build        # → dist/angee, dist/angee-operator
 ```
 
-Every `angee deploy` is a git commit. Rollback = `git revert`.
+Requirements: Go 1.25+, Docker
 
-### The operator — single writer
+## Quick start
 
-The Go operator daemon:
-- Reads `angee.yaml` and compiles it to `docker-compose.yaml`
-- Runs `docker compose up` to reconcile the runtime
-- Exposes an HTTP API + MCP endpoint for the admin agent
-- Vends short-lived credentials to agents at startup
+### From a template
 
-### Default agents
-
-| Agent | Shortcut | Role |
-|-------|----------|------|
-| `admin` | `angee admin` | Manages deployment, config, infrastructure |
-| `developer` | `angee develop` | Writes code, reviews PRs, helps build features |
-
-Both agents are always running. Talk to them in plain English.
-
----
-
-## CLI reference
-
-```
-angee init [--template url|path] [--repo url]   Initialize ANGEE_ROOT
-angee up                                     Start the platform
-angee down                                   Stop workspace stack
-angee ls                                     List services and agents
-angee deploy [-m message]                    Deploy angee.yaml
-angee rollback <sha|HEAD~N>                  Roll back a deployment
-angee plan                                   Preview what deploy would change
-angee logs <service> [--follow]             Tail logs
-angee status                                 Show platform status
-
-angee chat [agent]                           Interactive chat with an agent
-angee admin                                  → angee chat admin
-angee develop                                → angee chat developer
-angee ask "message" [--agent name]           One-shot message to an agent
+```sh
+angee init                                  # default stack (Django + Postgres + Redis + agents)
+angee init --template https://github.com/org/my-template   # custom template
+angee up                                    # compile, start, done
 ```
 
----
+### Add angee to an existing project
 
-## Architecture
-
-```
-angee CLI ──→ angee-operator (HTTP :9000) ──→ docker compose
-                    │
-                    ├── Compiles angee.yaml → docker-compose.yaml
-                    ├── Manages git (commit, rollback, history)
-                    ├── Vends credentials to agents
-                    └── Exposes MCP endpoint for admin agent
-
-Django control plane (:8000)
-  ├── Users, settings, UI
-  ├── connect app — OAuth accounts, secrets, identity broker
-  └── agents app — agent registry, run history
+```sh
+angee init --dir .angee --repo https://github.com/you/your-app
+# edit .angee/angee.yaml to define your services and agents
+angee up
 ```
 
-Backends: **Docker Compose** (default, local dev) · **Kubernetes** (Phase 2, same `angee.yaml`)
+`angee init` creates a `.angee/` directory (or `~/.angee/`) — a git-tracked workspace where your config, compiled manifests, agent workspaces, and secrets live. This is the key difference from Docker Compose: the AI stack is stateful. Agents have persistent workspaces. Every deploy is a git commit. Rollback is a revert.
 
----
+## How it works
 
-## Deployment targets
+```
+angee.yaml  →  compiler  →  docker-compose.yaml  →  docker compose up
+                  │
+                  ├── restart policies from lifecycle
+                  ├── Traefik routing labels for platform services
+                  ├── MCP server URLs injected into agent env
+                  ├── ${secret:name} → .env interpolation
+                  ├── agent config files rendered from templates
+                  └── volumes, resources, health checks
+```
+
+Angee compiles your `angee.yaml` into `docker-compose.yaml` and manages the runtime. You never edit the compose file — it's generated. The angee-operator daemon handles compilation, deployment, and exposes an HTTP API + MCP endpoint so agents can manage the platform too.
+
+## Two binaries
+
+**`angee`** — CLI. What you type.
+
+**`angee-operator`** — Daemon (port 9000). Owns the config repo, compiles, deploys, exposes the API that both the CLI and agents talk to.
+
+```
+you  →  angee CLI  →  angee-operator (:9000)  →  docker compose
+                            ↑
+               admin agent via MCP
+```
+
+## CLI
+
+```
+angee init [--template url]          Scaffold ANGEE_ROOT, generate secrets
+angee up                             Compile and start the platform
+angee down                           Stop everything
+angee ls                             List services and agents
+angee deploy [-m message]            Deploy current config
+angee plan                           Dry-run — what would change
+angee rollback <sha|HEAD~N>          Revert to a previous deploy
+angee logs <service> [-f]            Tail logs
+angee status                         Platform status
+
+angee admin                          Chat with the admin agent
+angee develop                        Chat with the developer agent
+angee chat <agent>                   Chat with any agent
+angee ask "do something"             One-shot message to an agent
+```
+
+## What goes in `angee.yaml`
+
+| Section | What it defines |
+|---------|----------------|
+| `services` | Containers: web apps, databases, caches, workers, proxies |
+| `agents` | AI agent containers with workspace, MCP connections, skills, config files |
+| `mcp_servers` | MCP tool servers that agents connect to (stdio, SSE, streamable-http) |
+| `skills` | Reusable agent capabilities — attach to any agent to give it new abilities |
+| `secrets` | Credentials — generated, derived, or user-supplied. Written to `.env` |
+| `repositories` | Source code repos linked to agent workspaces |
+
+### Lifecycles
+
+Every service and agent has a lifecycle that controls restart policy and routing:
+
+| Lifecycle | Restart | Routing | Use for |
+|-----------|---------|---------|---------|
+| `platform` | unless-stopped | Traefik labels + domain | Web apps, APIs |
+| `sidecar` | unless-stopped | internal only | Postgres, Redis |
+| `worker` | unless-stopped | internal only | Celery, background jobs |
+| `system` | always | varies | Traefik, operator, always-on agents |
+| `agent` | unless-stopped | none | On-demand AI agents |
+| `job` | no | none | One-shot tasks |
+
+### Secrets
+
+Docker Compose needs you to write `.env` by hand. Angee generates it.
+
+Templates declare secrets with types — `generated` (random password), `derived` (built from other secrets), or required (user provides). `angee init` resolves them all and writes `.env` automatically.
 
 ```yaml
-# operator.yaml (local, not committed)
+secrets:
+  - name: db-password
+    generated: true           # auto-generated 32-char password
+    length: 32
+
+  - name: db-url
+    derived: "postgresql://app:${db-password}@postgres:5432/${project}"
+
+  - name: anthropic-api-key
+    required: true            # prompts user during init
+```
+
+In your services, reference them as `${secret:db-password}` — the compiler translates this to Docker Compose env interpolation. Secret values never appear in committed files.
+
+### Skills
+
+Skills are reusable capabilities you attach to agents. Instead of wiring each agent's MCP servers, prompts, and tools individually, define a skill once and attach it to any agent that needs it.
+
+```yaml
+skills:
+  deploy:
+    description: "Deploy, rollback, and manage the platform lifecycle"
+    mcp_servers: [operator]
+    system_prompt: "You can deploy and manage the platform..."
+
+  code-review:
+    description: "Review PRs and suggest improvements"
+    mcp_servers: [github]
+
+agents:
+  admin:
+    skills: [deploy]          # admin can deploy
+  developer:
+    skills: [code-review]     # developer can review code
+  lead:
+    skills: [deploy, code-review]  # lead can do both
+```
+
+Skills keep agent configs DRY — define the capability once, attach it wherever needed.
+
+## Templates
+
+A template bootstraps a complete AI stack: services, agents, MCP wiring, secrets, agent workspace files — from one command. Add a template to your project repo and anyone can spin up the full stack with `angee init`.
+
+See [docs/TEMPLATES.md](docs/TEMPLATES.md) for the full template authoring guide.
+
+## Runtime backends
+
+The operator is runtime-agnostic. Same `angee.yaml`, same API, different backend:
+
+| Version | Backend | Status |
+|---------|---------|--------|
+| v1 | Docker Compose | Implemented |
+| v2 | Kubernetes | Planned |
+
+```yaml
+# operator.yaml
 runtime: docker-compose   # or: kubernetes
 ```
 
-Same `angee.yaml` deploys to both. Switch with one line.
+## Documentation
 
----
+- [docs/OVERVIEW.md](docs/OVERVIEW.md) — What Angee is and how it works
+- [docs/OPERATOR.md](docs/OPERATOR.md) — The operator: architecture and design
+- [docs/API.md](docs/API.md) — HTTP API reference
+- [docs/MCP.md](docs/MCP.md) — MCP tools reference for agent authors
+- [docs/TEMPLATES.md](docs/TEMPLATES.md) — Template authoring guide
 
 ## Development
 
 ```sh
-make build          # build operator + CLI binaries → dist/
-make test           # run tests
-make lint           # golangci-lint
-make run-operator   # run operator against ~/.angee
-make docker         # build Docker images
+make build            # Build operator + CLI → dist/
+make test             # go test -v -race ./...
+make lint             # golangci-lint
+make check            # fmt + vet + lint + test
+make run-operator     # Run operator against ~/.angee
+make dev ARGS="init"  # Build CLI and run with args
 ```
 
-**Requirements**: Go 1.25+, Docker, git
-
----
+Two dependencies: `cobra` (CLI) and `yaml.v3` (config parsing).
 
 ## License
 
-Apache 2.0 · [fyltr](https://github.com/fyltr)
+Apache 2.0

@@ -1,0 +1,195 @@
+# angee
+
+**Self-managed agent containerisation and orchestration engine.**
+
+Angee is agentic infrastructure as code — an extension of docker-compose where AI agents are first-class citizens alongside your services. Define your entire stack in a single `angee.yaml`, run one command, and get a fully operational platform with built-in AI agents that can manage themselves.
+
+```
+services:        platform workloads  (web app, DB, Redis, workers)
+mcp_servers:     credential connectors  (like networks, but with identity)
+agents:          AI workloads  (admin, developer, researcher, ...)
+```
+
+---
+
+## Install
+
+```sh
+# macOS / Linux
+curl https://angee.ai/install.sh | sh
+
+# Homebrew (macOS)
+brew install angee
+
+# Windows: download from GitHub Releases
+```
+
+## Quick start
+
+```sh
+angee init        # scaffold ANGEE_ROOT + default angee.yaml
+angee up          # start the platform
+
+angee ls          # list running agents and services
+angee admin       # chat with the admin agent
+angee develop     # chat with the developer agent
+```
+
+UI is at **http://localhost:3333** — ask the admin agent to change anything.
+
+---
+
+## How it works
+
+### `angee.yaml` — source of truth
+
+```yaml
+name: my-project
+
+services:
+  web:
+    image: ghcr.io/org/myapp:latest
+    lifecycle: platform
+    domains:
+      - host: myapp.io
+    resources:
+      cpu: "1.0"
+      memory: "1Gi"
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    lifecycle: sidecar
+    volumes:
+      - name: pgdata
+        path: /var/lib/postgresql/data
+        persistent: true
+
+mcp_servers:
+  github:
+    transport: sse
+    url: https://api.githubcopilot.com/mcp/
+    credentials:
+      source: connect.account
+      account_type: github
+      run_as: requester
+
+agents:
+  admin:
+    image: ghcr.io/fyltr/angee-admin-agent:latest
+    lifecycle: system
+    role: operator
+    mcp_servers: [angee-operator, angee-files]
+
+  developer:
+    image: ghcr.io/fyltr/angee-developer-agent:latest
+    lifecycle: system
+    mcp_servers: [github, angee-files]
+    workspace:
+      persistent: true
+```
+
+### ANGEE_ROOT — git-backed state
+
+Everything lives in `~/.angee/` (a git repo):
+
+```
+~/.angee/
+  angee.yaml          ← source of truth (you and agents edit this)
+  docker-compose.yaml ← compiled from angee.yaml (never edit manually)
+  .env                ← secrets at runtime, gitignored
+  agents/
+    admin/workspace/  ← admin agent's git workspace
+    developer/workspace/
+  src/                ← linked source repos (git submodules)
+```
+
+Every `angee deploy` is a git commit. Rollback = `git revert`.
+
+### The operator — single writer
+
+The Go operator daemon:
+- Reads `angee.yaml` and compiles it to `docker-compose.yaml`
+- Runs `docker compose up` to reconcile the runtime
+- Exposes an HTTP API + MCP endpoint for the admin agent
+- Vends short-lived credentials to agents at startup
+
+### Default agents
+
+| Agent | Shortcut | Role |
+|-------|----------|------|
+| `admin` | `angee admin` | Manages deployment, config, infrastructure |
+| `developer` | `angee develop` | Writes code, reviews PRs, helps build features |
+
+Both agents are always running. Talk to them in plain English.
+
+---
+
+## CLI reference
+
+```
+angee init [--template url|path] [--repo url]   Initialize ANGEE_ROOT
+angee up                                     Start the platform
+angee down                                   Stop workspace stack
+angee ls                                     List services and agents
+angee deploy [-m message]                    Deploy angee.yaml
+angee rollback <sha|HEAD~N>                  Roll back a deployment
+angee plan                                   Preview what deploy would change
+angee logs <service> [--follow]             Tail logs
+angee status                                 Show platform status
+
+angee chat [agent]                           Interactive chat with an agent
+angee admin                                  → angee chat admin
+angee develop                                → angee chat developer
+angee ask "message" [--agent name]           One-shot message to an agent
+```
+
+---
+
+## Architecture
+
+```
+angee CLI ──→ angee-operator (HTTP :9000) ──→ docker compose
+                    │
+                    ├── Compiles angee.yaml → docker-compose.yaml
+                    ├── Manages git (commit, rollback, history)
+                    ├── Vends credentials to agents
+                    └── Exposes MCP endpoint for admin agent
+
+Django control plane (:8000)
+  ├── Users, settings, UI
+  ├── connect app — OAuth accounts, secrets, identity broker
+  └── agents app — agent registry, run history
+```
+
+Backends: **Docker Compose** (default, local dev) · **Kubernetes** (Phase 2, same `angee.yaml`)
+
+---
+
+## Deployment targets
+
+```yaml
+# operator.yaml (local, not committed)
+runtime: docker-compose   # or: kubernetes
+```
+
+Same `angee.yaml` deploys to both. Switch with one line.
+
+---
+
+## Development
+
+```sh
+make build          # build operator + CLI binaries → dist/
+make test           # run tests
+make lint           # golangci-lint
+make run-operator   # run operator against ~/.angee
+make docker         # build Docker images
+```
+
+**Requirements**: Go 1.25+, Docker, git
+
+---
+
+## License
+
+Apache 2.0 · [fyltr](https://github.com/fyltr)
