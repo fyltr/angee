@@ -2,10 +2,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -140,4 +142,41 @@ func printError(msg string) {
 
 func printHeader(msg string) {
 	fmt.Printf("\n\033[1m%s\033[0m\n", msg)
+}
+
+// isOperatorRunning checks if the operator HTTP health endpoint responds.
+func isOperatorRunning() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := newRequest("GET", resolveOperator()+"/health", nil)
+	if err != nil {
+		return false
+	}
+	req = req.WithContext(ctx)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200
+}
+
+// triggerDeploy POSTs to the operator's deploy endpoint.
+func triggerDeploy() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req, err := newRequest("POST", resolveOperator()+"/deploy", nil)
+	if err != nil {
+		return err
+	}
+	req = req.WithContext(ctx)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("operator returned %d", resp.StatusCode)
+	}
+	return nil
 }
