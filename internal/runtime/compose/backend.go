@@ -238,6 +238,12 @@ func (b *Backend) Stop(ctx context.Context, services ...string) error {
 	return err
 }
 
+// Pull pulls the latest images for all services.
+func (b *Backend) Pull(ctx context.Context) error {
+	_, err := b.run(ctx, b.args("pull")...)
+	return err
+}
+
 // Down brings the entire stack down.
 func (b *Backend) Down(ctx context.Context) error {
 	_, err := b.run(ctx, b.args("down")...)

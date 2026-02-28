@@ -51,6 +51,9 @@ type RuntimeBackend interface {
 	// Apply starts/updates/removes services to match the compiled compose file.
 	Apply(ctx context.Context, composeFile string) (*ApplyResult, error)
 
+	// Pull pulls the latest images for all services in the compose file.
+	Pull(ctx context.Context) error
+
 	// Status returns the current state of all services.
 	Status(ctx context.Context) ([]*ServiceStatus, error)
 
