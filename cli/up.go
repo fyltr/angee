@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/fyltr/angee-go/internal/root"
 	"github.com/spf13/cobra"
@@ -51,9 +52,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("opening ANGEE_ROOT: %w", err)
 	}
-	for agentName := range cfg.Agents {
+	for agentName, agent := range cfg.Agents {
 		if err := r.EnsureAgentDir(agentName); err != nil {
 			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
+		}
+		if err := compiler.RenderAgentFiles(path, r.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
+			return fmt.Errorf("agent files for %s: %w", agentName, err)
 		}
 	}
 
@@ -71,10 +75,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Start the stack using the compose file compiled during init
+	// Start the stack using the compose file compiled during init.
+	// docker compose up -d returns non-zero if ANY container fails,
+	// even when most services started fine. Warn instead of aborting.
 	printInfo("Starting stack...")
 	if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--remove-orphans"); err != nil {
-		return fmt.Errorf("starting stack: %w", err)
+		fmt.Printf("  \033[33m!\033[0m  Some containers failed to start (run 'angee logs' to investigate)\n")
 	}
 
 	// Wait for operator

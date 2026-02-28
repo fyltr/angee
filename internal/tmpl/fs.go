@@ -283,6 +283,42 @@ func generateValue(def SecretDef) (string, error) {
 	return string(result), nil
 }
 
+// CopyTemplateFiles copies *.tmpl files (excluding angee.yaml.tmpl) from the
+// template source root into ANGEE_ROOT so they are available for agent file
+// rendering at deploy time. Existing files are not overwritten.
+func CopyTemplateFiles(templateDir, angeeRoot string) error {
+	entries, err := os.ReadDir(templateDir)
+	if err != nil {
+		return fmt.Errorf("reading template dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".tmpl") || name == "angee.yaml.tmpl" {
+			continue
+		}
+
+		dstPath := filepath.Join(angeeRoot, name)
+		// Don't overwrite existing files
+		if _, err := os.Stat(dstPath); err == nil {
+			continue
+		}
+
+		data, err := os.ReadFile(filepath.Join(templateDir, name))
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			return fmt.Errorf("writing %s: %w", dstPath, err)
+		}
+	}
+
+	return nil
+}
+
 // CopyAgentFiles copies agent workspace files (AGENTS.md, etc.) from the
 // template's agents/ directory into the ANGEE_ROOT agents/ directory.
 // Only copies files that exist in the template; does not overwrite existing files.

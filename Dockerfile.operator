@@ -32,9 +32,9 @@ WORKDIR /app
 
 COPY --from=builder /build/angee-operator /usr/local/bin/angee-operator
 
-# Non-root user
-RUN addgroup -S angee && adduser -S angee -G angee
-USER angee
+# The operator needs access to the Docker socket to run docker compose,
+# so it must run as root (or in the docker group). The socket is bind-mounted
+# from the host at /var/run/docker.sock.
 
 EXPOSE 9000
 

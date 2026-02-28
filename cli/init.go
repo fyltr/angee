@@ -148,6 +148,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess(fmt.Sprintf("Created angee.yaml (template: %s)", initTemplate))
 
+	// Copy .tmpl files (opencode.json.tmpl, etc.) from template to ANGEE_ROOT
+	if err := tmpl.CopyTemplateFiles(templateDir, path); err != nil {
+		return fmt.Errorf("copying template files: %w", err)
+	}
+	printSuccess("Copied config templates")
+
 	// Write .env with generated/supplied secrets (mode 0600, gitignored)
 	envContent := tmpl.FormatEnvFile(secrets)
 	if err := r.WriteEnvFile(envContent); err != nil {

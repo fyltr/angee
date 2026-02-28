@@ -114,14 +114,25 @@ type CredentialSpec struct {
 	Scopes      []string `yaml:"scopes,omitempty"`
 }
 
+// FileMount declares a config file to generate or bind-mount into an agent container.
+// Exactly one of Template or Source must be set.
+type FileMount struct {
+	Template string `yaml:"template,omitempty"` // path to .tmpl relative to ANGEE_ROOT
+	Source   string `yaml:"source,omitempty"`   // host file path (~ expanded)
+	Mount    string `yaml:"mount"`              // container mount path
+	Optional bool   `yaml:"optional,omitempty"` // skip if source missing
+}
+
 // AgentSpec defines an AI agent.
 type AgentSpec struct {
 	Image        string            `yaml:"image,omitempty"`
+	Command      string            `yaml:"command,omitempty"`
 	Template     string            `yaml:"template,omitempty"`
 	Version      string            `yaml:"version,omitempty"`
 	Lifecycle    string            `yaml:"lifecycle,omitempty"`  // system | on-demand
 	Role         string            `yaml:"role,omitempty"`       // operator | user
 	MCPServers   []string          `yaml:"mcp_servers,omitempty"`
+	Files        []FileMount       `yaml:"files,omitempty"`
 	RunAs        string            `yaml:"run_as,omitempty"`
 	Workspace    WorkspaceSpec     `yaml:"workspace,omitempty"`
 	Resources    ResourceSpec      `yaml:"resources,omitempty"`

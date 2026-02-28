@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/fyltr/angee-go/api"
+	"github.com/fyltr/angee-go/internal/compiler"
 	"github.com/fyltr/angee-go/internal/config"
 	"github.com/fyltr/angee-go/internal/runtime"
 )
@@ -113,6 +114,13 @@ func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.Ap
 	for agentName := range angeeConfig.Agents {
 		if err := s.Root.EnsureAgentDir(agentName); err != nil {
 			return nil, fmt.Errorf("agent dir for %s: %w", agentName, err)
+		}
+	}
+
+	// Render agent config files from templates
+	for agentName, agent := range angeeConfig.Agents {
+		if err := compiler.RenderAgentFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, angeeConfig.MCPServers); err != nil {
+			return nil, fmt.Errorf("agent files for %s: %w", agentName, err)
 		}
 	}
 

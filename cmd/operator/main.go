@@ -39,9 +39,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	bind := srv.Cfg.BindAddress
+	bind := os.Getenv("ANGEE_BIND_ADDRESS")
 	if bind == "" {
-		bind = "127.0.0.1"
+		bind = srv.Cfg.BindAddress
+	}
+	if bind == "" {
+		bind = "0.0.0.0"
 	}
 	addr := bind + ":" + port
 	if err := srv.Start(ctx, addr); err != nil {

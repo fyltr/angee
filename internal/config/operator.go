@@ -45,7 +45,7 @@ func DefaultOperatorConfig(angeeRoot string) *OperatorConfig {
 		Port:        9000,
 		AngeeRoot:   angeeRoot,
 		DjangoURL:   "http://localhost:8000",
-		BindAddress: "127.0.0.1",
+		BindAddress: "0.0.0.0",
 		CORSOrigins: []string{"http://localhost:*"},
 		Docker: DockerConfig{
 			Socket:  "/var/run/docker.sock",

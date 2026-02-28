@@ -4,6 +4,7 @@ package compiler
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fyltr/angee-go/internal/config"
@@ -252,6 +253,7 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 
 	cs := ComposeService{
 		Image:     image,
+		Command:   agent.Command,
 		Networks:  []string{c.Network},
 		Restart:   "unless-stopped",
 		StdinOpen: true,
@@ -311,6 +313,28 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 	}
 	if len(mcpList) > 0 {
 		cs.Environment = append(cs.Environment, "ANGEE_MCP_SERVERS="+strings.Join(mcpList, ","))
+	}
+
+	// Agent-declared config file mounts.
+	// Template files under /workspace/ are written into the workspace dir by
+	// RenderAgentFiles, so they don't need a separate volume mount (they're
+	// already part of the workspace bind mount above).
+	for _, f := range agent.Files {
+		if f.Template != "" {
+			if isUnderWorkspace(f.Mount) {
+				continue // already inside workspace bind mount
+			}
+			src := fmt.Sprintf("./agents/%s/%s", name, filepath.Base(f.Mount))
+			cs.Volumes = append(cs.Volumes, src+":"+f.Mount+":ro")
+		} else if f.Source != "" {
+			src := ExpandHome(f.Source)
+			if f.Optional {
+				if _, err := os.Stat(src); os.IsNotExist(err) {
+					continue
+				}
+			}
+			cs.Volumes = append(cs.Volumes, src+":"+f.Mount+":ro")
+		}
 	}
 
 	// Resources

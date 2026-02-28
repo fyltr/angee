@@ -32,7 +32,7 @@ func (c *AngeeConfig) Validate() error {
 		}
 	}
 
-	// Agent lifecycles + MCP server references
+	// Agent lifecycles + MCP server references + file mounts
 	for name, agent := range c.Agents {
 		if !validLifecycles[agent.Lifecycle] {
 			errs = append(errs, fmt.Sprintf("agent %q: invalid lifecycle %q", name, agent.Lifecycle))
@@ -40,6 +40,16 @@ func (c *AngeeConfig) Validate() error {
 		for _, ref := range agent.MCPServers {
 			if _, ok := c.MCPServers[ref]; !ok {
 				errs = append(errs, fmt.Sprintf("agent %q: mcp_server %q is not defined in mcp_servers", name, ref))
+			}
+		}
+		for i, f := range agent.Files {
+			hasTemplate := f.Template != ""
+			hasSource := f.Source != ""
+			if hasTemplate == hasSource {
+				errs = append(errs, fmt.Sprintf("agent %q: files[%d] must have exactly one of template or source", name, i))
+			}
+			if f.Mount == "" {
+				errs = append(errs, fmt.Sprintf("agent %q: files[%d] mount is required", name, i))
 			}
 		}
 	}

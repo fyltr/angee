@@ -34,10 +34,10 @@ _build:
 # ─── Docker ───────────────────────────────────────────────
 
 docker-operator:
-	docker build -f Dockerfile.operator -t ghcr.io/fyltr/angee-operator:dev .
+	docker build -f Dockerfile.operator -t ghcr.io/fyltr/angee-operator:latest .
 
 docker-cli:
-	docker build -f Dockerfile.cli -t ghcr.io/fyltr/angee-cli:dev .
+	docker build -f Dockerfile.cli -t ghcr.io/fyltr/angee-cli:latest .
 
 docker: docker-operator docker-cli
 

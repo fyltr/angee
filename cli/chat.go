@@ -76,7 +76,7 @@ func init() {
 	askCmd.Flags().StringVar(&askAgent, "agent", "admin", "Agent to send the message to")
 }
 
-// attachToAgent runs docker exec -it into the agent's container.
+// attachToAgent runs docker exec -it to connect to the agent's opencode server.
 func attachToAgent(agentName string) error {
 	containerService := resolveAgentService(agentName)
 	projectName := resolveProjectName()
@@ -91,17 +91,16 @@ func attachToAgent(agentName string) error {
 		return fmt.Errorf("agent %q is not running (container: %s) — start with 'angee up'", agentName, containerName)
 	}
 
-	fmt.Printf("\n\033[1mAttaching to %s agent\033[0m (%s)\n", agentName, containerName)
-	fmt.Printf("\033[90m(you are now inside the agent container — exit to detach)\033[0m\n\n")
+	fmt.Printf("\n\033[1mAttaching to %s agent\033[0m (%s)\n\n", agentName, containerName)
 
-	// docker exec -it <container> /bin/sh (use sh as universal fallback)
-	cmd := exec.Command("docker", "exec", "-it", containerName, "/bin/sh")
+	// Attach to the opencode server running inside the container
+	cmd := exec.Command("docker", "exec", "-it", containerName,
+		"opencode", "attach", "http://localhost:4096")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		// Exit code from the shell is normal — don't treat as error
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
@@ -125,8 +124,9 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("agent %q is not running — start with 'angee up'", askAgent)
 	}
 
-	// Execute the message as a command inside the container
-	execCmd := exec.Command("docker", "exec", containerName, "sh", "-c", message)
+	// Run a one-shot message via opencode run
+	execCmd := exec.Command("docker", "exec", containerName,
+		"opencode", "run", message)
 	execCmd.Stdout = os.Stdout
 	execCmd.Stderr = os.Stderr
 	return execCmd.Run()

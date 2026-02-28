@@ -20,6 +20,7 @@ services:
       - "9000:9000"
     raw_volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - .:/angee-root
     env:
       ANGEE_ROOT: /angee-root
       DJANGO_URL: "http://django:8000"
@@ -184,10 +185,11 @@ mcp_servers:
   angee-files:
     transport: stdio
     image: ghcr.io/fyltr/angee-filesystem-mcp:latest
+    command:
+      - node
+      - /usr/local/lib/mcp-filesystem/dist/index.js
     args:
-      - --root
       - /workspace
-      - --readonly
     credentials:
       source: none
 
@@ -205,7 +207,7 @@ mcp_servers:
 
 # ─── Agents ──────────────────────────────────────────────────────────────────
 # Agent images are configurable. Use any terminal-based coding agent:
-#   - opencode: ghcr.io/opencode-ai/opencode:latest
+#   - opencode: ghcr.io/anomalyco/opencode:latest
 #   - claude code: use an image with claude-code installed
 #   - custom: any image with a shell entrypoint
 #
@@ -214,7 +216,8 @@ mcp_servers:
 agents:
 
   angee-admin:
-    image: ghcr.io/opencode-ai/opencode:latest
+    image: ghcr.io/anomalyco/opencode:latest
+    command: serve --hostname 0.0.0.0 --port 4096
     lifecycle: system
     role: operator
     description: "Platform admin — manages deployment, config, secrets, and infrastructure"
@@ -222,20 +225,26 @@ agents:
       - angee-operator
       - angee-files
       - django-mcp
+    files:
+      - template: opencode.json.tmpl
+        mount: /root/.config/opencode/opencode.json
     workspace:
-      path: /angee-root
       persistent: true
     env:
       ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
 
   angee-developer:
-    image: ghcr.io/opencode-ai/opencode:latest
+    image: ghcr.io/anomalyco/opencode:latest
+    command: serve --hostname 0.0.0.0 --port 4096
     lifecycle: system
     role: user
     description: "Developer agent — writes code, fixes bugs, reviews PRs"
     mcp_servers:
       - angee-files
       - django-mcp
+    files:
+      - template: opencode.json.tmpl
+        mount: /root/.config/opencode/opencode.json
     workspace:
       repository: base
       branch: main
