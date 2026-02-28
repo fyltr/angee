@@ -240,6 +240,8 @@ angee down                                     Stop everything
 angee deploy [-m message]                      Deploy angee.yaml
 angee rollback <sha|HEAD~N>                    Roll back
 angee plan                                     Dry-run deploy
+angee pull                                     Pull latest container images
+angee restart                                  Stop and restart all services
 angee ls                                       List services and agents
 angee status                                   Platform status
 angee logs <service> [--follow]                Tail logs
@@ -248,7 +250,6 @@ angee admin                                    → angee chat admin
 angee develop                                  → angee chat developer
 angee ask "message" [--agent name]             One-shot message
 angee update template                          Re-fetch and re-render template
-angee update agents                            Pull latest agent images
 ```
 
 ## Runtime backends

@@ -64,6 +64,8 @@ func init() {
 		developCmd,
 		statusCmd,
 		askCmd,
+		pullCmd,
+		restartCmd,
 		updateCmd,
 	)
 }
