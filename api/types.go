@@ -107,6 +107,11 @@ type AgentActionResponse struct {
 	Agent  string `json:"agent,omitempty"`
 }
 
+// ConfigGetResponse wraps the config for JSON serialization from MCP.
+type ConfigGetResponse struct {
+	Config any `json:"config"`
+}
+
 // ChatRequest is sent to POST /agents/{name}/chat.
 type ChatRequest struct {
 	Message string `json:"message"`

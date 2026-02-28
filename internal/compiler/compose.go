@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fyltr/angee-go/internal/config"
+	"github.com/fyltr/angee/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,10 +75,15 @@ type ComposeNetwork struct {
 	Driver   string `yaml:"driver,omitempty"`
 }
 
+// AgentServicePrefix is the docker-compose service name prefix for agents.
+// An agent named "admin" becomes the service "agent-admin".
+const AgentServicePrefix = "agent-"
+
 // Compiler translates an AngeeConfig into a ComposeFile.
 type Compiler struct {
 	Network  string // docker network name
 	RootPath string // path to ANGEE_ROOT (for volume mounts)
+	APIKey   string // operator API key, auto-injected into operator-role agents
 }
 
 // New creates a Compiler with the given settings.
@@ -118,11 +123,11 @@ func (c *Compiler) Compile(cfg *config.AngeeConfig) (*ComposeFile, error) {
 
 	// Compile agents
 	for name, agent := range cfg.Agents {
-		cs, err := c.compileAgent(name, agent, cfg.MCPServers)
+		cs, err := c.compileAgent(name, agent, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: %w", name, err)
 		}
-		out.Services["agent-"+name] = cs
+		out.Services[AgentServicePrefix+name] = cs
 	}
 
 	return out, nil
@@ -149,18 +154,7 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 
 	// Lifecycle → restart policy and labels
 	cs.Labels["angee.lifecycle"] = svc.Lifecycle
-	switch svc.Lifecycle {
-	case config.LifecyclePlatform:
-		cs.Restart = "unless-stopped"
-	case config.LifecycleSidecar:
-		cs.Restart = "unless-stopped"
-	case config.LifecycleWorker:
-		cs.Restart = "unless-stopped"
-	case config.LifecycleSystem:
-		cs.Restart = "always"
-	default:
-		cs.Restart = "unless-stopped"
-	}
+	cs.Restart = restartPolicy(svc.Lifecycle)
 
 	// Replicas
 	if svc.Replicas > 0 {
@@ -244,7 +238,8 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 	return cs, nil
 }
 
-func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers map[string]config.MCPServerSpec) (ComposeService, error) {
+func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config.AngeeConfig) (ComposeService, error) {
+	mcpServers := cfg.MCPServers
 	image := agent.Image
 	if image == "" {
 		// Default agent image
@@ -255,7 +250,7 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 		Image:     image,
 		Command:   agent.Command,
 		Networks:  []string{c.Network},
-		Restart:   "unless-stopped",
+		Restart:   restartPolicy(agent.Lifecycle),
 		StdinOpen: true,
 		Tty:       true,
 		Labels: map[string]string{
@@ -265,10 +260,6 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 			"angee.lifecycle": agent.Lifecycle,
 			"angee.role":      agent.Role,
 		},
-	}
-
-	if agent.Lifecycle == config.LifecycleSystem {
-		cs.Restart = "always"
 	}
 
 	// Per-agent .env file (written by operator at start time)
@@ -297,9 +288,37 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, mcpServers 
 
 	cs.Environment = append(cs.Environment, "ANGEE_AGENT_NAME="+name)
 
+	// Auto-inject operator API key for operator-role agents
+	if agent.Role == "operator" && c.APIKey != "" {
+		cs.Environment = append(cs.Environment, "ANGEE_OPERATOR_API_KEY="+c.APIKey)
+	}
+
+	// Resolve skills: merge skill MCP servers and system prompts
+	resolvedMCPServers := agent.MCPServers
+	if len(agent.Skills) > 0 && cfg.Skills != nil {
+		for _, skillName := range agent.Skills {
+			skill, ok := cfg.Skills[skillName]
+			if !ok {
+				continue
+			}
+			for _, srv := range skill.MCPServers {
+				if !contains(resolvedMCPServers, srv) {
+					resolvedMCPServers = append(resolvedMCPServers, srv)
+				}
+			}
+			if skill.SystemPrompt != "" {
+				if cs.Environment == nil {
+					cs.Environment = []string{}
+				}
+				// Append skill system prompt to agent's system prompt
+				cs.Environment = append(cs.Environment, "ANGEE_SKILL_PROMPT_"+strings.ToUpper(strings.ReplaceAll(skillName, "-", "_"))+"="+skill.SystemPrompt)
+			}
+		}
+	}
+
 	// MCP server environment vars
 	var mcpList []string
-	for _, mcpName := range agent.MCPServers {
+	for _, mcpName := range resolvedMCPServers {
 		mcpSpec, ok := mcpServers[mcpName]
 		if !ok {
 			continue
@@ -376,6 +395,24 @@ func normalizeMemory(v string) string {
 		}
 	}
 	return v
+}
+
+// restartPolicy returns the docker-compose restart policy for a lifecycle value.
+func restartPolicy(lifecycle string) string {
+	if lifecycle == config.LifecycleSystem {
+		return "always"
+	}
+	return "unless-stopped"
+}
+
+// contains returns true if s is in the slice.
+func contains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveSecretRefs translates ${secret:name} references into ${ENV_NAME}

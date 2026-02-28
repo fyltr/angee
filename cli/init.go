@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fyltr/angee-go/internal/compiler"
-	"github.com/fyltr/angee-go/internal/config"
-	"github.com/fyltr/angee-go/internal/root"
-	"github.com/fyltr/angee-go/internal/tmpl"
+	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/root"
+	"github.com/fyltr/angee/internal/tmpl"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +47,7 @@ Examples:
 }
 
 func init() {
-	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee-go#templates/default", "Template source (Git URL, url#subdir, or local path)")
+	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee#templates/default", "Template source (Git URL, url#subdir, or local path)")
 	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link as 'base'")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing ANGEE_ROOT")
 	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: ~/.angee)")
@@ -163,6 +163,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Write operator.yaml
 	opCfg := config.DefaultOperatorConfig(path)
+	opCfg.TemplateSource = initTemplate
 	if err := r.WriteOperatorConfig(opCfg); err != nil {
 		return err
 	}

@@ -68,10 +68,10 @@ That's services, agents, skills, MCP tool connections, and secrets — all in on
 
 ```sh
 # From source
-go install github.com/fyltr/angee-go/cmd/angee@latest
+go install github.com/fyltr/angee/cmd/angee@latest
 
 # Or build locally
-git clone https://github.com/fyltr/angee-go && cd angee-go
+git clone https://github.com/fyltr/angee && cd angee
 make build        # → dist/angee, dist/angee-operator
 ```
 

@@ -432,6 +432,42 @@ That's it. `angee init --template ./minimal --secret api-key=sk-...` produces a 
 
 See `templates/default/` in this repo for a production template with Django, Postgres, Redis, Celery, two agents, three MCP servers, and four secrets (two generated, one derived, one user-supplied).
 
+## `.angee-template` folder convention
+
+When adding angee to an existing project, create a `.angee-template/` folder in your repository root:
+
+```
+my-project/
+├── .angee-template/           # Template blueprint for angee init
+│   ├── .angee-template.yaml   # Metadata: parameters, secrets
+│   ├── angee.yaml.tmpl        # Go template → angee.yaml
+│   ├── opencode.json.tmpl     # Agent config templates
+│   └── agents/
+│       └── admin/
+│           └── AGENTS.md      # Agent workspace scaffolding
+├── src/                       # Your application code
+├── Dockerfile
+└── README.md
+```
+
+**How it works:**
+
+- `angee init` (with no `--template` flag, from project root) detects `.angee-template/` and uses it as the template source.
+- `angee init --template https://github.com/org/project` clones the repo and looks for `.angee-template/` inside it.
+- The `.angee-template/` folder is the **blueprint**. The `.angee/` directory (ANGEE_ROOT) is the **working copy** created from it.
+
+**Key distinction:**
+
+| | `.angee-template/` | `.angee/` (ANGEE_ROOT) |
+|---|---|---|
+| **Purpose** | Blueprint — committed to your project repo | Working copy — managed by angee |
+| **Created by** | You (the template author) | `angee init` |
+| **Contains** | `.tmpl` files, metadata, scaffolding | Rendered configs, runtime state, secrets |
+| **Committed** | Yes, to your project's git repo | Has its own git repo |
+| **Editable** | Yes, update and re-render with `angee update template` | Yes, edited by users and agents |
+
+This convention lets any project ship with angee support built in. Contributors run `angee init` from the repo root and get a fully configured platform.
+
 ## Template design guidelines
 
 1. **Generate what you can.** Database passwords, secret keys, tokens — if it doesn't require external credentials, make it `generated: true`. Users shouldn't have to invent passwords.

@@ -11,12 +11,12 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/fyltr/angee-go/internal/compiler"
-	"github.com/fyltr/angee-go/internal/config"
-	"github.com/fyltr/angee-go/internal/git"
-	"github.com/fyltr/angee-go/internal/root"
-	"github.com/fyltr/angee-go/internal/runtime"
-	composeruntime "github.com/fyltr/angee-go/internal/runtime/compose"
+	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/git"
+	"github.com/fyltr/angee/internal/root"
+	"github.com/fyltr/angee/internal/runtime"
+	composeruntime "github.com/fyltr/angee/internal/runtime/compose"
 )
 
 // Server is the angee operator: it owns ANGEE_ROOT and manages the runtime.
@@ -45,13 +45,19 @@ func New(angeeRoot string, logger *slog.Logger) (*Server, error) {
 		logger = slog.Default()
 	}
 
+	comp := compiler.New(angeeRoot, cfg.Docker.Network)
+
 	s := &Server{
 		Root:     r,
 		Cfg:      cfg,
 		Git:      git.New(angeeRoot),
 		Log:      logger,
-		Compiler: compiler.New(angeeRoot, cfg.Docker.Network),
+		Compiler: comp,
 	}
+
+	// Pass the resolved API key to the compiler so it can auto-inject it
+	// into operator-role agents.
+	comp.APIKey = s.resolveAPIKey()
 
 	// Load angee.yaml to get the project name for the compose backend
 	angeeCfg, err := r.LoadAngeeConfig()
@@ -105,6 +111,12 @@ func (s *Server) Handler() http.Handler {
 
 	// Git history
 	mux.HandleFunc("GET /history", s.handleHistory)
+
+	// MCP endpoint (JSON-RPC 2.0 over streamable HTTP)
+	mux.HandleFunc("POST /mcp", s.handleMCP)
+
+	// OpenAPI schema (public, no auth required)
+	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 
 	apiKey := s.resolveAPIKey()
 	origins := s.Cfg.CORSOrigins
@@ -178,7 +190,7 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 // The /health endpoint always bypasses auth.
 func authMiddleware(next http.Handler, apiKey string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiKey == "" || r.URL.Path == "/health" {
+		if apiKey == "" || r.URL.Path == "/health" || r.URL.Path == "/openapi.json" {
 			next.ServeHTTP(w, r)
 			return
 		}

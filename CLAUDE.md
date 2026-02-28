@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What is angee-go
+## What is angee
 
 Self-managed agent containerization and orchestration engine. An extension of docker-compose where AI agents are first-class citizens. Users define services, MCP servers, and AI agents in a single `angee.yaml`, then run one command to get a fully operational platform.
 

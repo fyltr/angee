@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/fyltr/angee-go/api"
-	"github.com/fyltr/angee-go/internal/compiler"
-	"github.com/fyltr/angee-go/internal/config"
-	"github.com/fyltr/angee-go/internal/runtime"
+	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/runtime"
 )
 
 // handleHealth returns operator liveness.
@@ -98,6 +98,23 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, applyResultToAPI(result))
 }
 
+// prepareAndCompile ensures agent directories exist, renders agent config
+// file templates, and compiles angee.yaml → docker-compose.yaml. This is the
+// shared sequence used by deploy, agent start, and config set.
+func (s *Server) prepareAndCompile(cfg *config.AngeeConfig) error {
+	for agentName := range cfg.Agents {
+		if err := s.Root.EnsureAgentDir(agentName); err != nil {
+			return fmt.Errorf("agent dir for %s: %w", agentName, err)
+		}
+	}
+	for agentName, agent := range cfg.Agents {
+		if err := compiler.RenderAgentFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
+			return fmt.Errorf("agent files for %s: %w", agentName, err)
+		}
+	}
+	return s.compileAndWrite(cfg)
+}
+
 // deploy is the internal deploy implementation.
 func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.ApplyResult, error) {
 	angeeConfig, err := s.Root.LoadAngeeConfig()
@@ -110,23 +127,8 @@ func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.Ap
 		return nil, err
 	}
 
-	// Ensure per-agent directories exist
-	for agentName := range angeeConfig.Agents {
-		if err := s.Root.EnsureAgentDir(agentName); err != nil {
-			return nil, fmt.Errorf("agent dir for %s: %w", agentName, err)
-		}
-	}
-
-	// Render agent config files from templates
-	for agentName, agent := range angeeConfig.Agents {
-		if err := compiler.RenderAgentFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, angeeConfig.MCPServers); err != nil {
-			return nil, fmt.Errorf("agent files for %s: %w", agentName, err)
-		}
-	}
-
-	// Compile → docker-compose.yaml
-	if err := s.compileAndWrite(angeeConfig); err != nil {
-		return nil, fmt.Errorf("compiling: %w", err)
+	if err := s.prepareAndCompile(angeeConfig); err != nil {
+		return nil, fmt.Errorf("preparing: %w", err)
 	}
 
 	// Apply
@@ -213,31 +215,41 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, statuses)
 }
 
-// handleLogs streams or returns logs for a service.
-func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	service := r.PathValue("service")
+// parseLogOptions extracts follow, lines, and since from query parameters.
+func parseLogOptions(r *http.Request, defaultLines int) runtime.LogOptions {
 	follow := r.URL.Query().Get("follow") == "true" || r.URL.Query().Get("follow") == "1"
-	lines := 100
+	lines := defaultLines
 	if n := r.URL.Query().Get("lines"); n != "" {
 		if parsed, err := strconv.Atoi(n); err == nil {
 			lines = parsed
 		}
 	}
-
-	rc, err := s.Backend.Logs(r.Context(), service, runtime.LogOptions{
+	return runtime.LogOptions{
 		Follow: follow,
 		Lines:  lines,
 		Since:  r.URL.Query().Get("since"),
-	})
+	}
+}
+
+// streamLogs writes an io.ReadCloser to the HTTP response as text/plain.
+func streamLogs(w http.ResponseWriter, rc io.ReadCloser) {
+	defer rc.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	io.Copy(w, rc) //nolint:errcheck
+}
+
+// handleLogs streams or returns logs for a service.
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	service := r.PathValue("service")
+	opts := parseLogOptions(r, 100)
+
+	rc, err := s.Backend.Logs(r.Context(), service, opts)
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	defer rc.Close()
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	io.Copy(w, rc) //nolint:errcheck
+	streamLogs(w, rc)
 }
 
 // handleScale adjusts replica count for a service.
@@ -284,7 +296,7 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 	for name, agent := range cfg.Agents {
 		status := "stopped"
 		health := "unknown"
-		if st, ok := statusMap["agent-"+name]; ok {
+		if st, ok := statusMap[compiler.AgentServicePrefix+name]; ok {
 			status = st.Status
 			health = st.Health
 		}
@@ -314,13 +326,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Root.EnsureAgentDir(name); err != nil {
-		jsonErr(w, 500, err.Error())
-		return
-	}
-
-	// Recompile and restart just this agent
-	if err := s.compileAndWrite(cfg); err != nil {
+	if err := s.prepareAndCompile(cfg); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
@@ -337,7 +343,7 @@ func (s *Server) handleAgentStart(w http.ResponseWriter, r *http.Request) {
 // handleAgentStop stops a running agent.
 func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if err := s.Backend.Stop(r.Context(), "agent-"+name); err != nil {
+	if err := s.Backend.Stop(r.Context(), compiler.AgentServicePrefix+name); err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
@@ -347,21 +353,14 @@ func (s *Server) handleAgentStop(w http.ResponseWriter, r *http.Request) {
 // handleAgentLogs streams logs for a specific agent.
 func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	// Reuse the logs handler with the agent service name
-	follow := r.URL.Query().Get("follow") == "true"
+	opts := parseLogOptions(r, 200)
 
-	rc, err := s.Backend.Logs(r.Context(), "agent-"+name, runtime.LogOptions{
-		Follow: follow,
-		Lines:  200,
-	})
+	rc, err := s.Backend.Logs(r.Context(), compiler.AgentServicePrefix+name, opts)
 	if err != nil {
 		jsonErr(w, 500, err.Error())
 		return
 	}
-	defer rc.Close()
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.Copy(w, rc) //nolint:errcheck
+	streamLogs(w, rc)
 }
 
 // handleHistory returns recent git commits.

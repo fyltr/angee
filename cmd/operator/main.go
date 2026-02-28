@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/fyltr/angee-go/internal/operator"
-	"github.com/fyltr/angee-go/internal/root"
+	"github.com/fyltr/angee/internal/operator"
+	"github.com/fyltr/angee/internal/root"
 )
 
 func main() {

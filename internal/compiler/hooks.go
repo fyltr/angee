@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/fyltr/angee-go/internal/config"
+	"github.com/fyltr/angee/internal/config"
 )
 
 // AgentFileData is the data passed to agent config file templates.

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fyltr/angee-go/internal/config"
-	"github.com/fyltr/angee-go/internal/git"
+	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/git"
 )
 
 const (

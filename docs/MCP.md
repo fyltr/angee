@@ -24,7 +24,7 @@ agents:
     mcp_servers: [operator]
 ```
 
-> **Status**: The MCP endpoint is **planned** — not yet implemented. The tool surface below defines what it will expose. The underlying capabilities already exist in the HTTP API; the MCP layer maps tools to those endpoints.
+> **Status**: The MCP endpoint is **implemented** at `POST /mcp`. All tools listed below are functional.
 
 ## Tools
 
@@ -465,4 +465,4 @@ Get the config change history (commits in ANGEE_ROOT).
 | `repo_status` | planned |
 | `repo_log` | planned |
 | `history` | maps to implemented endpoint |
-| **MCP endpoint itself** | **planned** (`POST /mcp` returns 404 today) |
+| **MCP endpoint itself** | **implemented** (`POST /mcp`) |

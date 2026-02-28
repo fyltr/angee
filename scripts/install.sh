@@ -4,7 +4,7 @@
 set -e
 
 ANGEE_VERSION=latest
-REPO="fyltr/angee-go"
+REPO="fyltr/angee"
 INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 
 # Detect OS and arch

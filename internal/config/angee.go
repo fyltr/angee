@@ -16,7 +16,16 @@ type AngeeConfig struct {
 	Services     map[string]ServiceSpec     `yaml:"services,omitempty"`
 	MCPServers   map[string]MCPServerSpec   `yaml:"mcp_servers,omitempty"`
 	Agents       map[string]AgentSpec       `yaml:"agents,omitempty"`
+	Skills       map[string]SkillSpec       `yaml:"skills,omitempty"`
 	Secrets      []SecretRef               `yaml:"secrets,omitempty"`
+}
+
+// SkillSpec defines a reusable agent capability (a named bundle of
+// MCP servers and/or system prompt additions).
+type SkillSpec struct {
+	Description  string   `yaml:"description,omitempty"`
+	MCPServers   []string `yaml:"mcp_servers,omitempty"`
+	SystemPrompt string   `yaml:"system_prompt,omitempty"`
 }
 
 // RepositorySpec defines a source repository linked to the project.
@@ -132,6 +141,7 @@ type AgentSpec struct {
 	Lifecycle    string            `yaml:"lifecycle,omitempty"`  // system | on-demand
 	Role         string            `yaml:"role,omitempty"`       // operator | user
 	MCPServers   []string          `yaml:"mcp_servers,omitempty"`
+	Skills       []string          `yaml:"skills,omitempty"`
 	Files        []FileMount       `yaml:"files,omitempty"`
 	RunAs        string            `yaml:"run_as,omitempty"`
 	Workspace    WorkspaceSpec     `yaml:"workspace,omitempty"`

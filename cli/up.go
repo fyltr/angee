@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/fyltr/angee-go/internal/compiler"
-	"github.com/fyltr/angee-go/internal/config"
-	"github.com/fyltr/angee-go/internal/root"
+	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/root"
 	"github.com/spf13/cobra"
 )
 
@@ -64,6 +64,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading operator config: %w", err)
 	}
 	comp := compiler.New(path, opCfg.Docker.Network)
+	// Auto-inject operator API key into operator-role agents
+	if opCfg.APIKey != "" {
+		comp.APIKey = opCfg.APIKey
+	} else if key := os.Getenv("ANGEE_API_KEY"); key != "" {
+		comp.APIKey = key
+	}
 	cf, err := comp.Compile(cfg)
 	if err != nil {
 		return fmt.Errorf("compiling: %w", err)

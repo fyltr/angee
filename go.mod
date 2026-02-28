@@ -1,4 +1,4 @@
-module github.com/fyltr/angee-go
+module github.com/fyltr/angee
 
 go 1.25.0
 

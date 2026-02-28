@@ -354,6 +354,79 @@ Returns recent git commits from ANGEE_ROOT (the config repo, not source repos).
 
 ---
 
+### MCP endpoint
+
+#### `POST /mcp`
+
+JSON-RPC 2.0 endpoint for MCP (Model Context Protocol) tool calls. AI agents connect here to manage the platform programmatically.
+
+**Protocol:** JSON-RPC 2.0 over HTTP POST (streamable HTTP transport).
+
+**Supported methods:**
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Handshake — returns server info and capabilities |
+| `tools/list` | Lists all available MCP tools |
+| `tools/call` | Invokes a tool by name with arguments |
+
+**Example — list tools:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "id": 1
+}
+```
+
+**Example — call a tool:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "platform_status",
+    "arguments": {}
+  },
+  "id": 2
+}
+```
+
+**Response format:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [{"type": "text", "text": "[{\"name\":\"web\",\"status\":\"running\",...}]"}]
+  },
+  "id": 2
+}
+```
+
+See [MCP.md](MCP.md) for the complete tool reference.
+
+---
+
+### OpenAPI schema
+
+#### `GET /openapi.json`
+
+Returns the OpenAPI 3.1 schema for all HTTP endpoints. Always bypasses auth.
+
+---
+
+### `angee update` (CLI only)
+
+Update platform components after initial setup:
+
+```sh
+angee update template   # Re-fetch and re-render the template
+angee update agents     # Pull latest agent images
+angee update skills     # Update skill definitions (placeholder)
+```
+
+---
+
 ## Error responses
 
 All errors return a JSON object with an `error` field:

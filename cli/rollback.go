@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fyltr/angee-go/api"
+	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
 )
 

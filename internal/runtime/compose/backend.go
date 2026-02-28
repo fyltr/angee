@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fyltr/angee-go/internal/runtime"
+	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/runtime"
 )
 
 // Backend implements RuntimeBackend by shelling out to `docker compose`.
@@ -159,7 +160,7 @@ func (b *Backend) Status(ctx context.Context) ([]*runtime.ServiceStatus, error) 
 		}
 
 		svcType := "service"
-		if strings.HasPrefix(ps.Service, "agent-") {
+		if strings.HasPrefix(ps.Service, compiler.AgentServicePrefix) {
 			svcType = "agent"
 		}
 

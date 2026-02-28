@@ -24,7 +24,7 @@ func TestValidateValidConfig(t *testing.T) {
 			"db":  {Image: "postgres", Lifecycle: LifecycleSidecar},
 		},
 		MCPServers: map[string]MCPServerSpec{
-			"fs": {Transport: "stdio"},
+			"fs": {Transport: "stdio", Command: []string{"node", "server.js"}},
 		},
 		Agents: map[string]AgentSpec{
 			"admin": {
@@ -164,7 +164,7 @@ func TestValidateCleanConfig(t *testing.T) {
 			},
 		},
 		MCPServers: map[string]MCPServerSpec{
-			"fs": {Transport: "stdio"},
+			"fs": {Transport: "stdio", Command: []string{"node", "server.js"}},
 		},
 		Agents: map[string]AgentSpec{
 			"admin": {
@@ -205,5 +205,118 @@ func TestValidateMultipleErrors(t *testing.T) {
 	}
 	if !strings.Contains(errStr, "missing-mcp") {
 		t.Errorf("error should mention 'missing-mcp', got: %s", errStr)
+	}
+}
+
+func TestValidateSkillReference(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		Agents: map[string]AgentSpec{
+			"bot": {
+				Image:  "agent:latest",
+				Skills: []string{"nonexistent-skill"},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for undefined skill reference")
+	}
+	if !strings.Contains(err.Error(), "nonexistent-skill") {
+		t.Errorf("error = %q, want it to mention %q", err.Error(), "nonexistent-skill")
+	}
+}
+
+func TestValidateSkillValid(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		MCPServers: map[string]MCPServerSpec{
+			"operator": {Transport: "streamable-http", URL: "http://op:9000/mcp"},
+		},
+		Skills: map[string]SkillSpec{
+			"deploy": {
+				Description: "Deploy capability",
+				MCPServers:  []string{"operator"},
+			},
+		},
+		Agents: map[string]AgentSpec{
+			"bot": {
+				Image:  "agent:latest",
+				Skills: []string{"deploy"},
+			},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidateSkillMCPServerReference(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		Skills: map[string]SkillSpec{
+			"deploy": {
+				MCPServers: []string{"nonexistent-server"},
+			},
+		},
+		Agents: map[string]AgentSpec{
+			"bot": {
+				Image:  "agent:latest",
+				Skills: []string{"deploy"},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for skill referencing undefined MCP server")
+	}
+	if !strings.Contains(err.Error(), "nonexistent-server") {
+		t.Errorf("error = %q, want it to mention %q", err.Error(), "nonexistent-server")
+	}
+}
+
+func TestValidateStdioMCPNeedsCommandOrImage(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		MCPServers: map[string]MCPServerSpec{
+			"bad": {Transport: "stdio"}, // no command, no image
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for stdio MCP without command or image")
+	}
+	if !strings.Contains(err.Error(), "stdio transport requires command or image") {
+		t.Errorf("error = %q, want it to mention stdio requirement", err.Error())
+	}
+}
+
+func TestValidateStdioMCPWithCommandIsValid(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		MCPServers: map[string]MCPServerSpec{
+			"fs": {Transport: "stdio", Command: []string{"node", "server.js"}},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidateStdioMCPWithImageIsValid(t *testing.T) {
+	cfg := &AngeeConfig{
+		Name: "test",
+		MCPServers: map[string]MCPServerSpec{
+			"fs": {Transport: "stdio", Image: "ghcr.io/org/mcp:latest"},
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
 	}
 }

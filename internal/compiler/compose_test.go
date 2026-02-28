@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fyltr/angee-go/internal/config"
+	"github.com/fyltr/angee/internal/config"
 )
 
 func newTestCompiler(t *testing.T) *Compiler {
@@ -467,5 +467,207 @@ func TestWriteCompose(t *testing.T) {
 	}
 	if !strings.Contains(content, "nginx") {
 		t.Error("expected nginx in output")
+	}
+}
+
+func TestRestartPolicy(t *testing.T) {
+	tests := []struct {
+		lifecycle string
+		want      string
+	}{
+		{config.LifecycleSystem, "always"},
+		{config.LifecyclePlatform, "unless-stopped"},
+		{config.LifecycleSidecar, "unless-stopped"},
+		{config.LifecycleWorker, "unless-stopped"},
+		{config.LifecycleAgent, "unless-stopped"},
+		{"", "unless-stopped"},
+	}
+	for _, tt := range tests {
+		got := restartPolicy(tt.lifecycle)
+		if got != tt.want {
+			t.Errorf("restartPolicy(%q) = %q, want %q", tt.lifecycle, got, tt.want)
+		}
+	}
+}
+
+func TestAgentServicePrefixConstant(t *testing.T) {
+	if AgentServicePrefix != "agent-" {
+		t.Errorf("AgentServicePrefix = %q, want %q", AgentServicePrefix, "agent-")
+	}
+}
+
+func TestCompileAgentAPIKeyInjection(t *testing.T) {
+	c := newTestCompiler(t)
+	c.APIKey = "test-api-key-123"
+
+	cfg := &config.AngeeConfig{
+		Name: "apikey-test",
+		Agents: map[string]config.AgentSpec{
+			"admin": {
+				Image:     "agent:latest",
+				Lifecycle: config.LifecycleSystem,
+				Role:      "operator",
+			},
+			"dev": {
+				Image:     "agent:latest",
+				Lifecycle: config.LifecycleSystem,
+				Role:      "user",
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	// operator-role agent should have API key
+	admin := cf.Services["agent-admin"]
+	hasKey := false
+	for _, env := range admin.Environment {
+		if env == "ANGEE_OPERATOR_API_KEY=test-api-key-123" {
+			hasKey = true
+		}
+	}
+	if !hasKey {
+		t.Error("expected ANGEE_OPERATOR_API_KEY in operator-role agent environment")
+	}
+
+	// user-role agent should NOT have API key
+	dev := cf.Services["agent-dev"]
+	for _, env := range dev.Environment {
+		if strings.HasPrefix(env, "ANGEE_OPERATOR_API_KEY=") {
+			t.Error("user-role agent should not have ANGEE_OPERATOR_API_KEY")
+		}
+	}
+}
+
+func TestCompileAgentAPIKeyNotInjectedWhenEmpty(t *testing.T) {
+	c := newTestCompiler(t)
+	// APIKey is empty by default
+
+	cfg := &config.AngeeConfig{
+		Name: "no-key-test",
+		Agents: map[string]config.AgentSpec{
+			"admin": {
+				Image: "agent:latest",
+				Role:  "operator",
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	admin := cf.Services["agent-admin"]
+	for _, env := range admin.Environment {
+		if strings.HasPrefix(env, "ANGEE_OPERATOR_API_KEY=") {
+			t.Error("should not inject empty API key")
+		}
+	}
+}
+
+func TestCompileSkillMergesMCPServers(t *testing.T) {
+	c := newTestCompiler(t)
+	cfg := &config.AngeeConfig{
+		Name: "skill-test",
+		MCPServers: map[string]config.MCPServerSpec{
+			"operator": {Transport: "streamable-http", URL: "http://operator:9000/mcp"},
+			"github":   {Transport: "sse", URL: "http://github:8080/sse"},
+		},
+		Skills: map[string]config.SkillSpec{
+			"deploy-skill": {
+				Description:  "Deployment capability",
+				MCPServers:   []string{"operator"},
+				SystemPrompt: "You can deploy the platform.",
+			},
+		},
+		Agents: map[string]config.AgentSpec{
+			"bot": {
+				Image:      "agent:latest",
+				MCPServers: []string{"github"},
+				Skills:     []string{"deploy-skill"},
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	svc := cf.Services["agent-bot"]
+
+	// Should have both github (direct) and operator (from skill) MCP URLs
+	hasGithub := false
+	hasOperator := false
+	hasMCPList := false
+	hasSkillPrompt := false
+	for _, env := range svc.Environment {
+		if env == "ANGEE_MCP_GITHUB_URL=http://github:8080/sse" {
+			hasGithub = true
+		}
+		if env == "ANGEE_MCP_OPERATOR_URL=http://operator:9000/mcp" {
+			hasOperator = true
+		}
+		if env == "ANGEE_MCP_SERVERS=github,operator" {
+			hasMCPList = true
+		}
+		if strings.HasPrefix(env, "ANGEE_SKILL_PROMPT_DEPLOY_SKILL=") {
+			hasSkillPrompt = true
+		}
+	}
+
+	if !hasGithub {
+		t.Error("expected ANGEE_MCP_GITHUB_URL from direct MCP server")
+	}
+	if !hasOperator {
+		t.Error("expected ANGEE_MCP_OPERATOR_URL from skill MCP server")
+	}
+	if !hasMCPList {
+		t.Errorf("expected ANGEE_MCP_SERVERS=github,operator, got env: %v", svc.Environment)
+	}
+	if !hasSkillPrompt {
+		t.Error("expected ANGEE_SKILL_PROMPT_DEPLOY_SKILL from skill system prompt")
+	}
+}
+
+func TestCompileSkillNoDuplicateMCPServers(t *testing.T) {
+	c := newTestCompiler(t)
+	cfg := &config.AngeeConfig{
+		Name: "skill-dedup-test",
+		MCPServers: map[string]config.MCPServerSpec{
+			"operator": {Transport: "streamable-http", URL: "http://operator:9000/mcp"},
+		},
+		Skills: map[string]config.SkillSpec{
+			"deploy-skill": {
+				MCPServers: []string{"operator"},
+			},
+		},
+		Agents: map[string]config.AgentSpec{
+			"bot": {
+				Image:      "agent:latest",
+				MCPServers: []string{"operator"}, // already has operator
+				Skills:     []string{"deploy-skill"},
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	svc := cf.Services["agent-bot"]
+	count := 0
+	for _, env := range svc.Environment {
+		if env == "ANGEE_MCP_OPERATOR_URL=http://operator:9000/mcp" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 ANGEE_MCP_OPERATOR_URL, got %d", count)
 	}
 }

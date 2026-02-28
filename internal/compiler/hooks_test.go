@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fyltr/angee-go/internal/config"
+	"github.com/fyltr/angee/internal/config"
 )
 
 func TestRenderAgentFilesTemplate(t *testing.T) {

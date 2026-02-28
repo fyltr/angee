@@ -32,7 +32,7 @@ func (c *AngeeConfig) Validate() error {
 		}
 	}
 
-	// Agent lifecycles + MCP server references + file mounts
+	// Agent lifecycles + MCP server references + skill references + file mounts
 	for name, agent := range c.Agents {
 		if !validLifecycles[agent.Lifecycle] {
 			errs = append(errs, fmt.Sprintf("agent %q: invalid lifecycle %q", name, agent.Lifecycle))
@@ -40,6 +40,23 @@ func (c *AngeeConfig) Validate() error {
 		for _, ref := range agent.MCPServers {
 			if _, ok := c.MCPServers[ref]; !ok {
 				errs = append(errs, fmt.Sprintf("agent %q: mcp_server %q is not defined in mcp_servers", name, ref))
+			}
+		}
+		for _, ref := range agent.Skills {
+			if c.Skills == nil {
+				errs = append(errs, fmt.Sprintf("agent %q: skill %q is not defined in skills", name, ref))
+				continue
+			}
+			skill, ok := c.Skills[ref]
+			if !ok {
+				errs = append(errs, fmt.Sprintf("agent %q: skill %q is not defined in skills", name, ref))
+				continue
+			}
+			// Validate skill's MCP server references
+			for _, srv := range skill.MCPServers {
+				if _, ok := c.MCPServers[srv]; !ok {
+					errs = append(errs, fmt.Sprintf("skill %q: mcp_server %q is not defined in mcp_servers", ref, srv))
+				}
 			}
 		}
 		for i, f := range agent.Files {
@@ -51,6 +68,13 @@ func (c *AngeeConfig) Validate() error {
 			if f.Mount == "" {
 				errs = append(errs, fmt.Sprintf("agent %q: files[%d] mount is required", name, i))
 			}
+		}
+	}
+
+	// MCP server validation: stdio servers must have a command
+	for name, mcp := range c.MCPServers {
+		if mcp.Transport == "stdio" && len(mcp.Command) == 0 && mcp.Image == "" {
+			errs = append(errs, fmt.Sprintf("mcp_server %q: stdio transport requires command or image", name))
 		}
 	}
 

@@ -107,6 +107,31 @@ agents:
 
 Agents are runtime-agnostic — the container image determines which agentic tool runs inside. Swap the image to switch between agent runtimes.
 
+### Skills
+
+Skills are reusable capability bundles that agents can reference. A skill packages MCP servers and system prompt additions into a named unit:
+
+```yaml
+skills:
+  deploy:
+    description: "Deployment capability"
+    mcp_servers: [angee-operator]
+    system_prompt: "You can deploy and manage the platform."
+
+  code-review:
+    description: "Code review capability"
+    mcp_servers: [github]
+    system_prompt: "You can review PRs and suggest improvements."
+
+agents:
+  admin:
+    skills: [deploy]          # gets operator MCP + deploy prompt
+  developer:
+    skills: [deploy, code-review]  # gets both
+```
+
+When an agent references a skill, the compiler merges the skill's MCP servers into the agent's server list (deduplicating) and injects the skill's system prompt as an environment variable. This avoids repeating the same MCP server lists across agents and makes capability bundles composable.
+
 ### Agent templates
 
 Templates bootstrap a complete platform from a single command. A template contains:
@@ -117,7 +142,7 @@ Templates bootstrap a complete platform from a single command. A template contai
 - `agents/*/` — workspace scaffolding files for each agent
 
 ```sh
-angee init --template https://github.com/fyltr/angee-go#templates/default
+angee init --template https://github.com/fyltr/angee#templates/default
 angee init --template ./my-custom-template
 ```
 
@@ -222,6 +247,8 @@ angee chat [agent]                             Interactive agent session
 angee admin                                    → angee chat admin
 angee develop                                  → angee chat developer
 angee ask "message" [--agent name]             One-shot message
+angee update template                          Re-fetch and re-render template
+angee update agents                            Pull latest agent images
 ```
 
 ## Runtime backends
