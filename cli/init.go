@@ -47,18 +47,37 @@ Examples:
 }
 
 func init() {
-	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "https://github.com/fyltr/angee#templates/default", "Template source (Git URL, url#subdir, or local path)")
+	initCmd.Flags().StringVarP(&initTemplate, "template", "t", "", "Template source (Git URL, url#subdir, or local path)")
 	initCmd.Flags().StringVar(&initRepo, "repo", "", "Source repository URL to link as 'base'")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite existing ANGEE_ROOT")
-	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: ~/.angee)")
+	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: .angee/ or ~/.angee)")
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "Accept all defaults (non-interactive)")
 	initCmd.Flags().StringArrayVar(&initSecrets, "secret", nil, "Set a secret: --secret name=value (repeatable)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
-	path := resolveRoot()
-	if initDir != "" {
-		path = initDir
+	// Auto-detect .angee-template/ in current directory
+	localTemplate := detectLocalTemplate()
+	templateSource := initTemplate
+
+	if templateSource == "" {
+		if localTemplate != "" {
+			templateSource = localTemplate
+		} else {
+			templateSource = "https://github.com/fyltr/angee#templates/default"
+		}
+	}
+
+	// Determine ANGEE_ROOT path
+	path := initDir
+	if path == "" {
+		if localTemplate != "" {
+			// .angee-template/ found in cwd → ANGEE_ROOT is .angee/ in cwd
+			wd, _ := os.Getwd()
+			path = filepath.Join(wd, ".angee")
+		} else {
+			path = resolveRoot()
+		}
 	}
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()
@@ -84,12 +103,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch template (clone if URL, use directly if local path)
-	templateDir, cleanupDir, err := tmpl.FetchTemplate(initTemplate)
+	templateDir, cleanupDir, err := tmpl.FetchTemplate(templateSource)
 	if err != nil {
 		return fmt.Errorf("fetching template: %w", err)
 	}
 	if cleanupDir != "" {
 		defer os.RemoveAll(cleanupDir)
+	}
+
+	// If we cloned a git repo and it has .angee-template/ inside, use that
+	if cleanupDir != "" {
+		subdir := filepath.Join(templateDir, ".angee-template")
+		if info, statErr := os.Stat(subdir); statErr == nil && info.IsDir() {
+			templateDir = subdir
+		}
 	}
 
 	// Load template metadata to know which secrets are needed
@@ -146,7 +173,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err := r.WriteAngeeYAML(angeeYAML); err != nil {
 		return err
 	}
-	printSuccess(fmt.Sprintf("Created angee.yaml (template: %s)", initTemplate))
+	printSuccess(fmt.Sprintf("Created angee.yaml (template: %s)", templateSource))
 
 	// Copy .tmpl files (opencode.json.tmpl, etc.) from template to ANGEE_ROOT
 	if err := tmpl.CopyTemplateFiles(templateDir, path); err != nil {
@@ -163,7 +190,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Write operator.yaml
 	opCfg := config.DefaultOperatorConfig(path)
-	opCfg.TemplateSource = initTemplate
+	opCfg.TemplateSource = templateSource
 	if err := r.WriteOperatorConfig(opCfg); err != nil {
 		return err
 	}
@@ -299,6 +326,23 @@ func prompt(r *bufio.Reader, question, defaultVal string) string {
 		return defaultVal
 	}
 	return line
+}
+
+// detectLocalTemplate checks if .angee-template/ exists in the current
+// working directory. Returns the absolute path if found, empty string otherwise.
+func detectLocalTemplate() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(wd, ".angee-template")
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		// Verify it has the required metadata file
+		if _, err := os.Stat(filepath.Join(dir, ".angee-template.yaml")); err == nil {
+			return dir
+		}
+	}
+	return ""
 }
 
 func deriveProjectName(path string) string {

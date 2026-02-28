@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -70,7 +71,13 @@ func init() {
 	)
 }
 
-// resolveRoot returns the ANGEE_ROOT path from flag, env, or default.
+// resolveRoot returns the ANGEE_ROOT path from flag, env, or by detecting
+// the current directory structure. Detection order:
+//  1. --root flag
+//  2. ANGEE_ROOT env var
+//  3. angee.yaml in cwd → we're inside ANGEE_ROOT, use cwd
+//  4. .angee/ in cwd → use it
+//  5. fallback: ~/.angee
 func resolveRoot() string {
 	if angeeRoot != "" {
 		return angeeRoot
@@ -78,6 +85,20 @@ func resolveRoot() string {
 	if v := os.Getenv("ANGEE_ROOT"); v != "" {
 		return v
 	}
+
+	// Check current directory: are we inside ANGEE_ROOT?
+	if _, err := os.Stat("angee.yaml"); err == nil {
+		if wd, err := os.Getwd(); err == nil {
+			return wd
+		}
+	}
+	// Check for .angee/ in current directory
+	if info, err := os.Stat(".angee"); err == nil && info.IsDir() {
+		if wd, err := os.Getwd(); err == nil {
+			return filepath.Join(wd, ".angee")
+		}
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ".angee"
