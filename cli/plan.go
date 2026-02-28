@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -25,9 +28,10 @@ var statusCmd = &cobra.Command{
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop all services and agents",
-	Long: `Stop the workspace stack (user services and agents).
-The system stack (operator, Django, postgres, redis) continues running.
-Use 'angee system down' to stop everything.`,
+	Long: `Stop and remove all containers in the stack.
+
+Example:
+  angee down`,
 	RunE: runDown,
 }
 
@@ -77,21 +81,29 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
-	if !isOperatorRunning() {
-		return fmt.Errorf("operator not running")
-	}
+	path := resolveRoot()
 
-	resp, err := doRequest("POST", resolveOperator()+"/down", nil)
+	cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
 	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("down failed (status %d)", resp.StatusCode)
+		return fmt.Errorf("loading angee.yaml: %w", err)
 	}
 
-	printSuccess("Workspace stack stopped")
-	printInfo("System stack (operator, django, postgres, redis) still running")
+	projectName := cfg.Name
+	if projectName == "" {
+		projectName = "angee"
+	}
+
+	composePath := filepath.Join(path, "docker-compose.yaml")
+	if _, err := os.Stat(composePath); os.IsNotExist(err) {
+		return fmt.Errorf("no docker-compose.yaml found at %s — run 'angee up' first", path)
+	}
+
+	fmt.Printf("\n\033[1mangee down\033[0m\n\n")
+
+	if err := runDockerCompose(composePath, path, projectName, "down"); err != nil {
+		return fmt.Errorf("docker compose down: %w", err)
+	}
+
+	printSuccess("Stack stopped")
 	return nil
 }
