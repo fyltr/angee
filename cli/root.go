@@ -13,6 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time via -ldflags "-X github.com/fyltr/angee/cli.Version=v0.0.7".
+// Defaults to "dev" for local builds.
+var Version = "dev"
+
 var (
 	// rootFlags
 	angeeRoot   string
@@ -23,8 +27,9 @@ var (
 
 // rootCmd is the base command.
 var rootCmd = &cobra.Command{
-	Use:   "angee",
-	Short: "Agentic infrastructure as code",
+	Use:     "angee",
+	Short:   "Agentic infrastructure as code",
+	Version: Version,
 	Long: `angee — self-managed agent containerisation and orchestration engine.
 
 Get started:
