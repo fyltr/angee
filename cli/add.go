@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fyltr/angee/internal/component"
@@ -23,15 +24,20 @@ var addCmd = &cobra.Command{
 	Long: `Add a component to the stack by merging its definition into angee.yaml.
 
 Components can be:
+  postgres                  Built-in component (bundled with angee)
+  redis                     Built-in component (bundled with angee)
   angee/postgres            Official component (github.com/angee-sh/postgres)
   fyltr/fyltr-django        Organization component (github.com/fyltr/fyltr-django)
   https://github.com/...    Full git URL
-  ./local/path              Local directory
+  ./local/path              Local directory with component.yaml
+  .                         Current directory (auto-detects component.yaml)
 
 Examples:
-  angee add angee/postgres
-  angee add fyltr/fyltr-django --param Domain=myapp.io
-  angee add angee/oauth-github --deploy`,
+  angee add postgres
+  angee add redis
+  angee add angee-django --param Domain=myapp.io
+  angee add ./path/to/component
+  angee add . --deploy`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAdd,
 }
@@ -45,6 +51,22 @@ func init() {
 func runAdd(cmd *cobra.Command, args []string) error {
 	source := args[0]
 	rootPath := resolveRoot()
+
+	// Set ANGEE_COMPONENTS_PATH so the component package can find embedded components.
+	// Look for templates/components/ relative to the executable.
+	if exe, err := os.Executable(); err == nil {
+		compPath := filepath.Join(filepath.Dir(exe), "..", "templates", "components")
+		if info, statErr := os.Stat(compPath); statErr == nil && info.IsDir() {
+			os.Setenv("ANGEE_COMPONENTS_PATH", compPath)
+		}
+	}
+
+	// Resolve "." to absolute current directory
+	if source == "." {
+		if wd, err := os.Getwd(); err == nil {
+			source = wd
+		}
+	}
 
 	// Parse --param flags
 	params := make(map[string]string)

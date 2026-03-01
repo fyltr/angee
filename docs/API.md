@@ -291,6 +291,68 @@ Returns logs for a specific agent.
 
 ---
 
+### Credential management
+
+#### `GET /credentials`
+
+Lists all credential names and the active backend type.
+
+**Response:**
+```json
+{
+  "names": ["ANTHROPIC_API_KEY", "DB_URL", "DJANGO_SECRET_KEY"],
+  "backend": "env"
+}
+```
+
+#### `GET /credentials/{name}`
+
+Returns metadata about a credential — existence and value length. The raw value is never exposed via the API.
+
+**Response:**
+```json
+{
+  "name": "db-url",
+  "exists": true,
+  "length": 42
+}
+```
+
+Returns `404` if the credential does not exist.
+
+#### `POST /credentials/{name}`
+
+Stores a credential value.
+
+**Request:**
+```json
+{
+  "value": "postgres://user:pass@db:5432/mydb"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "name": "db-url"
+}
+```
+
+#### `DELETE /credentials/{name}`
+
+Removes a credential.
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "name": "db-url"
+}
+```
+
+---
+
 ### Repository management *(planned)*
 
 These endpoints manage source repositories defined in `angee.yaml` under `repositories:`.

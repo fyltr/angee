@@ -221,6 +221,84 @@ Then `angee deploy` — your source is cloned into `~/.angee/src/base/`.
 
 ---
 
+## Manage credentials
+
+Angee has a pluggable secrets backend. By default it uses a `.env` file; for production you can switch to [OpenBao](https://openbao.org) (open-source Vault fork).
+
+```sh
+# Store a secret
+angee credential set anthropic-api-key sk-ant-xxx
+
+# List stored secrets
+angee credential list
+```
+```
+  Credentials (env backend)
+    ANTHROPIC_API_KEY
+    DB_URL
+    DJANGO_SECRET_KEY
+```
+
+```sh
+# Check a credential (shows masked value)
+angee credential get db-url
+```
+```
+  db-url = post****word@db
+```
+
+```sh
+# Delete a credential
+angee credential delete old-secret
+```
+
+### Reference secrets in angee.yaml
+
+Use `${secret:name}` to reference credentials in service or agent environment:
+
+```yaml
+services:
+  web:
+    env:
+      DATABASE_URL: "${secret:db-url}"
+      SECRET_KEY: "${secret:django-secret-key}"
+```
+
+At compile time these resolve to `${DB_URL}` / `${DJANGO_SECRET_KEY}` and Docker Compose interpolates them from the `.env` file.
+
+### Add credential components
+
+Components of `type: credential` auto-register their outputs when installed:
+
+```sh
+angee add angee/oauth-github --param ClientID=xxx --param ClientSecret=yyy
+```
+
+This caches the credential outputs so `credential_bindings` on agents resolve at deploy time:
+
+```yaml
+agents:
+  developer:
+    credential_bindings: [github-oauth]  # auto-injects env vars and config files
+```
+
+### Switch to OpenBao (production)
+
+```yaml
+secrets_backend:
+  type: openbao
+  openbao:
+    address: http://openbao:8200
+    prefix: angee          # KV v2 path prefix (default)
+    auth:
+      method: token        # or "approle"
+      token_env: BAO_TOKEN # env var containing the token
+```
+
+Secrets are stored at `secret/data/{prefix}/{env}/{name}` in KV v2. The CLI and operator both use the same backend — just set the env var and go.
+
+---
+
 ## Full CLI reference
 
 ```
@@ -237,6 +315,12 @@ angee chat [agent]
 angee admin
 angee develop
 angee ask <message> [--agent name]
+angee add <component> [--param Key=Value] [--deploy] [--yes]
+angee remove <component>
+angee credential list
+angee credential get <name>
+angee credential set <name> <value>
+angee credential delete <name>
 ```
 
 ---

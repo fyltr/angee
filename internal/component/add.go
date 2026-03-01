@@ -36,8 +36,8 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 		defer os.RemoveAll(cleanupDir)
 	}
 
-	// 2. Load angee-component.yaml
-	compPath := filepath.Join(compDir, "angee-component.yaml")
+	// 2. Load component definition (angee-component.yaml or component.yaml)
+	compPath := resolveComponentFile(compDir)
 	comp, err := config.LoadComponent(compPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading component: %w", err)
@@ -50,7 +50,7 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 	}
 
 	// 4. Check dependencies
-	if err := checkRequires(comp, cfg); err != nil {
+	if err := checkRequires(comp, cfg, opts.RootPath); err != nil {
 		return nil, err
 	}
 
@@ -118,14 +118,23 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 
 // fetchComponent resolves a component reference to a local directory.
 func fetchComponent(source string) (dir string, cleanupDir string, err error) {
-	// Local path
+	// Local path — check for component definition file
 	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
+		if hasComponentFile(source) {
+			return source, "", nil
+		}
+	}
+
+	// Check for angee-component.yaml or component.yaml directly (file, not directory)
+	if hasComponentFile(source) {
 		return source, "", nil
 	}
 
-	// Check for angee-component.yaml directly (file, not directory)
-	if _, statErr := os.Stat(filepath.Join(source, "angee-component.yaml")); statErr == nil {
-		return source, "", nil
+	// Resolve shorthand: bare name "postgres" → look in embedded components first
+	if !strings.Contains(source, "://") && !strings.HasPrefix(source, "/") && !strings.HasPrefix(source, ".") && !strings.Contains(source, "/") {
+		if embeddedDir, ok := resolveEmbeddedComponent(source); ok {
+			return embeddedDir, "", nil
+		}
 	}
 
 	// Resolve shorthand: "angee/postgres" → "https://github.com/angee-sh/postgres"
@@ -151,8 +160,64 @@ func fetchComponent(source string) (dir string, cleanupDir string, err error) {
 	return cloneDir, cloneDir, nil
 }
 
+// hasComponentFile checks if a directory contains a component definition file
+// (either angee-component.yaml or component.yaml).
+func hasComponentFile(dir string) bool {
+	if _, err := os.Stat(filepath.Join(dir, "angee-component.yaml")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, "component.yaml")); err == nil {
+		return true
+	}
+	return false
+}
+
+// resolveComponentFile returns the path to the component definition file in a directory.
+func resolveComponentFile(dir string) string {
+	if p := filepath.Join(dir, "angee-component.yaml"); fileExists(p) {
+		return p
+	}
+	return filepath.Join(dir, "component.yaml")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// resolveEmbeddedComponent looks for a component in the angee binary's embedded
+// component directory. This is resolved at build time via the CLI's component path.
+// Falls back to looking relative to the executable path.
+func resolveEmbeddedComponent(name string) (string, bool) {
+	// Check ANGEE_COMPONENTS_PATH env var (set by CLI)
+	if envPath := os.Getenv("ANGEE_COMPONENTS_PATH"); envPath != "" {
+		dir := filepath.Join(envPath, name)
+		if hasComponentFile(dir) {
+			return dir, true
+		}
+	}
+
+	// Check relative to executable
+	exe, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exe)
+		// Look in ../templates/components/ relative to binary
+		dir := filepath.Join(exeDir, "..", "templates", "components", name)
+		if hasComponentFile(dir) {
+			return dir, true
+		}
+		// Also check in source tree during development
+		dir = filepath.Join(exeDir, "..", "..", "templates", "components", name)
+		if hasComponentFile(dir) {
+			return dir, true
+		}
+	}
+
+	return "", false
+}
+
 // checkRequires verifies all component dependencies exist in the stack.
-func checkRequires(comp *config.ComponentConfig, cfg *config.AngeeConfig) error {
+func checkRequires(comp *config.ComponentConfig, cfg *config.AngeeConfig, rootPath string) error {
 	for _, req := range comp.Requires {
 		// Check if any service, agent, or MCP server matches
 		name := req
@@ -172,7 +237,7 @@ func checkRequires(comp *config.ComponentConfig, cfg *config.AngeeConfig) error 
 			found = true
 		}
 		// Also check installed components
-		if componentInstalled(name) {
+		if componentInstalled(rootPath, name) {
 			found = true
 		}
 
@@ -183,9 +248,20 @@ func checkRequires(comp *config.ComponentConfig, cfg *config.AngeeConfig) error 
 	return nil
 }
 
-// componentInstalled is a placeholder — checks .angee/components/ for a record.
-func componentInstalled(name string) bool {
-	// This will be implemented to check the install records
+// componentInstalled checks if a component is installed by looking in .angee/components/.
+func componentInstalled(rootPath, name string) bool {
+	componentsDir := filepath.Join(rootPath, ".angee", "components")
+	entries, err := os.ReadDir(componentsDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		// Match by filename: "postgres.yaml" matches name "postgres"
+		baseName := strings.TrimSuffix(entry.Name(), ".yaml")
+		if baseName == name || baseName == strings.ReplaceAll(name, "/", "-") {
+			return true
+		}
+	}
 	return false
 }
 

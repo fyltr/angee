@@ -1,8 +1,10 @@
-name: official/angee-django
+name: official/angee-default
 description: |
-  Django + pgvector + Celery + Redis
-  The Angee standard stack — batteries included.
-  Source: https://github.com/fyltr/angee-django
+  Angee platform — operator + OpenBao + admin agent.
+  The foundation for any Angee stack. Add components with:
+    angee add postgres
+    angee add redis
+    angee add angee-django
 version: "1.0"
 author: angee
 
@@ -16,80 +18,8 @@ parameters:
     description: "Primary domain (e.g. myapp.io or localhost)"
     default: "localhost"
 
-  - name: DBPassword
-    description: "Postgres password"
-    default: "angee"
-
-  - name: DBSize
-    description: "Postgres volume size"
-    default: "20Gi"
-
-  - name: RedisSize
-    description: "Redis volume size"
-    default: "2Gi"
-
-  - name: MediaSize
-    description: "Django media volume size"
-    default: "10Gi"
-
-  - name: DjangoWorkers
-    description: "Number of gunicorn workers"
-    default: "3"
-
-  - name: CeleryWorkers
-    description: "Number of Celery worker processes"
-    default: "4"
-
-  - name: DjangoCPU
-    description: "CPU limit for Django"
-    default: "1.0"
-
-  - name: DjangoMemory
-    description: "Memory limit for Django"
-    default: "1Gi"
-
-  - name: CeleryCPU
-    description: "CPU limit for Celery worker"
-    default: "1.0"
-
-  - name: CeleryMemory
-    description: "Memory limit for Celery worker"
-    default: "1Gi"
-
-services:
-  - django
-  - postgres
-  - redis
-  - celery-worker
-  - celery-beat
-
-agents:
-  - angee-admin
-  - angee-developer
-
-# Secrets declared here are processed by `angee init`.
-# generated: true  → auto-generated if not supplied via --secret
-# required: true   → error if missing and not generated
+# Only one secret: the Anthropic API key for agents
 secrets:
-  - name: django-secret-key
-    description: "Django SECRET_KEY — 50-char random string"
-    required: true
-    generated: true
-    length: 50
-    charset: "abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)"
-
-  - name: db-password
-    description: "Postgres superuser password"
-    required: true
-    generated: true
-    length: 32
-    charset: "abcdefghijklmnopqrstuvwxyz0123456789"
-
-  - name: db-url
-    description: "Full DATABASE_URL (derived from db-password and project name)"
-    required: true
-    derived: "postgresql://angee:${db-password}@postgres:5432/${project}"
-
   - name: anthropic-api-key
     description: "Anthropic API key for AI agents (get yours at console.anthropic.com)"
     required: true

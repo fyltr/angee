@@ -307,6 +307,61 @@ Get logs for an agent.
 
 ---
 
+### Credential management
+
+#### `credentials_list`
+
+List all credential names and the backend type.
+
+**Parameters:** none
+
+**Returns:**
+```json
+{
+  "names": ["ANTHROPIC_API_KEY", "DB_URL"],
+  "backend": "env"
+}
+```
+
+#### `credentials_set`
+
+Store a credential value.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | yes | Credential name |
+| `value` | string | yes | Credential value |
+
+**Returns:**
+```json
+{
+  "status": "ok",
+  "name": "db-url"
+}
+```
+
+#### `credentials_delete`
+
+Delete a credential.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | yes | Credential name |
+
+**Returns:**
+```json
+{
+  "status": "ok",
+  "name": "db-url"
+}
+```
+
+---
+
 ### Repository management *(planned)*
 
 #### `repo_list` *(planned)*
@@ -429,6 +484,14 @@ Get the config change history (commits in ANGEE_ROOT).
 3. platform_status     → verify everything recovered
 ```
 
+### Manage credentials
+
+```
+1. credentials_list    → see what's stored
+2. credentials_set     → add or update a secret
+3. deploy              → redeploy to pick up new values
+```
+
 ### Manage agent lifecycle
 
 ```
@@ -458,6 +521,9 @@ Get the config change history (commits in ANGEE_ROOT).
 | `agent_start` | maps to implemented endpoint |
 | `agent_stop` | maps to implemented endpoint |
 | `agent_logs` | maps to implemented endpoint |
+| `credentials_list` | maps to implemented endpoint |
+| `credentials_set` | maps to implemented endpoint |
+| `credentials_delete` | maps to implemented endpoint |
 | `repo_list` | planned |
 | `repo_clone` | planned |
 | `repo_pull` | planned |

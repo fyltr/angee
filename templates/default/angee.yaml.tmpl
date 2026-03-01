@@ -1,14 +1,7 @@
 # angee.yaml — {{ .ProjectName }}
 # Source of truth. Edit directly or ask your admin agent.
-# Generated from: angee-django template
+# Generated from: angee default template
 name: {{ .ProjectName }}
-
-# Source repositories — cloned into src/ as git submodules
-repositories:
-  base:
-    url: https://github.com/fyltr/angee-django
-    branch: main
-    role: base
 
 # ─── Platform services ────────────────────────────────────────────────────────
 
@@ -23,7 +16,8 @@ services:
       - .:/angee-root
     env:
       ANGEE_ROOT: /angee-root
-      DJANGO_URL: "http://django:8000"
+      BAO_ADDR: "http://openbao:8200"
+      BAO_TOKEN: dev-root-token
     health:
       path: /health
       port: 9000
@@ -51,117 +45,29 @@ services:
         path: /certs
         persistent: true
 
-  django:
-    build:
-      context: src/base
-      dockerfile: Dockerfile
-    lifecycle: platform
-    domains:
-      - host: {{ .Domain }}
-        port: 8000
-        tls: {{ if eq .Domain "localhost" }}false{{ else }}true{{ end }}
-    resources:
-      cpu: "{{ .DjangoCPU }}"
-      memory: "{{ .DjangoMemory }}"
+  openbao:
+    image: openbao/openbao:2
+    lifecycle: system
+    ports:
+      - "8200:8200"
+    command: server -dev -dev-root-token-id=dev-root-token
     env:
-      # Secrets are resolved from .env at deploy time — never stored in angee.yaml
-      DATABASE_URL: "${secret:db-url}"
-      REDIS_URL: "redis://redis:6379/0"
-      CELERY_BROKER_URL: "redis://redis:6379/1"
-      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
-      SECRET_KEY: "${secret:django-secret-key}"
-      ALLOWED_HOSTS: "{{ .Domain }},localhost,127.0.0.1"
-      CORS_ALLOWED_ORIGINS: "http://localhost:3333,http://localhost:8000,https://{{ .Domain }}"
-      DEBUG: "false"
-      GUNICORN_WORKERS: "{{ .DjangoWorkers }}"
-    health:
-      path: /health/
-      port: 8000
-      interval: 30s
-      timeout: 5s
+      BAO_DEV_ROOT_TOKEN_ID: dev-root-token
     volumes:
-      - name: django-media
-        path: /app/media
+      - name: bao-data
+        path: /openbao/data
         persistent: true
-        size: {{ .MediaSize }}
-    depends_on:
-      - postgres
-      - redis
 
-  postgres:
-    image: pgvector/pgvector:pg17
-    lifecycle: sidecar
-    env:
-      POSTGRES_USER: angee
-      # Password resolved from secret at deploy time
-      POSTGRES_PASSWORD: "${secret:db-password}"
-      POSTGRES_DB: "{{ .ProjectName }}"
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
-    volumes:
-      - name: pgdata
-        path: /var/lib/postgresql/data
-        persistent: true
-        size: {{ .DBSize }}
-    command: >-
-      postgres
-      -c shared_preload_libraries=pg_stat_statements
-      -c pg_stat_statements.track=all
-      -c max_connections=200
+# ─── Secrets backend ────────────────────────────────────────────────────────
 
-  redis:
-    image: redis:7-alpine
-    lifecycle: sidecar
-    command: >-
-      redis-server
-      --appendonly yes
-      --appendfsync everysec
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-    volumes:
-      - name: redis-data
-        path: /data
-        persistent: true
-        size: {{ .RedisSize }}
-
-  celery-worker:
-    build:
-      context: src/base
-      dockerfile: Dockerfile
-    command: celery -A config worker --loglevel=info --concurrency={{ .CeleryWorkers }} --max-tasks-per-child=500
-    lifecycle: worker
-    resources:
-      cpu: "{{ .CeleryCPU }}"
-      memory: "{{ .CeleryMemory }}"
-    env:
-      DATABASE_URL: "${secret:db-url}"
-      REDIS_URL: "redis://redis:6379/0"
-      CELERY_BROKER_URL: "redis://redis:6379/1"
-      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
-      SECRET_KEY: "${secret:django-secret-key}"
-    depends_on:
-      - postgres
-      - redis
-
-  celery-beat:
-    build:
-      context: src/base
-      dockerfile: Dockerfile
-    command: celery -A config beat --loglevel=info --scheduler=django_celery_beat.schedulers:DatabaseScheduler
-    lifecycle: worker
-    # Beat must always have exactly 1 replica — multiple instances corrupt the schedule
-    replicas: 1
-    resources:
-      cpu: "0.25"
-      memory: "256Mi"
-    env:
-      DATABASE_URL: "${secret:db-url}"
-      REDIS_URL: "redis://redis:6379/0"
-      CELERY_BROKER_URL: "redis://redis:6379/1"
-      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
-      SECRET_KEY: "${secret:django-secret-key}"
-    depends_on:
-      - postgres
-      - redis
+secrets_backend:
+  type: openbao
+  openbao:
+    address: http://openbao:8200
+    auth:
+      method: token
+      token_env: BAO_TOKEN
+    prefix: angee
 
 # ─── MCP servers ─────────────────────────────────────────────────────────────
 
@@ -181,6 +87,7 @@ mcp_servers:
         - logs
         - scale
         - secrets.list
+        - secrets.write
 
   angee-files:
     transport: stdio
@@ -193,25 +100,7 @@ mcp_servers:
     credentials:
       source: none
 
-  django-mcp:
-    transport: streamable-http
-    url: http://django:8000/mcp/
-    credentials:
-      source: service_account
-      scopes:
-        - messages.read
-        - messages.write
-        - contacts.read
-        - agents.read
-        - agents.write
-
 # ─── Agents ──────────────────────────────────────────────────────────────────
-# Agent images are configurable. Use any terminal-based coding agent:
-#   - opencode: ghcr.io/anomalyco/opencode:latest
-#   - claude code: use an image with claude-code installed
-#   - custom: any image with a shell entrypoint
-#
-# `angee admin` and `angee develop` attach to the agent container terminal.
 
 agents:
 
@@ -224,57 +113,19 @@ agents:
     mcp_servers:
       - angee-operator
       - angee-files
-      - django-mcp
     files:
       - template: opencode.json.tmpl
         mount: /root/.config/opencode/opencode.json
     workspace:
       persistent: true
-    env:
-      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
-
-  angee-developer:
-    image: ghcr.io/anomalyco/opencode:latest
-    command: serve --hostname 0.0.0.0 --port 4096
-    lifecycle: system
-    role: user
-    description: "Developer agent — writes code, fixes bugs, reviews PRs"
-    mcp_servers:
-      - angee-files
-      - django-mcp
-    files:
-      - template: opencode.json.tmpl
-        mount: /root/.config/opencode/opencode.json
-    workspace:
-      repository: base
-      branch: main
-      persistent: true
-    resources:
-      cpu: "2.0"
-      memory: "4Gi"
     env:
       ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
 
 # ─── Secrets ─────────────────────────────────────────────────────────────────
-# Secrets are auto-generated by `angee init` and written to .env (gitignored).
-# To rotate: angee secret set <name> <new-value>
+# Secrets are stored in OpenBao (dev mode). Use `angee credential set` to manage.
+# In dev mode, secrets are also written to .env for convenience.
 
 secrets:
-  - name: django-secret-key
-    description: "Django SECRET_KEY"
-    required: true
-    generated: true
-
-  - name: db-password
-    description: "Postgres password"
-    required: true
-    generated: true
-
-  - name: db-url
-    description: "Full DATABASE_URL (derived from db-password)"
-    required: true
-    derived: "postgresql://angee:${db-password}@postgres:5432/{{ .ProjectName }}"
-
   - name: anthropic-api-key
-    description: "Anthropic API key for AI agents"
+    description: "Anthropic API key for AI agents (get yours at console.anthropic.com)"
     required: true
