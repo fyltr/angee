@@ -9,6 +9,7 @@ import (
 
 	"github.com/fyltr/angee/internal/compiler"
 	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/git"
 	"github.com/fyltr/angee/internal/root"
 	"github.com/fyltr/angee/internal/tmpl"
 	"github.com/spf13/cobra"
@@ -196,12 +197,35 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess("Created operator.yaml (local runtime config — gitignored)")
 
-	// Compile angee.yaml → docker-compose.yaml so `angee up` can start
-	// the stack immediately without needing the compiler.
+	// Load angee.yaml to access repositories (and later compile)
 	cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
 	if err != nil {
-		return fmt.Errorf("loading angee.yaml for compilation: %w", err)
+		return fmt.Errorf("loading angee.yaml: %w", err)
 	}
+
+	// Clone declared repositories into ANGEE_ROOT
+	for repoName, spec := range cfg.Repositories {
+		if spec.URL == "" {
+			continue
+		}
+		clonePath := spec.Path
+		if clonePath == "" {
+			clonePath = filepath.Join("src", repoName)
+		}
+		absPath := filepath.Join(path, clonePath)
+		// Skip if directory already exists and is non-empty
+		if entries, err := os.ReadDir(absPath); err == nil && len(entries) > 0 {
+			printInfo(fmt.Sprintf("Repository %q already exists at %s — skipping clone", repoName, clonePath))
+			continue
+		}
+		// Remove stale symlinks or empty dirs so git clone can create the target
+		os.Remove(absPath)
+		if err := git.Clone(spec.URL, absPath, spec.Branch); err != nil {
+			return fmt.Errorf("cloning repository %q: %w", repoName, err)
+		}
+		printSuccess(fmt.Sprintf("Cloned %s → %s", spec.URL, clonePath))
+	}
+
 	// Ensure agent directories + stub .env files exist before compiling,
 	// so docker compose doesn't fail on missing env_file references.
 	for agentName := range cfg.Agents {

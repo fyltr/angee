@@ -143,6 +143,9 @@ func (s *Server) deploy(ctx context.Context, _ *config.AngeeConfig) (*runtime.Ap
 		"removed", len(result.ServicesRemoved),
 	)
 
+	// Restart health probes with the new config.
+	s.startHealthProbes(ctx)
+
 	return result, nil
 }
 
@@ -212,6 +215,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if statuses == nil {
 		statuses = []*runtime.ServiceStatus{}
 	}
+
+	// Overlay operator-side health probe results.
+	for _, st := range statuses {
+		if h := s.Health.Status(st.Name); h != "" {
+			st.Health = h
+		}
+	}
+
 	jsonOK(w, statuses)
 }
 
@@ -299,6 +310,9 @@ func (s *Server) handleAgentList(w http.ResponseWriter, r *http.Request) {
 		if st, ok := statusMap[compiler.AgentServicePrefix+name]; ok {
 			status = st.Status
 			health = st.Health
+		}
+		if h := s.Health.Status(compiler.AgentServicePrefix + name); h != "" {
+			health = h
 		}
 		agents = append(agents, api.AgentInfo{
 			Name:      name,

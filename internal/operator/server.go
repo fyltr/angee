@@ -27,6 +27,11 @@ type Server struct {
 	Compiler *compiler.Compiler
 	Git      *git.Repo
 	Log      *slog.Logger
+	Health   *HealthChecker
+
+	// healthCancel stops the current health-probe goroutines so they can be
+	// restarted with an updated config after a deploy.
+	healthCancel context.CancelFunc
 }
 
 // New creates an operator Server for the given ANGEE_ROOT path.
@@ -53,6 +58,7 @@ func New(angeeRoot string, logger *slog.Logger) (*Server, error) {
 		Git:      git.New(angeeRoot),
 		Log:      logger,
 		Compiler: comp,
+		Health:   newHealthChecker(logger),
 	}
 
 	// Pass the resolved API key to the compiler so it can auto-inject it
@@ -142,6 +148,9 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 
 	s.Log.Info("operator started", "addr", addr, "root", s.Root.Path, "runtime", s.Cfg.Runtime)
 
+	// Start health probes for the current config.
+	s.startHealthProbes(ctx)
+
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background()) //nolint:errcheck
@@ -151,6 +160,30 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 		return err
 	}
 	return nil
+}
+
+// startHealthProbes (re)starts health-check goroutines for the current config.
+// It cancels any previously running probes first.
+func (s *Server) startHealthProbes(parentCtx context.Context) {
+	if s.healthCancel != nil {
+		s.healthCancel()
+	}
+
+	cfg, err := s.Root.LoadAngeeConfig()
+	if err != nil {
+		s.Log.Warn("skipping health probes: cannot load angee.yaml", "error", err)
+		return
+	}
+
+	probes := s.Health.Reload(cfg)
+	if len(probes) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.healthCancel = cancel
+	s.Health.Run(ctx, probes)
+	s.Log.Info("health probes started", "count", len(probes))
 }
 
 // compileAndWrite compiles angee.yaml → docker-compose.yaml.

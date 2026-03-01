@@ -33,6 +33,7 @@ type RepositorySpec struct {
 	URL    string `yaml:"url"`
 	Branch string `yaml:"branch,omitempty"`
 	Role   string `yaml:"role,omitempty"` // base | custom | dependency
+	Path   string `yaml:"path,omitempty"` // clone destination relative to ANGEE_ROOT (e.g. "src/base")
 }
 
 // SecretRef declares a secret that must exist before deploy.

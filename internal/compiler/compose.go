@@ -190,27 +190,10 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 	}
 	cs.Volumes = append(cs.Volumes, svc.RawVolumes...)
 
-	// Health check
-	if svc.Health != nil {
-		port := svc.Health.Port
-		if port == 0 {
-			port = 8000
-		}
-		interval := svc.Health.Interval
-		if interval == "" {
-			interval = "30s"
-		}
-		timeout := svc.Health.Timeout
-		if timeout == "" {
-			timeout = "5s"
-		}
-		cs.Healthcheck = &ComposeHealthcheck{
-			Test:     []string{"CMD-SHELL", fmt.Sprintf("wget -q -O - http://localhost:%d%s || exit 1", port, svc.Health.Path)},
-			Interval: interval,
-			Timeout:  timeout,
-			Retries:  3,
-		}
-	}
+	// Health checks are performed by the operator (Kubernetes-style HTTP
+	// probes from outside the container), so we do not generate Docker
+	// HEALTHCHECK directives. This avoids requiring curl/wget inside the
+	// target image.
 
 	// Traefik labels for platform services with domains
 	if svc.Lifecycle == config.LifecyclePlatform && len(svc.Domains) > 0 {
@@ -270,6 +253,13 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 	if agent.Workspace.Path != "" {
 		// Explicit path (e.g. ANGEE_ROOT itself for the admin agent)
 		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(agent.Workspace.Path)+":/workspace")
+	} else if agent.Workspace.Repository != "" {
+		// Mount the repository directory as workspace
+		repoPath := fmt.Sprintf("src/%s", agent.Workspace.Repository)
+		if spec, ok := cfg.Repositories[agent.Workspace.Repository]; ok && spec.Path != "" {
+			repoPath = spec.Path
+		}
+		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(repoPath)+":/workspace")
 	} else {
 		// Per-agent workspace directory
 		workspacePath := fmt.Sprintf("./agents/%s/workspace", name)

@@ -330,6 +330,56 @@ func TestCompileAgentWorkspaceVolume(t *testing.T) {
 	}
 }
 
+func TestCompileAgentWorkspaceRepository(t *testing.T) {
+	c := newTestCompiler(t)
+	cfg := &config.AngeeConfig{
+		Name: "repo-workspace-test",
+		Repositories: map[string]config.RepositorySpec{
+			"base": {URL: "https://github.com/example/app", Path: "src/base"},
+			"lib":  {URL: "https://github.com/example/lib"},
+		},
+		Agents: map[string]config.AgentSpec{
+			"dev": {
+				Image:     "agent:latest",
+				Workspace: config.WorkspaceSpec{Repository: "base"},
+			},
+			"helper": {
+				Image:     "agent:latest",
+				Workspace: config.WorkspaceSpec{Repository: "lib"},
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	// Agent with workspace.repository="base" should mount src/base (from spec.Path)
+	dev := cf.Services["agent-dev"]
+	found := false
+	for _, v := range dev.Volumes {
+		if v == "./src/base:/workspace" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("agent-dev volumes = %v, want ./src/base:/workspace", dev.Volumes)
+	}
+
+	// Agent with workspace.repository="lib" should default to src/lib
+	helper := cf.Services["agent-helper"]
+	found = false
+	for _, v := range helper.Volumes {
+		if v == "./src/lib:/workspace" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("agent-helper volumes = %v, want ./src/lib:/workspace", helper.Volumes)
+	}
+}
+
 func TestEnsureBindMountPrefix(t *testing.T) {
 	tests := []struct {
 		input, want string
@@ -369,7 +419,9 @@ func TestNormalizeMemory(t *testing.T) {
 	}
 }
 
-func TestCompileHealthCheck(t *testing.T) {
+func TestCompileHealthCheckNotGenerated(t *testing.T) {
+	// Health checks are performed by the operator (external HTTP probes),
+	// so the compiler must NOT generate Docker HEALTHCHECK directives.
 	c := newTestCompiler(t)
 	cfg := &config.AngeeConfig{
 		Name: "health-test",
@@ -388,20 +440,8 @@ func TestCompileHealthCheck(t *testing.T) {
 	}
 
 	api := cf.Services["api"]
-	if api.Healthcheck == nil {
-		t.Fatal("expected healthcheck to be set")
-	}
-	if len(api.Healthcheck.Test) < 2 {
-		t.Fatal("expected CMD-SHELL test")
-	}
-	if api.Healthcheck.Test[0] != "CMD-SHELL" {
-		t.Errorf("Test[0] = %q, want %q", api.Healthcheck.Test[0], "CMD-SHELL")
-	}
-	if !strings.Contains(api.Healthcheck.Test[1], "/healthz") {
-		t.Error("expected healthcheck test to contain /healthz")
-	}
-	if api.Healthcheck.Interval != "10s" {
-		t.Errorf("Interval = %q, want %q", api.Healthcheck.Interval, "10s")
+	if api.Healthcheck != nil {
+		t.Error("expected no Docker healthcheck — operator probes externally")
 	}
 }
 

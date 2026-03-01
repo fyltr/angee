@@ -164,6 +164,24 @@ func (r *Repo) ResetHard(ref string) error {
 	return err
 }
 
+// Clone clones a git repository into dest. If branch is non-empty, only that
+// branch is cloned (--branch). The dest directory must not already exist.
+func Clone(url, dest, branch string) error {
+	args := []string{"clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, url, dest)
+
+	cmd := exec.Command("git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git clone %s: %w\n%s", url, err, stderr.String())
+	}
+	return nil
+}
+
 // IsRepo returns true if the path is a git repository.
 func IsRepo(path string) bool {
 	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
