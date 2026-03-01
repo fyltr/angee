@@ -1,0 +1,40 @@
+name: postgres
+description: "PostgreSQL with pgvector — vector-capable relational database"
+
+parameters:
+  - name: DBSize
+    description: "Postgres volume size"
+    default: "20Gi"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    lifecycle: sidecar
+    env:
+      POSTGRES_USER: angee
+      POSTGRES_PASSWORD: "${secret:db-password}"
+      POSTGRES_DB: "{{ .ProjectName }}"
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
+    volumes:
+      - name: pgdata
+        path: /var/lib/postgresql/data
+        persistent: true
+        size: "{{ .DBSize }}"
+    command: >-
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+
+secrets:
+  - name: db-password
+    description: "Postgres superuser password"
+    required: true
+    generated: true
+    length: 32
+    charset: "abcdefghijklmnopqrstuvwxyz0123456789"
+
+  - name: db-url
+    description: "Full DATABASE_URL (derived from db-password)"
+    required: true
+    derived: "postgresql://angee:${db-password}@postgres:5432/${project}"

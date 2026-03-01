@@ -1,0 +1,510 @@
+// Package component implements the angee add / angee remove lifecycle.
+package component
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"text/template"
+	"time"
+
+	"github.com/fyltr/angee/internal/config"
+	"gopkg.in/yaml.v3"
+)
+
+// AddOptions configures the angee add operation.
+type AddOptions struct {
+	Source     string            // component ref: "angee/postgres", URL, or local path
+	Params    map[string]string // --param Key=Value overrides
+	Deploy    bool              // deploy after adding
+	Yes       bool              // non-interactive mode
+	RootPath  string            // ANGEE_ROOT path
+	PromptFn  func(param config.ComponentParam) (string, error) // interactive prompt
+}
+
+// Add installs a component into the stack.
+func Add(opts AddOptions) (*config.InstalledComponent, error) {
+	// 1. Resolve and fetch component source
+	compDir, cleanupDir, err := fetchComponent(opts.Source)
+	if err != nil {
+		return nil, fmt.Errorf("fetching component: %w", err)
+	}
+	if cleanupDir != "" {
+		defer os.RemoveAll(cleanupDir)
+	}
+
+	// 2. Load angee-component.yaml
+	compPath := filepath.Join(compDir, "angee-component.yaml")
+	comp, err := config.LoadComponent(compPath)
+	if err != nil {
+		return nil, fmt.Errorf("loading component: %w", err)
+	}
+
+	// 3. Load current stack config
+	cfg, err := config.Load(filepath.Join(opts.RootPath, "angee.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("loading angee.yaml: %w", err)
+	}
+
+	// 4. Check dependencies
+	if err := checkRequires(comp, cfg); err != nil {
+		return nil, err
+	}
+
+	// 5. Resolve parameters
+	params, err := resolveParams(comp, cfg, opts)
+	if err != nil {
+		return nil, fmt.Errorf("resolving parameters: %w", err)
+	}
+
+	// 6. Render component.yaml as Go template with resolved params
+	rendered, err := renderComponent(compPath, params)
+	if err != nil {
+		return nil, fmt.Errorf("rendering component: %w", err)
+	}
+
+	// 7. Parse rendered component
+	var renderedComp config.ComponentConfig
+	if err := yaml.Unmarshal([]byte(rendered), &renderedComp); err != nil {
+		return nil, fmt.Errorf("parsing rendered component: %w", err)
+	}
+
+	// 8. Validate no conflicts
+	if err := validateNoConflicts(cfg, &renderedComp); err != nil {
+		return nil, err
+	}
+
+	// 9. Merge into angee.yaml
+	record := mergeComponent(cfg, &renderedComp)
+
+	// 9b. Cache credential outputs for compile-time resolution
+	if renderedComp.Credential != nil && len(renderedComp.Credential.Outputs) > 0 {
+		if err := cacheCredentialOutputs(opts.RootPath, &renderedComp); err != nil {
+			return nil, fmt.Errorf("caching credential outputs: %w", err)
+		}
+	}
+
+	// 10. Write updated angee.yaml
+	if err := config.Write(cfg, filepath.Join(opts.RootPath, "angee.yaml")); err != nil {
+		return nil, fmt.Errorf("writing angee.yaml: %w", err)
+	}
+
+	// 11. Clone repositories
+	if err := cloneRepositories(cfg, opts.RootPath); err != nil {
+		return nil, fmt.Errorf("cloning repositories: %w", err)
+	}
+
+	// 12. Process file manifest
+	if err := processFiles(compDir, opts.RootPath, &renderedComp); err != nil {
+		return nil, fmt.Errorf("processing files: %w", err)
+	}
+
+	// 13. Record installation
+	record.Name = comp.Name
+	record.Version = comp.Version
+	record.Type = comp.Type
+	record.Source = opts.Source
+	record.InstalledAt = time.Now().UTC().Format(time.RFC3339)
+	record.Parameters = params
+	if err := writeInstallRecord(opts.RootPath, record); err != nil {
+		return nil, fmt.Errorf("writing install record: %w", err)
+	}
+
+	return record, nil
+}
+
+// fetchComponent resolves a component reference to a local directory.
+func fetchComponent(source string) (dir string, cleanupDir string, err error) {
+	// Local path
+	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
+		return source, "", nil
+	}
+
+	// Check for angee-component.yaml directly (file, not directory)
+	if _, statErr := os.Stat(filepath.Join(source, "angee-component.yaml")); statErr == nil {
+		return source, "", nil
+	}
+
+	// Resolve shorthand: "angee/postgres" → "https://github.com/angee-sh/postgres"
+	repoURL := source
+	if !strings.Contains(source, "://") && !strings.HasPrefix(source, "/") && !strings.HasPrefix(source, ".") {
+		parts := strings.SplitN(source, "/", 2)
+		if len(parts) == 2 {
+			repoURL = fmt.Sprintf("https://github.com/%s/%s", parts[0], parts[1])
+		}
+	}
+
+	// Git clone
+	cloneDir, err := os.MkdirTemp("", "angee-component-*")
+	if err != nil {
+		return "", "", err
+	}
+	cmd := exec.Command("git", "clone", "--depth", "1", repoURL, cloneDir)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.RemoveAll(cloneDir)
+		return "", "", fmt.Errorf("cloning %s: %w", repoURL, err)
+	}
+	return cloneDir, cloneDir, nil
+}
+
+// checkRequires verifies all component dependencies exist in the stack.
+func checkRequires(comp *config.ComponentConfig, cfg *config.AngeeConfig) error {
+	for _, req := range comp.Requires {
+		// Check if any service, agent, or MCP server matches
+		name := req
+		// Strip namespace prefix: "angee/postgres" → "postgres"
+		if idx := strings.LastIndex(req, "/"); idx >= 0 {
+			name = req[idx+1:]
+		}
+
+		found := false
+		if _, ok := cfg.Services[name]; ok {
+			found = true
+		}
+		if _, ok := cfg.Agents[name]; ok {
+			found = true
+		}
+		if _, ok := cfg.MCPServers[name]; ok {
+			found = true
+		}
+		// Also check installed components
+		if componentInstalled(name) {
+			found = true
+		}
+
+		if !found {
+			return fmt.Errorf("component %q requires %q which is not installed.\nAdd it first: angee add %s", comp.Name, req, req)
+		}
+	}
+	return nil
+}
+
+// componentInstalled is a placeholder — checks .angee/components/ for a record.
+func componentInstalled(name string) bool {
+	// This will be implemented to check the install records
+	return false
+}
+
+// resolveParams resolves component parameters from flags, defaults, or prompts.
+func resolveParams(comp *config.ComponentConfig, cfg *config.AngeeConfig, opts AddOptions) (map[string]string, error) {
+	params := make(map[string]string)
+
+	// Always include stack-level context
+	params["ProjectName"] = cfg.Name
+
+	for _, p := range comp.Parameters {
+		if val, ok := opts.Params[p.Name]; ok {
+			params[p.Name] = val
+		} else if p.Default != "" {
+			params[p.Name] = p.Default
+		} else if p.Required && !opts.Yes {
+			if opts.PromptFn != nil {
+				val, err := opts.PromptFn(p)
+				if err != nil {
+					return nil, err
+				}
+				params[p.Name] = val
+			} else {
+				return nil, fmt.Errorf("parameter %q is required — provide it with --param %s=<value>", p.Name, p.Name)
+			}
+		}
+	}
+
+	return params, nil
+}
+
+// renderComponent renders angee-component.yaml as a Go template with params.
+func renderComponent(compPath string, params map[string]string) (string, error) {
+	content, err := os.ReadFile(compPath)
+	if err != nil {
+		return "", err
+	}
+
+	tmpl, err := template.New("component").Parse(string(content))
+	if err != nil {
+		return "", fmt.Errorf("parsing component template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, params); err != nil {
+		return "", fmt.Errorf("rendering component template: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// validateNoConflicts checks that the component won't create naming conflicts.
+func validateNoConflicts(cfg *config.AngeeConfig, comp *config.ComponentConfig) error {
+	for name := range comp.Services {
+		if _, exists := cfg.Services[name]; exists {
+			return fmt.Errorf("service %q already exists in angee.yaml", name)
+		}
+	}
+	for name := range comp.Agents {
+		if _, exists := cfg.Agents[name]; exists {
+			return fmt.Errorf("agent %q already exists in angee.yaml", name)
+		}
+	}
+	return nil
+}
+
+// mergeComponent merges the rendered component into the stack config
+// and returns an installation record tracking what was added.
+func mergeComponent(cfg *config.AngeeConfig, comp *config.ComponentConfig) *config.InstalledComponent {
+	record := &config.InstalledComponent{}
+
+	// Repositories
+	if cfg.Repositories == nil && len(comp.Repositories) > 0 {
+		cfg.Repositories = make(map[string]config.RepositorySpec)
+	}
+	for k, v := range comp.Repositories {
+		cfg.Repositories[k] = v
+		record.Added.Repositories = append(record.Added.Repositories, k)
+	}
+
+	// Services
+	if cfg.Services == nil && len(comp.Services) > 0 {
+		cfg.Services = make(map[string]config.ServiceSpec)
+	}
+	for k, v := range comp.Services {
+		cfg.Services[k] = v
+		record.Added.Services = append(record.Added.Services, k)
+	}
+
+	// MCP Servers
+	if cfg.MCPServers == nil && len(comp.MCPServers) > 0 {
+		cfg.MCPServers = make(map[string]config.MCPServerSpec)
+	}
+	for k, v := range comp.MCPServers {
+		cfg.MCPServers[k] = v
+		record.Added.MCPServers = append(record.Added.MCPServers, k)
+	}
+
+	// Agents
+	if cfg.Agents == nil && len(comp.Agents) > 0 {
+		cfg.Agents = make(map[string]config.AgentSpec)
+	}
+	for k, v := range comp.Agents {
+		cfg.Agents[k] = v
+		record.Added.Agents = append(record.Added.Agents, k)
+	}
+
+	// Skills
+	if cfg.Skills == nil && len(comp.Skills) > 0 {
+		cfg.Skills = make(map[string]config.SkillSpec)
+	}
+	for k, v := range comp.Skills {
+		cfg.Skills[k] = v
+		record.Added.Skills = append(record.Added.Skills, k)
+	}
+
+	// Secrets (append, dedup)
+	existing := make(map[string]bool)
+	for _, s := range cfg.Secrets {
+		existing[s.Name] = true
+	}
+	for _, s := range comp.Secrets {
+		if !existing[s.Name] {
+			cfg.Secrets = append(cfg.Secrets, s)
+			record.Added.Secrets = append(record.Added.Secrets, s.Name)
+			existing[s.Name] = true
+		}
+	}
+
+	return record
+}
+
+// cloneRepositories clones any new repositories defined by the component.
+func cloneRepositories(cfg *config.AngeeConfig, rootPath string) error {
+	for name, repo := range cfg.Repositories {
+		if repo.URL == "" {
+			continue
+		}
+		destPath := repo.Path
+		if destPath == "" {
+			destPath = filepath.Join("src", name)
+		}
+		absPath := filepath.Join(rootPath, destPath)
+
+		// Skip if directory already exists and is non-empty
+		if entries, err := os.ReadDir(absPath); err == nil && len(entries) > 0 {
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			return err
+		}
+
+		args := []string{"clone"}
+		if repo.Branch != "" {
+			args = append(args, "--branch", repo.Branch)
+		}
+		args = append(args, repo.URL, absPath)
+
+		cmd := exec.Command("git", args...)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("cloning %s: %w", repo.URL, err)
+		}
+	}
+	return nil
+}
+
+// processFiles handles the component file manifest.
+func processFiles(compDir, rootPath string, comp *config.ComponentConfig) error {
+	// Copy deploy-time templates to ANGEE_ROOT
+	for _, tmplName := range comp.Templates {
+		src := filepath.Join(compDir, tmplName)
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			src = filepath.Join(compDir, "templates", tmplName)
+		}
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		dst := filepath.Join(rootPath, tmplName)
+		if _, err := os.Stat(dst); err == nil {
+			continue // don't overwrite
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return err
+		}
+	}
+
+	// Process file manifest
+	for _, f := range comp.Files {
+		srcPath := filepath.Join(compDir, f.Source)
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			continue
+		}
+
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", f.Source, err)
+		}
+
+		var dstPath string
+		switch f.Target {
+		case "workspace":
+			agent := f.Agent
+			if agent == "" {
+				// Infer from path: agents/<name>/... → agent name
+				parts := strings.Split(f.Source, "/")
+				if len(parts) >= 2 && parts[0] == "agents" {
+					agent = parts[1]
+				}
+			}
+			if agent == "" {
+				continue
+			}
+			dstDir := filepath.Join(rootPath, "agents", agent, "workspace")
+			if err := os.MkdirAll(dstDir, 0755); err != nil {
+				return err
+			}
+			dstPath = filepath.Join(dstDir, filepath.Base(f.Source))
+
+		case "root":
+			dstPath = filepath.Join(rootPath, filepath.Base(f.Source))
+
+		case "config":
+			agent := f.Agent
+			if agent == "" {
+				continue
+			}
+			dstDir := filepath.Join(rootPath, "agents", agent)
+			if err := os.MkdirAll(dstDir, 0755); err != nil {
+				return err
+			}
+			dstPath = filepath.Join(dstDir, filepath.Base(f.Source))
+
+		default:
+			dstPath = filepath.Join(rootPath, filepath.Base(f.Source))
+		}
+
+		// Don't overwrite existing files
+		if _, err := os.Stat(dstPath); err == nil {
+			continue
+		}
+
+		perm := os.FileMode(0644)
+		if f.Executable {
+			perm = 0755
+		}
+		if err := os.WriteFile(dstPath, data, perm); err != nil {
+			return fmt.Errorf("writing %s: %w", dstPath, err)
+		}
+	}
+
+	// Copy agent workspace files from agents/ directory in component
+	agentsDir := filepath.Join(compDir, "agents")
+	if info, err := os.Stat(agentsDir); err == nil && info.IsDir() {
+		entries, _ := os.ReadDir(agentsDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			agentName := entry.Name()
+			srcDir := filepath.Join(agentsDir, agentName)
+			dstDir := filepath.Join(rootPath, "agents", agentName, "workspace")
+			if err := os.MkdirAll(dstDir, 0755); err != nil {
+				return err
+			}
+			files, _ := os.ReadDir(srcDir)
+			for _, f := range files {
+				if f.IsDir() {
+					continue
+				}
+				srcFile := filepath.Join(srcDir, f.Name())
+				dstFile := filepath.Join(dstDir, f.Name())
+				if _, err := os.Stat(dstFile); err == nil {
+					continue
+				}
+				d, err := os.ReadFile(srcFile)
+				if err != nil {
+					continue
+				}
+				os.WriteFile(dstFile, d, 0644)
+			}
+		}
+	}
+
+	return nil
+}
+
+// cacheCredentialOutputs writes the full ComponentConfig to .angee/credential-outputs/
+// so the compiler can resolve credential_bindings at deploy time.
+func cacheCredentialOutputs(rootPath string, comp *config.ComponentConfig) error {
+	dir := filepath.Join(rootPath, ".angee", "credential-outputs")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(comp)
+	if err != nil {
+		return err
+	}
+	filename := strings.ReplaceAll(comp.Credential.Name, "/", "-") + ".yaml"
+	return os.WriteFile(filepath.Join(dir, filename), data, 0644)
+}
+
+// writeInstallRecord writes the component installation record to .angee/components/.
+func writeInstallRecord(rootPath string, record *config.InstalledComponent) error {
+	dir := filepath.Join(rootPath, ".angee", "components")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	// Sanitize name for filename: "fyltr/fyltr-django" → "fyltr-fyltr-django"
+	filename := strings.ReplaceAll(record.Name, "/", "-") + ".yaml"
+	data, err := yaml.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, filename), data, 0644)
+}

@@ -27,7 +27,10 @@ func TestMCPToolDefinitions(t *testing.T) {
 		"agent_start":     false,
 		"agent_stop":      false,
 		"agent_logs":      false,
-		"history":         false,
+		"history":            false,
+		"credentials_list":   false,
+		"credentials_set":    false,
+		"credentials_delete": false,
 	}
 
 	for _, tool := range tools {

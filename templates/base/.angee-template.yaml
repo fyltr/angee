@@ -1,0 +1,17 @@
+name: official/angee-base
+description: |
+  Minimal Angee platform — operator + traefik + MCP servers.
+  Add components with: angee init --with postgres --with redis --with angee-admin
+  Or ask the admin agent to add them at runtime.
+version: "1.0"
+author: angee
+
+parameters:
+  - name: ProjectName
+    description: "Project name (lowercase, hyphens)"
+    required: true
+    validate: "^[a-z][a-z0-9-]+$"
+
+  - name: Domain
+    description: "Primary domain (e.g. myapp.io or localhost)"
+    default: "localhost"

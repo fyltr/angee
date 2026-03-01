@@ -1,0 +1,154 @@
+name: angee-django
+description: |
+  Django application framework with Celery workers.
+  Requires: postgres, redis.
+  Source: https://github.com/fyltr/angee-django
+
+requires:
+  - postgres          # service
+  - redis             # service
+
+parameters:
+  - name: Domain
+    description: "Primary domain for Django"
+    default: "localhost"
+
+  - name: DjangoWorkers
+    description: "Number of gunicorn workers"
+    default: "3"
+
+  - name: DjangoCPU
+    description: "CPU limit for Django"
+    default: "1.0"
+
+  - name: DjangoMemory
+    description: "Memory limit for Django"
+    default: "1Gi"
+
+  - name: CeleryWorkers
+    description: "Number of Celery worker processes"
+    default: "4"
+
+  - name: CeleryCPU
+    description: "CPU limit for Celery worker"
+    default: "1.0"
+
+  - name: CeleryMemory
+    description: "Memory limit for Celery worker"
+    default: "1Gi"
+
+  - name: MediaSize
+    description: "Django media volume size"
+    default: "10Gi"
+
+repositories:
+  base:
+    url: https://github.com/fyltr/angee-django
+    branch: main
+    role: base
+
+services:
+  django:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    lifecycle: platform
+    domains:
+      - host: "{{ .Domain }}"
+        port: 8000
+        tls: false
+    resources:
+      cpu: "{{ .DjangoCPU }}"
+      memory: "{{ .DjangoMemory }}"
+    env:
+      DATABASE_URL: "${secret:db-url}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+      ALLOWED_HOSTS: "{{ .Domain }},localhost,127.0.0.1"
+      DEBUG: "false"
+      GUNICORN_WORKERS: "{{ .DjangoWorkers }}"
+    health:
+      path: /health/
+      port: 8000
+      interval: 30s
+      timeout: 5s
+    volumes:
+      - name: django-media
+        path: /app/media
+        persistent: true
+        size: "{{ .MediaSize }}"
+    depends_on:
+      - postgres
+      - redis
+
+  celery-worker:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    command: "celery -A config worker --loglevel=info --concurrency={{ .CeleryWorkers }} --max-tasks-per-child=500"
+    lifecycle: worker
+    resources:
+      cpu: "{{ .CeleryCPU }}"
+      memory: "{{ .CeleryMemory }}"
+    env:
+      DATABASE_URL: "${secret:db-url}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+    depends_on:
+      - postgres
+      - redis
+
+  celery-beat:
+    build:
+      context: src/base
+      dockerfile: Dockerfile
+    command: celery -A config beat --loglevel=info --scheduler=django_celery_beat.schedulers:DatabaseScheduler
+    lifecycle: worker
+    replicas: 1
+    resources:
+      cpu: "0.25"
+      memory: "256Mi"
+    env:
+      DATABASE_URL: "${secret:db-url}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      SECRET_KEY: "${secret:django-secret-key}"
+    depends_on:
+      - postgres
+      - redis
+
+mcp_servers:
+  django-mcp:
+    transport: streamable-http
+    url: http://django:8000/mcp/
+    credentials:
+      source: service_account
+      scopes:
+        - messages.read
+        - messages.write
+        - contacts.read
+        - agents.read
+        - agents.write
+
+secrets:
+  - name: django-secret-key
+    description: "Django SECRET_KEY — 50-char random string"
+    required: true
+    generated: true
+    length: 50
+    charset: "abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)"
+
+# Recommended agent additions when using angee-django:
+#
+# Add django-mcp to angee-admin's mcp_servers list:
+#   agents.angee-admin.mcp_servers: [angee-operator, angee-files, django-mcp]
+#
+# Add angee-developer agent with workspace pointing to the base repo:
+#   Use the angee-developer component with:
+#     workspace.repository: base
+#     mcp_servers: [angee-files, django-mcp]

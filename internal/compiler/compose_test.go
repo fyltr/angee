@@ -711,3 +711,82 @@ func TestCompileSkillNoDuplicateMCPServers(t *testing.T) {
 		t.Errorf("expected exactly 1 ANGEE_MCP_OPERATOR_URL, got %d", count)
 	}
 }
+
+func TestCompileAgentCredentialBindings(t *testing.T) {
+	c := newTestCompiler(t)
+	c.CredentialOutputs = map[string][]config.CredentialOutput{
+		"github-oauth": {
+			{Type: "env", Key: "GITHUB_TOKEN", ValuePath: "access_token"},
+			{Type: "file", Template: "templates/github_auth.json.tmpl", Mount: "/root/.config/opencode/providers/github.json"},
+		},
+	}
+
+	cfg := &config.AngeeConfig{
+		Name: "cred-bind-test",
+		Agents: map[string]config.AgentSpec{
+			"dev": {
+				Image:              "agent:latest",
+				CredentialBindings: []string{"github-oauth"},
+			},
+			"admin": {
+				Image: "agent:latest",
+				// No credential bindings — should not get cred outputs
+			},
+		},
+	}
+
+	cf, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	// Dev agent should have GITHUB_TOKEN env var and file mount
+	dev := cf.Services["agent-dev"]
+	hasGHToken := false
+	for _, env := range dev.Environment {
+		if strings.HasPrefix(env, "GITHUB_TOKEN=") {
+			hasGHToken = true
+		}
+	}
+	if !hasGHToken {
+		t.Errorf("expected GITHUB_TOKEN env var from credential binding, got env: %v", dev.Environment)
+	}
+
+	hasGHMount := false
+	for _, v := range dev.Volumes {
+		if strings.Contains(v, "github.json") && strings.Contains(v, "/root/.config/opencode/providers/github.json") {
+			hasGHMount = true
+		}
+	}
+	if !hasGHMount {
+		t.Errorf("expected github.json file mount from credential binding, got volumes: %v", dev.Volumes)
+	}
+
+	// Admin agent should NOT have credential outputs
+	admin := cf.Services["agent-admin"]
+	for _, env := range admin.Environment {
+		if strings.HasPrefix(env, "GITHUB_TOKEN=") {
+			t.Error("admin agent should not have GITHUB_TOKEN — no credential_bindings set")
+		}
+	}
+}
+
+func TestCompileAgentCredentialBindings_NilOutputs(t *testing.T) {
+	c := newTestCompiler(t)
+	// CredentialOutputs is nil — should not panic
+
+	cfg := &config.AngeeConfig{
+		Name: "cred-nil-test",
+		Agents: map[string]config.AgentSpec{
+			"dev": {
+				Image:              "agent:latest",
+				CredentialBindings: []string{"nonexistent"},
+			},
+		},
+	}
+
+	_, err := c.Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile() should not error with nil CredentialOutputs: %v", err)
+	}
+}

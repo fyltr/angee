@@ -320,6 +320,58 @@ func TestRenderedFilePath(t *testing.T) {
 	}
 }
 
+func TestRenderCredentialFiles(t *testing.T) {
+	rootDir := t.TempDir()
+	agentDir := t.TempDir()
+
+	// Create a credential file template
+	tmplContent := `{"agent": "{{ .AgentName }}", "token": "placeholder"}
+`
+	if err := os.MkdirAll(filepath.Join(rootDir, "templates"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "templates", "github_auth.json.tmpl"), []byte(tmplContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := config.AgentSpec{
+		Image:              "agent:latest",
+		CredentialBindings: []string{"github-oauth"},
+	}
+
+	credOutputs := map[string][]config.CredentialOutput{
+		"github-oauth": {
+			{Type: "env", Key: "GITHUB_TOKEN"},
+			{Type: "file", Template: "templates/github_auth.json.tmpl", Mount: "/root/.config/github.json"},
+		},
+	}
+
+	if err := RenderCredentialFiles(rootDir, agentDir, agent, credOutputs, nil); err != nil {
+		t.Fatalf("RenderCredentialFiles() error: %v", err)
+	}
+
+	// Check rendered file exists
+	data, err := os.ReadFile(filepath.Join(agentDir, "github.json"))
+	if err != nil {
+		t.Fatalf("reading rendered credential file: %v", err)
+	}
+
+	agentName := filepath.Base(agentDir)
+	expected := `{"agent": "` + agentName + `", "token": "placeholder"}` + "\n"
+	if string(data) != expected {
+		t.Errorf("rendered content = %q, want %q", string(data), expected)
+	}
+}
+
+func TestRenderCredentialFilesNoBindings(t *testing.T) {
+	// Should be a no-op when no credential bindings
+	agent := config.AgentSpec{Image: "agent:latest"}
+	err := RenderCredentialFiles(t.TempDir(), t.TempDir(), agent, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestToJSON(t *testing.T) {
 	result, err := toJSON(map[string]string{"hello": "world"})
 	if err != nil {

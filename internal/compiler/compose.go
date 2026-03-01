@@ -81,9 +81,10 @@ const AgentServicePrefix = "agent-"
 
 // Compiler translates an AngeeConfig into a ComposeFile.
 type Compiler struct {
-	Network  string // docker network name
-	RootPath string // path to ANGEE_ROOT (for volume mounts)
-	APIKey   string // operator API key, auto-injected into operator-role agents
+	Network              string                            // docker network name
+	RootPath             string                            // path to ANGEE_ROOT (for volume mounts)
+	APIKey               string                            // operator API key, auto-injected into operator-role agents
+	CredentialOutputs    map[string][]config.CredentialOutput // credential name → outputs (loaded from installed components)
 }
 
 // New creates a Compiler with the given settings.
@@ -324,6 +325,32 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 		cs.Environment = append(cs.Environment, "ANGEE_MCP_SERVERS="+strings.Join(mcpList, ","))
 	}
 
+	// Credential binding resolution: resolve credential outputs into env vars and file mounts.
+	if len(agent.CredentialBindings) > 0 && c.CredentialOutputs != nil {
+		for _, credName := range agent.CredentialBindings {
+			outputs, ok := c.CredentialOutputs[credName]
+			if !ok {
+				continue
+			}
+			for _, out := range outputs {
+				switch out.Type {
+				case "env":
+					if out.Key != "" {
+						// Inject as ${secret:credName} → resolves to env var via the secrets backend.
+						// The actual value comes from the credential stored in vault/env.
+						cs.Environment = append(cs.Environment, out.Key+"="+resolveSecretRefs("${secret:"+credName+"}"))
+					}
+				case "file":
+					if out.Template != "" && out.Mount != "" {
+						// Add a file mount for credential config files.
+						src := fmt.Sprintf("./agents/%s/%s", name, filepath.Base(out.Mount))
+						cs.Volumes = append(cs.Volumes, src+":"+out.Mount+":ro")
+					}
+				}
+			}
+		}
+	}
+
 	// Agent-declared config file mounts.
 	// Template files under /workspace/ are written into the workspace dir by
 	// RenderAgentFiles, so they don't need a separate volume mount (they're
@@ -423,6 +450,67 @@ func resolveSecretRefs(v string) string {
 		envKey := strings.ToUpper(strings.ReplaceAll(secretName, "-", "_"))
 		v = v[:start] + "${" + envKey + "}" + v[end+1:]
 	}
+}
+
+// LoadCredentialOutputs scans installed component records for credential
+// definitions and builds a map of credential name → outputs. This is used
+// by the compiler to resolve agent credential_bindings at compile time.
+func LoadCredentialOutputs(rootPath string) map[string][]config.CredentialOutput {
+	outputs := make(map[string][]config.CredentialOutput)
+	compDir := filepath.Join(rootPath, ".angee", "components")
+	entries, err := os.ReadDir(compDir)
+	if err != nil {
+		return outputs
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(compDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var record config.InstalledComponent
+		if err := yaml.Unmarshal(data, &record); err != nil {
+			continue
+		}
+		if record.Type != "credential" {
+			continue
+		}
+		// Load the original component to get credential outputs.
+		// The install record tracks what was added, but the actual credential
+		// definition outputs need to be stored separately. For now, we look
+		// for the credential definition in the angee.yaml secrets/credential
+		// structure, or we can load from a cached component config.
+		// Simplified: store credential outputs in the install record.
+		// See the CredentialOutputs field below.
+	}
+
+	// Also scan for credential components that have a cached component.yaml
+	// in .angee/components/<name>/
+	cacheDir := filepath.Join(rootPath, ".angee", "credential-outputs")
+	entries, err = os.ReadDir(cacheDir)
+	if err != nil {
+		return outputs
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(cacheDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var comp config.ComponentConfig
+		if err := yaml.Unmarshal(data, &comp); err != nil {
+			continue
+		}
+		if comp.Credential != nil && len(comp.Credential.Outputs) > 0 {
+			outputs[comp.Credential.Name] = comp.Credential.Outputs
+		}
+	}
+
+	return outputs
 }
 
 // Write serializes a ComposeFile to a YAML file.

@@ -102,6 +102,71 @@ func isUnderWorkspace(mount string) bool {
 	return mount == "/workspace" || strings.HasPrefix(mount, "/workspace/")
 }
 
+// RenderCredentialFiles renders credential file templates for agents that
+// have credential_bindings. For each binding with a "file" output, the
+// template is rendered with AgentFileData and written to the agent directory
+// so the volume mount added by compileAgent resolves at container start.
+func RenderCredentialFiles(rootPath, agentDir string, agent config.AgentSpec, credOutputs map[string][]config.CredentialOutput, allMCP map[string]config.MCPServerSpec) error {
+	if len(agent.CredentialBindings) == 0 || credOutputs == nil {
+		return nil
+	}
+
+	// Resolve MCP servers for template data
+	resolved := make(map[string]config.MCPServerSpec)
+	for _, name := range agent.MCPServers {
+		if spec, ok := allMCP[name]; ok {
+			resolved[name] = spec
+		}
+	}
+
+	data := AgentFileData{
+		AgentName:  filepath.Base(agentDir),
+		Agent:      agent,
+		MCPServers: resolved,
+	}
+
+	for _, credName := range agent.CredentialBindings {
+		outputs, ok := credOutputs[credName]
+		if !ok {
+			continue
+		}
+		for _, out := range outputs {
+			if out.Type != "file" || out.Template == "" || out.Mount == "" {
+				continue
+			}
+
+			tmplPath := filepath.Join(rootPath, out.Template)
+			content, err := os.ReadFile(tmplPath)
+			if err != nil {
+				return fmt.Errorf("reading credential template %s: %w", out.Template, err)
+			}
+
+			t, err := template.New(filepath.Base(out.Template)).Funcs(templateFuncs).Parse(string(content))
+			if err != nil {
+				return fmt.Errorf("parsing credential template %s: %w", out.Template, err)
+			}
+
+			var buf bytes.Buffer
+			if err := t.Execute(&buf, data); err != nil {
+				return fmt.Errorf("rendering credential template %s: %w", out.Template, err)
+			}
+
+			// Write to agent directory (same path logic as compileAgent volume mount)
+			outPath := filepath.Join(agentDir, filepath.Base(out.Mount))
+			if dir := filepath.Dir(outPath); dir != agentDir {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return fmt.Errorf("creating directory for %s: %w", outPath, err)
+				}
+			}
+			if err := os.WriteFile(outPath, buf.Bytes(), 0644); err != nil {
+				return fmt.Errorf("writing credential file %s: %w", outPath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // --- Template functions ---
 
 // opencodeMCP generates a complete opencode.json config from MCP server specs.

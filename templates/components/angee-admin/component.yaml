@@ -1,0 +1,37 @@
+name: angee-admin
+description: "Platform admin agent — manages deployment, config, and infrastructure"
+
+requires:
+  - angee-operator    # MCP server (provided by base)
+  - angee-files       # MCP server (provided by base)
+
+agents:
+  angee-admin:
+    image: ghcr.io/anomalyco/opencode:latest
+    command: serve --hostname 0.0.0.0 --port 4096
+    lifecycle: system
+    role: operator
+    description: "Platform admin — manages deployment, config, services, and infrastructure"
+    mcp_servers:
+      - angee-operator
+      - angee-files
+    files:
+      - template: opencode.json.tmpl
+        mount: /root/.config/opencode/opencode.json
+    workspace:
+      persistent: true
+    env:
+      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
+
+secrets:
+  - name: anthropic-api-key
+    description: "Anthropic API key for AI agents (get yours at console.anthropic.com)"
+    required: true
+
+# Agent workspace files (copied to agents/angee-admin/workspace/)
+files:
+  - agents/angee-admin/AGENTS.md
+
+# Template files (copied to ANGEE_ROOT)
+templates:
+  - opencode.json.tmpl

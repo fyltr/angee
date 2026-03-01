@@ -73,6 +73,10 @@ func init() {
 		pullCmd,
 		restartCmd,
 		updateCmd,
+		addCmd,
+		removeCmd,
+		listComponentsCmd,
+		credentialCmd,
 	)
 }
 

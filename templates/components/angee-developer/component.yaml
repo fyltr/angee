@@ -1,0 +1,36 @@
+name: angee-developer
+description: "Developer agent — writes code, fixes bugs, reviews PRs"
+
+requires:
+  - angee-files       # MCP server (provided by base)
+
+agents:
+  angee-developer:
+    image: ghcr.io/anomalyco/opencode:latest
+    command: serve --hostname 0.0.0.0 --port 4096
+    lifecycle: system
+    role: user
+    description: "Developer agent — writes code, fixes bugs, reviews PRs"
+    mcp_servers:
+      - angee-files
+    files:
+      - template: opencode.json.tmpl
+        mount: /root/.config/opencode/opencode.json
+    workspace:
+      persistent: true
+    resources:
+      cpu: "2.0"
+      memory: "4Gi"
+    env:
+      ANTHROPIC_API_KEY: "${secret:anthropic-api-key}"
+
+secrets:
+  - name: anthropic-api-key
+    description: "Anthropic API key for AI agents"
+    required: true
+
+files:
+  - agents/angee-developer/AGENTS.md
+
+templates:
+  - opencode.json.tmpl

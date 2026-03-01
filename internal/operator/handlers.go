@@ -112,6 +112,19 @@ func (s *Server) prepareAndCompile(cfg *config.AngeeConfig) error {
 			return fmt.Errorf("agent files for %s: %w", agentName, err)
 		}
 	}
+
+	// Load cached credential outputs so the compiler can resolve credential_bindings.
+	s.Compiler.CredentialOutputs = compiler.LoadCredentialOutputs(s.Root.Path)
+
+	// Render credential file templates for agents with credential_bindings.
+	if s.Compiler.CredentialOutputs != nil {
+		for agentName, agent := range cfg.Agents {
+			if err := compiler.RenderCredentialFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, s.Compiler.CredentialOutputs, cfg.MCPServers); err != nil {
+				return fmt.Errorf("credential files for %s: %w", agentName, err)
+			}
+		}
+	}
+
 	return s.compileAndWrite(cfg)
 }
 

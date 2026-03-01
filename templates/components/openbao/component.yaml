@@ -1,0 +1,28 @@
+name: openbao
+description: "OpenBao — secrets management and credential storage"
+
+services:
+  openbao:
+    image: openbao/openbao:2
+    lifecycle: system
+    ports:
+      - "8200:8200"
+    command: server -dev -dev-root-token-id=dev-root-token
+    env:
+      BAO_DEV_ROOT_TOKEN_ID: dev-root-token
+    volumes:
+      - name: bao-data
+        path: /openbao/data
+        persistent: true
+
+# When openbao is present, the stack can use it as secrets backend.
+# Add this to the top level of angee.yaml:
+#
+# secrets_backend:
+#   type: openbao
+#   openbao:
+#     address: http://openbao:8200
+#     auth:
+#       method: token
+#       token_env: BAO_TOKEN
+#     prefix: angee

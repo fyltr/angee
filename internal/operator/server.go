@@ -13,6 +13,7 @@ import (
 
 	"github.com/fyltr/angee/internal/compiler"
 	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/credentials"
 	"github.com/fyltr/angee/internal/git"
 	"github.com/fyltr/angee/internal/root"
 	"github.com/fyltr/angee/internal/runtime"
@@ -21,13 +22,14 @@ import (
 
 // Server is the angee operator: it owns ANGEE_ROOT and manages the runtime.
 type Server struct {
-	Root     *root.Root
-	Cfg      *config.OperatorConfig
-	Backend  runtime.RuntimeBackend
-	Compiler *compiler.Compiler
-	Git      *git.Repo
-	Log      *slog.Logger
-	Health   *HealthChecker
+	Root        *root.Root
+	Cfg         *config.OperatorConfig
+	Backend     runtime.RuntimeBackend
+	Compiler    *compiler.Compiler
+	Git         *git.Repo
+	Log         *slog.Logger
+	Health      *HealthChecker
+	Credentials credentials.Backend
 
 	// healthCancel stops the current health-probe goroutines so they can be
 	// restarted with an updated config after a deploy.
@@ -75,6 +77,14 @@ func New(angeeRoot string, logger *slog.Logger) (*Server, error) {
 		projectName = "angee"
 	}
 
+	// Initialize credentials backend
+	credBackend, err := credentials.NewBackend(angeeCfg, angeeRoot)
+	if err != nil {
+		logger.Warn("credentials backend unavailable", "error", err)
+	} else {
+		s.Credentials = credBackend
+	}
+
 	// Select runtime backend
 	switch cfg.Runtime {
 	case "kubernetes":
@@ -117,6 +127,12 @@ func (s *Server) Handler() http.Handler {
 
 	// Git history
 	mux.HandleFunc("GET /history", s.handleHistory)
+
+	// Credentials
+	mux.HandleFunc("GET /credentials", s.handleCredentialsList)
+	mux.HandleFunc("GET /credentials/{name}", s.handleCredentialGet)
+	mux.HandleFunc("POST /credentials/{name}", s.handleCredentialSet)
+	mux.HandleFunc("DELETE /credentials/{name}", s.handleCredentialDelete)
 
 	// MCP endpoint (JSON-RPC 2.0 over streamable HTTP)
 	mux.HandleFunc("POST /mcp", s.handleMCP)

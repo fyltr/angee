@@ -1,0 +1,23 @@
+name: redis
+description: "Redis — in-memory cache and message broker"
+
+parameters:
+  - name: RedisSize
+    description: "Redis volume size"
+    default: "2Gi"
+
+services:
+  redis:
+    image: redis:7-alpine
+    lifecycle: sidecar
+    command: >-
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - name: redis-data
+        path: /data
+        persistent: true
+        size: "{{ .RedisSize }}"

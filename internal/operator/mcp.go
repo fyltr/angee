@@ -183,6 +183,12 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 		return s.toolAgentLogs(ctx, args)
 	case "history":
 		return s.toolHistory(args)
+	case "credentials_list":
+		return s.toolCredentialsList(ctx)
+	case "credentials_set":
+		return s.toolCredentialsSet(ctx, args)
+	case "credentials_delete":
+		return s.toolCredentialsDelete(ctx, args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -479,6 +485,61 @@ func (s *Server) toolHistory(args json.RawMessage) ([]api.CommitInfo, error) {
 	return resp, nil
 }
 
+// ── Credential tool implementations ──────────────────────────────────────────
+
+func (s *Server) toolCredentialsList(ctx context.Context) (any, error) {
+	if s.Credentials == nil {
+		return nil, fmt.Errorf("credentials backend not configured")
+	}
+	names, err := s.Credentials.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if names == nil {
+		names = []string{}
+	}
+	return map[string]any{"names": names, "backend": s.Credentials.Type()}, nil
+}
+
+func (s *Server) toolCredentialsSet(ctx context.Context, args json.RawMessage) (any, error) {
+	if s.Credentials == nil {
+		return nil, fmt.Errorf("credentials backend not configured")
+	}
+	var req struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.Name == "" || req.Value == "" {
+		return nil, fmt.Errorf("name and value are required")
+	}
+	if err := s.Credentials.Set(ctx, req.Name, req.Value); err != nil {
+		return nil, err
+	}
+	return map[string]string{"status": "ok", "name": req.Name}, nil
+}
+
+func (s *Server) toolCredentialsDelete(ctx context.Context, args json.RawMessage) (any, error) {
+	if s.Credentials == nil {
+		return nil, fmt.Errorf("credentials backend not configured")
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.Name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if err := s.Credentials.Delete(ctx, req.Name); err != nil {
+		return nil, err
+	}
+	return map[string]string{"status": "ok", "name": req.Name}, nil
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 func mcpWriteResult(w http.ResponseWriter, id any, result any) {
@@ -562,6 +623,22 @@ func mcpToolDefinitions() []mcpToolDef {
 			"properties": map[string]any{
 				"n": map[string]any{"type": "integer", "description": "Number of commits (default: 20)"},
 			},
+		}},
+		{Name: "credentials_list", Description: "List all credential names and backend type", InputSchema: obj},
+		{Name: "credentials_set", Description: "Store a credential value", InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":  map[string]any{"type": "string", "description": "Credential name"},
+				"value": map[string]any{"type": "string", "description": "Credential value"},
+			},
+			"required": []string{"name", "value"},
+		}},
+		{Name: "credentials_delete", Description: "Delete a credential", InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Credential name"},
+			},
+			"required": []string{"name"},
 		}},
 	}
 }

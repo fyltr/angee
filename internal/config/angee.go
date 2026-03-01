@@ -10,14 +10,37 @@ import (
 
 // AngeeConfig is the top-level structure of angee.yaml.
 type AngeeConfig struct {
-	Name         string                     `yaml:"name"`
-	Version      string                     `yaml:"version,omitempty"`
-	Repositories map[string]RepositorySpec  `yaml:"repositories,omitempty"`
-	Services     map[string]ServiceSpec     `yaml:"services,omitempty"`
-	MCPServers   map[string]MCPServerSpec   `yaml:"mcp_servers,omitempty"`
-	Agents       map[string]AgentSpec       `yaml:"agents,omitempty"`
-	Skills       map[string]SkillSpec       `yaml:"skills,omitempty"`
-	Secrets      []SecretRef               `yaml:"secrets,omitempty"`
+	Name           string                    `yaml:"name"`
+	Version        string                    `yaml:"version,omitempty"`
+	Environment    string                    `yaml:"environment,omitempty"`        // dev | staging | prod
+	SecretsBackend *SecretsBackendConfig     `yaml:"secrets_backend,omitempty"`
+	Repositories   map[string]RepositorySpec `yaml:"repositories,omitempty"`
+	Services       map[string]ServiceSpec    `yaml:"services,omitempty"`
+	MCPServers     map[string]MCPServerSpec  `yaml:"mcp_servers,omitempty"`
+	Agents         map[string]AgentSpec      `yaml:"agents,omitempty"`
+	Skills         map[string]SkillSpec      `yaml:"skills,omitempty"`
+	Secrets        []SecretRef               `yaml:"secrets,omitempty"`
+}
+
+// SecretsBackendConfig configures the credential resolution backend.
+type SecretsBackendConfig struct {
+	Type    string         `yaml:"type"`              // "env" | "openbao"
+	OpenBao *OpenBaoConfig `yaml:"openbao,omitempty"`
+}
+
+// OpenBaoConfig holds connection details for the OpenBao secrets backend.
+type OpenBaoConfig struct {
+	Address string            `yaml:"address"`
+	Auth    OpenBaoAuthConfig `yaml:"auth"`
+	Prefix  string            `yaml:"prefix,omitempty"` // KV path prefix, default "angee"
+}
+
+// OpenBaoAuthConfig defines how the operator authenticates to OpenBao.
+type OpenBaoAuthConfig struct {
+	Method      string `yaml:"method"`                 // "token" | "approle"
+	TokenEnv    string `yaml:"token_env,omitempty"`     // env var containing the token
+	RoleIDEnv   string `yaml:"role_id_env,omitempty"`   // env var for AppRole role_id
+	SecretIDEnv string `yaml:"secret_id_env,omitempty"` // env var for AppRole secret_id
 }
 
 // SkillSpec defines a reusable agent capability (a named bundle of
@@ -135,21 +158,23 @@ type FileMount struct {
 
 // AgentSpec defines an AI agent.
 type AgentSpec struct {
-	Image        string            `yaml:"image,omitempty"`
-	Command      string            `yaml:"command,omitempty"`
-	Template     string            `yaml:"template,omitempty"`
-	Version      string            `yaml:"version,omitempty"`
-	Lifecycle    string            `yaml:"lifecycle,omitempty"`  // system | on-demand
-	Role         string            `yaml:"role,omitempty"`       // operator | user
-	MCPServers   []string          `yaml:"mcp_servers,omitempty"`
-	Skills       []string          `yaml:"skills,omitempty"`
-	Files        []FileMount       `yaml:"files,omitempty"`
-	RunAs        string            `yaml:"run_as,omitempty"`
-	Workspace    WorkspaceSpec     `yaml:"workspace,omitempty"`
-	Resources    ResourceSpec      `yaml:"resources,omitempty"`
-	Env          map[string]string `yaml:"env,omitempty"`
-	SystemPrompt string            `yaml:"system_prompt,omitempty"`
-	Description  string            `yaml:"description,omitempty"`
+	Image              string            `yaml:"image,omitempty"`
+	Command            string            `yaml:"command,omitempty"`
+	Template           string            `yaml:"template,omitempty"`
+	Version            string            `yaml:"version,omitempty"`
+	Lifecycle          string            `yaml:"lifecycle,omitempty"`            // system | on-demand
+	Role               string            `yaml:"role,omitempty"`                 // operator | user
+	MCPServers         []string          `yaml:"mcp_servers,omitempty"`
+	Skills             []string          `yaml:"skills,omitempty"`
+	Files              []FileMount       `yaml:"files,omitempty"`
+	RunAs              string            `yaml:"run_as,omitempty"`
+	Workspace          WorkspaceSpec     `yaml:"workspace,omitempty"`
+	Resources          ResourceSpec      `yaml:"resources,omitempty"`
+	Env                map[string]string `yaml:"env,omitempty"`
+	SystemPrompt       string            `yaml:"system_prompt,omitempty"`
+	Description        string            `yaml:"description,omitempty"`
+	CredentialBindings []string          `yaml:"credential_bindings,omitempty"` // credential names this agent can access
+	Permissions        []string          `yaml:"permissions,omitempty"`         // operator-enforced capability permissions
 }
 
 // WorkspaceSpec defines the git workspace for an agent.
