@@ -470,31 +470,216 @@ All without any code changes to the Django app — just a YAML edit and deploy.
 
 ---
 
-## Dynamic Connectors: Adding Email Accounts at Runtime
+## Managing Connectors: The Operator API as Single Source of Truth
 
-The example above shows static connectors — declared once in `angee.yaml` at init time. But Unibox is a multi-account messaging platform. Users add and remove email accounts, WhatsApp numbers, and other sources through the Django UI at runtime. A redeploy for every new Gmail account is wrong.
+Unibox is a multi-account messaging platform. Users add Gmail accounts, IMAP servers, WhatsApp numbers, and other sources over time through the Django UI. The operator's connector API is the **single source of truth** — everyone (CLI, agents, Django) talks to the same API.
 
-### The Problem
+### The Architecture
 
-A user has three Gmail accounts (personal, work, client) and two IMAP accounts (company server, shared inbox). They add these through the Unibox UI over days and weeks. Each needs OAuth tokens or passwords stored securely, and all must survive a full stack rebuild from scratch.
+```
+angee.yaml + OpenBao = single source of truth
+        │
+        ▼
+  operator API (/connectors, /credentials)
+        │
+        ├── angee CLI         →  angee connect gmail-work
+        ├── angee admin agent →  via MCP tools
+        └── Django            →  via django-angee app
+```
 
-### The Solution: Two Tiers of Connectors
+There's no special "tier 1 vs tier 2" distinction. Every connector is managed through the same API. The `env` field on a connector is just a convenience — if present, the compiler injects credentials as env vars at deploy time. But the canonical way to access connectors at runtime is through the operator API.
 
-**Tier 1 — Platform connectors** (static, declared in angee.yaml at init):
+### django-angee: The Django Client
 
-These are infrastructure-level accounts that the stack itself needs to function. They're injected as env vars at deploy time. Examples: the Anthropic API key for agents, the GitHub OAuth for the developer agent, the initial Google account.
+`django-angee` is a thin Django app that wraps the operator API. Any Django application on the angee stack can use it to read, create, and manage connectors without knowing about OpenBao, angee.yaml, or the operator's HTTP protocol.
 
-**Tier 2 — Application connectors** (dynamic, managed at runtime via operator API):
+```python
+# settings.py
+INSTALLED_APPS = [
+    ...
+    "django_angee",
+]
 
-These are accounts that the application manages on behalf of users. They're declared in `angee.yaml` for gitops (so the stack can be rebuilt), but the app reads credentials from OpenBao directly at runtime — not from env vars. No redeploy needed.
+# Automatically configured from environment:
+# ANGEE_OPERATOR_URL=http://operator:9000  (injected by angee at deploy time)
+# ANGEE_API_KEY=sk-...                     (injected by angee at deploy time)
+```
 
-### How It Works
+#### API:
+
+```python
+from django_angee import connectors
+
+# ─── List ────────────────────────────────────────────────────────────────
+connectors.list()
+# → [Connector(name="gmail-personal", provider="google", type="oauth",
+#              tags=["email","imap"], connected=True, metadata={...}), ...]
+
+connectors.list(tags=["email"])
+# → only connectors tagged "email"
+
+connectors.list(tags=["email", "imap"], provider="google")
+# → only Google email+imap connectors
+
+# ─── Read ────────────────────────────────────────────────────────────────
+conn = connectors.get("gmail-personal")
+# → Connector(name, provider, type, tags, metadata, connected, description)
+
+cred = connectors.credential("gmail-personal")
+# → "ya29.a0AfH6SM..." (the OAuth token, read from OpenBao via operator)
+
+# ─── Create ──────────────────────────────────────────────────────────────
+connectors.create(
+    name="imap-support",
+    provider="custom",
+    type="api_key",
+    tags=["email", "imap"],
+    description="support@company.com",
+    metadata={
+        "host": "mail.company.com",
+        "port": 993,
+        "username": "support@company.com",
+        "ssl": True,
+        "smtp_host": "smtp.company.com",
+        "smtp_port": 587,
+    },
+    credential="the-imap-password",
+)
+# → adds connector to angee.yaml (git commit)
+# → stores credential in OpenBao
+# → no redeploy needed
+
+# ─── OAuth (Gmail, GitHub, etc.) ─────────────────────────────────────────
+url = connectors.oauth_start("gmail-client3", provider="google", scopes=[...])
+# → returns URL to redirect user to (operator handles the full OAuth flow)
+# → after callback, credential is stored automatically
+
+connectors.is_connected("gmail-client3")
+# → True/False
+
+# ─── Update ──────────────────────────────────────────────────────────────
+connectors.update("imap-support", metadata={"smtp_port": 465})
+# → updates angee.yaml, git commit
+
+# ─── Delete ──────────────────────────────────────────────────────────────
+connectors.delete("gmail-client3")
+# → removes from angee.yaml (git commit)
+# → removes credential from OpenBao
+```
+
+#### What the operator does behind the scenes:
+
+Every `django_angee.connectors` call maps to the operator API:
+
+| django-angee call | Operator API | Effect |
+|-------------------|-------------|--------|
+| `connectors.list(tags=["email"])` | `GET /connectors?tags=email` | Read from angee.yaml |
+| `connectors.get("name")` | `GET /connectors/name` | Read from angee.yaml |
+| `connectors.credential("name")` | `GET /credentials/connector-name` | Read from OpenBao |
+| `connectors.create(...)` | `POST /connectors` | Update angee.yaml + store in OpenBao + git commit |
+| `connectors.update(...)` | `PATCH /connectors/name` | Update angee.yaml + git commit |
+| `connectors.delete("name")` | `DELETE /connectors/name` | Remove from angee.yaml + OpenBao + git commit |
+| `connectors.oauth_start(...)` | `GET /connectors/name/start` | Start OAuth flow |
+| `connectors.is_connected(...)` | `GET /connectors/name/status` | Check credential exists |
+
+The operator is the only thing that touches angee.yaml and OpenBao. Django never accesses either directly.
+
+### How Unibox Uses It
+
+```python
+# fyltr/unibox/services/sync.py
+
+from django_angee import connectors
+
+def discover_email_sources():
+    """Find all configured email connectors and start syncing."""
+    for conn in connectors.list(tags=["email"]):
+        if not conn.connected:
+            continue
+
+        cred = connectors.credential(conn.name)
+
+        if conn.provider == "google":
+            # OAuth token → Gmail IMAP
+            start_gmail_sync(
+                account_name=conn.name,
+                access_token=cred,
+            )
+        else:
+            # IMAP password
+            start_imap_sync(
+                account_name=conn.name,
+                host=conn.metadata["host"],
+                port=conn.metadata["port"],
+                username=conn.metadata["username"],
+                password=cred,
+                ssl=conn.metadata.get("ssl", True),
+            )
+
+
+def discover_whatsapp_sources():
+    """Find all configured WhatsApp connectors."""
+    for conn in connectors.list(tags=["whatsapp"]):
+        if not conn.connected:
+            continue
+        cred = connectors.credential(conn.name)
+        start_whatsapp_bridge(session_token=cred)
+```
+
+```python
+# fyltr/unibox/views/settings.py — Django UI for managing accounts
+
+from django_angee import connectors
+
+def add_gmail_account(request):
+    """User clicks 'Add Gmail Account' → redirect to OAuth."""
+    name = f"gmail-{request.POST['label']}"
+    url = connectors.oauth_start(
+        name=name,
+        provider="google",
+        scopes=[
+            "https://mail.google.com/",
+            "https://www.googleapis.com/auth/gmail.send",
+        ],
+        description=request.POST.get("description", ""),
+        tags=["email", "imap"],
+    )
+    return redirect(url)  # user goes to Google consent screen
+    # after callback, connector is created automatically
+
+
+def add_imap_account(request):
+    """User fills in IMAP server details."""
+    connectors.create(
+        name=f"imap-{request.POST['label']}",
+        provider="custom",
+        type="api_key",
+        tags=["email", "imap"],
+        description=f"{request.POST['username']} on {request.POST['host']}",
+        metadata={
+            "host": request.POST["host"],
+            "port": int(request.POST["port"]),
+            "username": request.POST["username"],
+            "ssl": request.POST.get("ssl") == "on",
+        },
+        credential=request.POST["password"],
+    )
+    return redirect("/settings/accounts/")  # sync starts automatically
+
+
+def remove_account(request, name):
+    """User clicks 'Remove' on an account."""
+    connectors.delete(name)
+    return redirect("/settings/accounts/")
+```
+
+### What the connectors section looks like after a user adds several accounts:
 
 ```yaml
-# angee.yaml — connectors section with multiple email accounts
+# angee.yaml — connectors grow over time as users add accounts
 
 connectors:
-  # Tier 1: platform connector (static, injected as env var)
+  # Platform connectors (added at init)
   anthropic:
     provider: anthropic
     type: api_key
@@ -502,196 +687,34 @@ connectors:
       ANTHROPIC_API_KEY: api_key
     required: true
 
-  # Tier 2: application connectors (dynamic, read from OpenBao at runtime)
+  github:
+    provider: github
+    type: oauth
+    oauth:
+      client_id: "${secret:github-client-id}"
+      client_secret: "${secret:github-client-secret}"
+      scopes: [repo, read:org]
+    env:
+      GH_TOKEN: oauth_token
+
+  # Email connectors (added via Django UI over time)
   gmail-personal:
     provider: google
     type: oauth
-    oauth:
-      client_id: "${secret:google-client-id}"
-      client_secret: "${secret:google-client-secret}"
-      scopes: [https://mail.google.com/, https://www.googleapis.com/auth/gmail.send]
-    description: "Personal Gmail"
     tags: [email, imap]
+    description: "Personal Gmail"
 
   gmail-work:
     provider: google
     type: oauth
-    oauth:
-      client_id: "${secret:google-client-id}"
-      client_secret: "${secret:google-client-secret}"
-      scopes: [https://mail.google.com/, https://www.googleapis.com/auth/gmail.send]
-    description: "Work Gmail"
     tags: [email, imap]
+    description: "Work Gmail (alexis@company.com)"
 
-  company-imap:
-    provider: custom
-    type: api_key
-    description: "Company IMAP server (mail.company.com)"
-    tags: [email, imap]
-
-  shared-inbox:
-    provider: custom
-    type: api_key
-    description: "Shared support inbox (support@company.com)"
-    tags: [email, imap]
-
-  whatsapp-personal:
-    provider: custom
-    type: setup_command
-    setup_command:
-      command: [whatsapp-bridge, auth]
-      prompt: "Scan QR code with your personal WhatsApp"
-      parse: stdout
-    tags: [messaging, whatsapp]
-```
-
-#### The flow when a user adds a new email account in the Django UI:
-
-```
-User clicks "Add Email Account" in Unibox settings
-  │
-  ├─ For OAuth (Gmail):
-  │   │
-  │   ├─ Django redirects to operator: GET /connectors/gmail-client3/start
-  │   ├─ Operator redirects to Google OAuth consent screen
-  │   ├─ Google calls back → operator exchanges code for token
-  │   ├─ Token stored in OpenBao as: connector-gmail-client3
-  │   │
-  │   └─ Operator updates angee.yaml (via config_set):
-  │       connectors:
-  │         gmail-client3:
-  │           provider: google
-  │           type: oauth
-  │           ...
-  │       → git commit "add connector: gmail-client3"
-  │
-  ├─ For IMAP (custom server):
-  │   │
-  │   ├─ Django collects: host, port, username, password via form
-  │   ├─ Django calls operator: POST /credentials (stores password in OpenBao)
-  │   ├─ Django calls operator: POST /config (adds connector to angee.yaml)
-  │   │   connectors:
-  │   │     imap-support:
-  │   │       provider: custom
-  │   │       type: api_key
-  │   │       description: "support@company.com on mail.company.com:993"
-  │   │       tags: [email, imap]
-  │   │       metadata:
-  │   │         host: mail.company.com
-  │   │         port: 993
-  │   │         username: support@company.com
-  │   │         ssl: true
-  │   └─ → git commit "add connector: imap-support"
-  │
-  ▼
-Django reads credentials at runtime (NO redeploy needed)
-  │
-  ├─ On startup / periodically:
-  │   ├─ GET /connectors?tags=email → list all email connectors
-  │   ├─ For each connector:
-  │   │   ├─ GET /connectors/{name}/status → is it connected?
-  │   │   ├─ GET /credentials/{name} → get the credential from OpenBao
-  │   │   └─ Start IMAP sync / configure SMTP sender
-  │   └─ Django's connector registry now has all email accounts
-  │
-  ▼
-angee.yaml is always the source of truth
-  │
-  ├─ If the stack is rebuilt from scratch:
-  │   ├─ angee.yaml declares all connectors (from git)
-  │   ├─ OpenBao has all credentials (persistent volume)
-  │   ├─ Django reads connectors + credentials on startup
-  │   └─ All email accounts are restored automatically
-  │
-  └─ If OpenBao is lost:
-      ├─ angee.yaml still declares the connectors
-      ├─ angee connect gmail-personal → re-authenticate
-      ├─ angee connect gmail-work → re-authenticate
-      └─ Credentials restored, Django picks them up
-```
-
-#### What Django sees at runtime:
-
-Django doesn't get individual env vars per email account. Instead it gets:
-
-```
-ANGEE_OPERATOR_URL=http://operator:9000    # injected at deploy time
-ANGEE_API_KEY=sk-...                       # injected at deploy time
-```
-
-And uses the operator API to discover and read connectors:
-
-```python
-# Django Unibox connector discovery (pseudocode)
-
-import httpx
-
-OPERATOR = os.environ["ANGEE_OPERATOR_URL"]
-API_KEY = os.environ["ANGEE_API_KEY"]
-
-def get_email_connectors():
-    """Discover all email connectors from angee."""
-    resp = httpx.get(
-        f"{OPERATOR}/connectors",
-        params={"tags": "email"},
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    return resp.json()  # [{name, provider, type, description, metadata, connected}]
-
-def get_credential(connector_name):
-    """Read a connector's credential from OpenBao via operator."""
-    resp = httpx.get(
-        f"{OPERATOR}/credentials/connector-{connector_name}",
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    return resp.json()["value"]
-
-def add_email_account(name, provider, host, port, username, password):
-    """Register a new email connector from the Django UI."""
-    # 1. Store credential
-    httpx.post(
-        f"{OPERATOR}/credentials/connector-{name}",
-        json={"value": password},
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    # 2. Add connector to angee.yaml
-    config = httpx.get(f"{OPERATOR}/config", headers=...).json()
-    config["connectors"][name] = {
-        "provider": provider,
-        "type": "api_key",
-        "description": f"{username} on {host}:{port}",
-        "tags": ["email", "imap"],
-        "metadata": {"host": host, "port": port, "username": username, "ssl": True},
-    }
-    httpx.post(
-        f"{OPERATOR}/config",
-        json={"content": yaml.dump(config), "message": f"add connector: {name}"},
-        headers={"Authorization": f"Bearer {API_KEY}"},
-    )
-    # 3. No redeploy needed — connector is immediately available
-```
-
-#### What the operator API provides:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /connectors` | List all connectors (filterable by `tags`) |
-| `GET /connectors?tags=email` | List only email connectors |
-| `GET /connectors/{name}/status` | Is this connector authenticated? |
-| `GET /credentials/connector-{name}` | Read credential from OpenBao |
-| `POST /credentials/connector-{name}` | Store credential in OpenBao |
-| `POST /config` | Update angee.yaml (adds connector declaration) |
-
-#### Connector metadata for IMAP/SMTP:
-
-The `metadata` field on a connector holds connection details that aren't secrets:
-
-```yaml
-connectors:
   imap-support:
     provider: custom
     type: api_key
     tags: [email, imap]
+    description: "support@company.com"
     metadata:
       host: mail.company.com
       port: 993
@@ -699,76 +722,75 @@ connectors:
       ssl: true
       smtp_host: smtp.company.com
       smtp_port: 587
+
+  imap-client-acme:
+    provider: custom
+    type: api_key
+    tags: [email, imap]
+    description: "Shared inbox for Acme project"
+    metadata:
+      host: imap.acme.com
+      port: 993
+      username: project@acme.com
+      ssl: true
+
+  # WhatsApp (added via CLI)
+  whatsapp-personal:
+    provider: custom
+    type: setup_command
+    tags: [messaging, whatsapp]
+    setup_command:
+      command: [whatsapp-bridge, auth]
+      prompt: "Scan QR code"
+      parse: stdout
+    description: "Personal WhatsApp"
 ```
 
-The credential (password/token) is in OpenBao. The connection details (host, port, username) are in angee.yaml. Both are needed; neither duplicates the other.
+Every connector — whether added by `angee connect`, by the admin agent via MCP, or by a user clicking a button in Django — ends up in the same place: `angee.yaml` (git-tracked) with credentials in OpenBao. Git history shows exactly when each account was added or removed.
 
-### The Two-Tier Pattern
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    angee.yaml (git)                      │
-│                                                         │
-│  Tier 1: Platform connectors         Tier 2: App connectors
-│  ┌──────────────┐                    ┌──────────────────┐
-│  │ anthropic     │ ← env var inject  │ gmail-personal   │
-│  │ github        │   at deploy time  │ gmail-work       │
-│  └──────────────┘                    │ company-imap     │
-│                                      │ shared-inbox     │
-│                                      │ whatsapp-personal│
-│                                      └──────────────────┘
-│                                        ↑ read at runtime
-│                                        │ via operator API
-└─────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                   OpenBao (vault)                        │
-│                                                         │
-│  connector-anthropic = sk-ant-...                       │
-│  connector-github = gho_...                             │
-│  connector-gmail-personal = ya29.a0AfH6SM...            │
-│  connector-gmail-work = ya29.b1BgTN...                  │
-│  connector-company-imap = p@ssw0rd                      │
-│  connector-shared-inbox = inbox-secret                  │
-│  connector-whatsapp-personal = wa-session-xyz           │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Tier 1** (agents): Credentials injected as env vars at deploy time. Simple. Agent containers get `ANTHROPIC_API_KEY=sk-ant-...` in their environment.
-
-**Tier 2** (app): Django queries the operator API at runtime to discover connectors and read credentials from OpenBao. No redeploy when accounts are added or removed. New accounts appear instantly.
-
-**Both tiers** are declared in angee.yaml and versioned in git. If the stack is rebuilt from scratch, everything is restored: the connector declarations from git, the credentials from OpenBao.
-
-### What happens when a user removes an account?
+### Rebuild from scratch
 
 ```
-User clicks "Remove" on gmail-work in Unibox settings
-  │
-  ├─ Django stops IMAP sync for that account
-  ├─ Django calls DELETE /credentials/connector-gmail-work
-  ├─ Django calls POST /config → removes gmail-work from connectors:
-  └─ → git commit "remove connector: gmail-work"
+angee.yaml declares all connectors  →  from git
+OpenBao has all credentials          →  persistent volume
+Django starts → calls connectors.list(tags=["email"])
+  → gets all email connectors
+  → reads credentials from OpenBao via operator
+  → starts IMAP sync for each
+  → all accounts restored
 ```
 
-Clean. The credential is gone from OpenBao, the connector is gone from angee.yaml, and the git history records when and why it was removed.
+If OpenBao is lost, the connector declarations survive in git. Run `angee connect gmail-personal` etc. to re-authenticate, and Django picks them up immediately.
 
 ---
 
-## How Connectors Flow Through the System (Updated)
+## How Connectors Flow Through the System
 
 ```
-Static flow (deploy time):
-  angee connect anthropic → stored in OpenBao
-  angee deploy → compiler injects ANTHROPIC_API_KEY into agent containers
+                    ┌─────────────────────────────┐
+                    │    operator API              │
+                    │    /connectors               │
+                    │    /credentials              │
+                    └──────────┬──────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        angee CLI        django-angee      MCP agents
+     (angee connect)   (Django views)    (admin agent)
+              │                │                │
+              │                │                │
+              ▼                ▼                ▼
+         User in            User in         Agent in
+         terminal           browser         container
 
-Dynamic flow (runtime):
-  User adds Gmail account in Django UI
-    → Django calls operator API: store credential + update angee.yaml
-    → Django reads credential from OpenBao via operator API
-    → IMAP sync starts immediately (no redeploy)
-    → angee.yaml committed to git (rebuild-safe)
+All three write to the same source of truth:
+  angee.yaml (connector declarations) → git
+  OpenBao (credentials) → vault
+
+All three read from the same source of truth:
+  GET /connectors → list from angee.yaml
+  GET /credentials/connector-{name} → read from OpenBao
 ```
 
 ---

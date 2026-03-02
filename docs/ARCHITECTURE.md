@@ -256,15 +256,13 @@ In any `env` value: `${secret:name}` → resolved to `${ENV_NAME}` in docker-com
 | `description` | Human-readable label |
 | `required` | Block init if not connected |
 
-#### Two-tier connector pattern
+#### Connector management
 
-Connectors operate in two tiers:
+The operator's connector API (`/connectors`) is the **single source of truth**. All connectors — whether added via `angee connect`, by an agent via MCP, or by the application via the operator API — are managed the same way: declaration in `angee.yaml` (git-tracked), credential in OpenBao.
 
-**Tier 1 — Platform connectors** have an `env` mapping and are injected as environment variables at deploy time. Agents and services declare `connectors: [github]` and the compiler wires it. This is the simple path for API keys and tokens that don't change.
+The `env` field is a convenience: if present, the compiler injects the credential as an environment variable at deploy time (useful for agent API keys). But the canonical way for applications to access connectors at runtime is through the operator API — `GET /connectors?tags=email` to discover, `GET /credentials/connector-{name}` to read credentials. This allows dynamic multi-account scenarios (multiple Gmail/IMAP accounts) without redeploying.
 
-**Tier 2 — Application connectors** have `tags` and `metadata` but no `env` mapping. They're managed at runtime by the application through the operator API — the app calls `GET /connectors?tags=email` to discover accounts and reads credentials from OpenBao directly. No redeploy when accounts are added or removed. This is the path for dynamic, multi-account scenarios (multiple Gmail/IMAP accounts in a messaging app).
-
-Both tiers are declared in `angee.yaml` and versioned in git. If the stack is rebuilt from scratch, connector declarations come from git and credentials come from OpenBao.
+Applications use a client library (e.g., `django-angee` for Django) that wraps the operator API, giving them clean access to connectors without knowing about angee.yaml or OpenBao directly.
 
 ### 2.2 `operator.yaml` — Local Runtime Config
 
@@ -527,9 +525,12 @@ Auth: `Authorization: Bearer <api-key>` (when configured). `/health` and `/opena
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/connectors` | List all connectors + connection status (query: `tags`) |
-| GET | `/connectors?tags=email` | List connectors filtered by tag |
-| GET | `/connectors/{name}/start` | Initiate connection flow (OAuth redirect, etc.) |
+| GET | `/connectors` | List all connectors + status (query: `tags`, `provider`) |
+| POST | `/connectors` | Create a new connector (declaration + credential) |
+| GET | `/connectors/{name}` | Get connector details |
+| PATCH | `/connectors/{name}` | Update connector metadata/tags |
+| DELETE | `/connectors/{name}` | Remove connector + credential |
+| GET | `/connectors/{name}/start` | Initiate OAuth flow (redirects to provider) |
 | GET | `/connectors/callback` | OAuth callback (exchanges code for token) |
 | GET | `/connectors/{name}/status` | Check if connector is connected |
 
