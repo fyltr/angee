@@ -57,12 +57,16 @@ connectors:
     description: "GitHub for repo access"
     required: true
 
-  email:
+  email-work:
     provider: custom
     type: api_key
-    env:
-      IMAP_PASSWORD: api_key
-    description: "Email account (IMAP/SMTP)"
+    description: "Work IMAP account"
+    tags: [email, imap]                            # filterable tags
+    metadata:                                      # non-secret connection details
+      host: mail.company.com
+      port: 993
+      username: user@company.com
+      ssl: true
 
   whatsapp:
     provider: custom
@@ -71,8 +75,7 @@ connectors:
       command: [whatsapp-bridge, auth]
       prompt: "Scan QR code to link WhatsApp"
       parse: stdout
-    env:
-      WA_SESSION: session_token
+    tags: [messaging, whatsapp]
 
 # --- Platform services ---
 services:
@@ -241,7 +244,27 @@ In any `env` value: `${secret:name}` → resolved to `${ENV_NAME}` in docker-com
 | `token` | Interactive prompt during `angee connect` | token in vault |
 | `setup_command` | Run host command, capture stdout | parsed output in vault |
 
-Connectors are shared resources. Agents declare `connectors: [github, email]` and the compiler injects credentials as env vars at deploy time.
+#### Connector fields
+
+| Field | Purpose |
+|-------|---------|
+| `provider` | Well-known provider (`google`, `github`, `anthropic`) or `custom` |
+| `type` | Auth type: `oauth`, `api_key`, `token`, `setup_command` |
+| `env` | Map of env var name → credential field to inject at deploy time |
+| `tags` | Filterable labels (e.g., `[email, imap]`, `[messaging, whatsapp]`) |
+| `metadata` | Non-secret connection details (host, port, username, ssl) |
+| `description` | Human-readable label |
+| `required` | Block init if not connected |
+
+#### Two-tier connector pattern
+
+Connectors operate in two tiers:
+
+**Tier 1 — Platform connectors** have an `env` mapping and are injected as environment variables at deploy time. Agents and services declare `connectors: [github]` and the compiler wires it. This is the simple path for API keys and tokens that don't change.
+
+**Tier 2 — Application connectors** have `tags` and `metadata` but no `env` mapping. They're managed at runtime by the application through the operator API — the app calls `GET /connectors?tags=email` to discover accounts and reads credentials from OpenBao directly. No redeploy when accounts are added or removed. This is the path for dynamic, multi-account scenarios (multiple Gmail/IMAP accounts in a messaging app).
+
+Both tiers are declared in `angee.yaml` and versioned in git. If the stack is rebuilt from scratch, connector declarations come from git and credentials come from OpenBao.
 
 ### 2.2 `operator.yaml` — Local Runtime Config
 
@@ -504,7 +527,8 @@ Auth: `Authorization: Bearer <api-key>` (when configured). `/health` and `/opena
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/connectors` | List all connectors + connection status |
+| GET | `/connectors` | List all connectors + connection status (query: `tags`) |
+| GET | `/connectors?tags=email` | List connectors filtered by tag |
 | GET | `/connectors/{name}/start` | Initiate connection flow (OAuth redirect, etc.) |
 | GET | `/connectors/callback` | OAuth callback (exchanges code for token) |
 | GET | `/connectors/{name}/status` | Check if connector is connected |
