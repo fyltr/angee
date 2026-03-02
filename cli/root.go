@@ -60,6 +60,7 @@ func init() {
 		initCmd,
 		upCmd,
 		downCmd,
+		destroyCmd,
 		lsCmd,
 		deployCmd,
 		rollbackCmd,

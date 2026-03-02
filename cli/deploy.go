@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 
 	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
@@ -31,26 +28,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operator not running — start with 'angee up'")
 	}
 
-	payload, _ := json.Marshal(api.DeployRequest{Message: deployMessage})
-
-	resp, err := doRequest("POST", resolveOperator()+"/deploy", bytes.NewReader(payload))
-	if err != nil {
+	var result api.ApplyResult
+	if _, err := apiPost("/deploy", api.DeployRequest{Message: deployMessage}, &result); err != nil {
 		return fmt.Errorf("deploying: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("deploy failed: %s", body)
 	}
 
 	if outputJSON {
-		fmt.Println(string(body))
-		return nil
+		return nil // already printed by apiPost
 	}
-
-	var result api.ApplyResult
-	json.Unmarshal(body, &result) //nolint:errcheck
 
 	printSuccess("Deployed")
 	if len(result.ServicesStarted) > 0 {

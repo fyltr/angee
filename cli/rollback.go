@@ -1,10 +1,7 @@
 package cli
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 
 	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
@@ -27,22 +24,14 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("operator not running — start with 'angee up'")
 	}
 
-	sha := args[0]
-	payload, _ := json.Marshal(api.RollbackRequest{SHA: sha})
-
-	resp, err := doRequest("POST", resolveOperator()+"/rollback", bytes.NewReader(payload))
-	if err != nil {
+	var result api.RollbackResponse
+	if _, err := apiPost("/rollback", api.RollbackRequest{SHA: args[0]}, &result); err != nil {
 		return fmt.Errorf("rollback: %w", err)
 	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("rollback failed: %s", body)
+	if outputJSON {
+		return nil
 	}
-
-	var result api.RollbackResponse
-	json.Unmarshal(body, &result) //nolint:errcheck
 
 	printSuccess(fmt.Sprintf("Rolled back to %s", result.RolledBackTo))
 	return nil
