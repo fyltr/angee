@@ -3,7 +3,10 @@ package component
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/secrets"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,7 +32,7 @@ type AddOptions struct {
 // Add installs a component into the stack.
 func Add(opts AddOptions) (*config.InstalledComponent, error) {
 	// 1. Resolve and fetch component source
-	compDir, cleanupDir, err := fetchComponent(opts.Source)
+	compDir, cleanupDir, err := FetchComponent(opts.Source)
 	if err != nil {
 		return nil, fmt.Errorf("fetching component: %w", err)
 	}
@@ -37,7 +41,7 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 	}
 
 	// 2. Load component definition (angee-component.yaml or component.yaml)
-	compPath := resolveComponentFile(compDir)
+	compPath := ResolveComponentFile(compDir)
 	comp, err := config.LoadComponent(compPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading component: %w", err)
@@ -87,6 +91,11 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 		}
 	}
 
+	// 9c. Generate secrets and append to .env
+	if err := resolveComponentSecrets(opts.RootPath, cfg.Name, &renderedComp, record); err != nil {
+		return nil, fmt.Errorf("resolving secrets: %w", err)
+	}
+
 	// 10. Write updated angee.yaml
 	if err := config.Write(cfg, filepath.Join(opts.RootPath, "angee.yaml")); err != nil {
 		return nil, fmt.Errorf("writing angee.yaml: %w", err)
@@ -116,8 +125,8 @@ func Add(opts AddOptions) (*config.InstalledComponent, error) {
 	return record, nil
 }
 
-// fetchComponent resolves a component reference to a local directory.
-func fetchComponent(source string) (dir string, cleanupDir string, err error) {
+// FetchComponent resolves a component reference to a local directory.
+func FetchComponent(source string) (dir string, cleanupDir string, err error) {
 	// Local path — check for component definition file
 	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
 		if hasComponentFile(source) {
@@ -172,8 +181,8 @@ func hasComponentFile(dir string) bool {
 	return false
 }
 
-// resolveComponentFile returns the path to the component definition file in a directory.
-func resolveComponentFile(dir string) string {
+// ResolveComponentFile returns the path to the component definition file in a directory.
+func ResolveComponentFile(dir string) string {
 	if p := filepath.Join(dir, "angee-component.yaml"); fileExists(p) {
 		return p
 	}
@@ -552,6 +561,154 @@ func processFiles(compDir, rootPath string, comp *config.ComponentConfig) error 
 	}
 
 	return nil
+}
+
+// resolveComponentSecrets generates values for new secrets declared by the component.
+// For each secret, it tries to store in OpenBao (if configured and reachable),
+// falling back to appending to the .env file. Existing secrets are not overwritten.
+func resolveComponentSecrets(rootPath, projectName string, comp *config.ComponentConfig, record *config.InstalledComponent) error {
+	if len(comp.Secrets) == 0 {
+		return nil
+	}
+
+	envPath := filepath.Join(rootPath, ".env")
+	existing := loadEnvKeys(envPath)
+
+	// Load angee.yaml to check for OpenBao config
+	cfg, _ := config.Load(filepath.Join(rootPath, "angee.yaml"))
+
+	// First pass: generate non-derived secrets
+	resolved := make(map[string]string)
+	var envEntries []string // only secrets that fell through to .env
+
+	for _, s := range comp.Secrets {
+		envKey := secretToEnvKey(s.Name)
+		if existing[envKey] {
+			resolved[s.Name] = readEnvValue(envPath, envKey)
+			continue
+		}
+
+		if s.Derived != "" {
+			continue // handle in second pass
+		}
+
+		if s.Generated {
+			value, err := generateSecret(s.Length, s.Charset)
+			if err != nil {
+				return fmt.Errorf("generating %s: %w", s.Name, err)
+			}
+			resolved[s.Name] = value
+
+			// Try OpenBao, fall back to .env
+			if cfg != nil {
+				backend, _ := secrets.StoreSecret(context.Background(), cfg, rootPath, s.Name, value)
+				if backend == "openbao" {
+					continue // stored in OpenBao, skip .env append
+				}
+			}
+			envEntries = append(envEntries, fmt.Sprintf("%s=%s", envKey, value))
+		}
+	}
+
+	// Second pass: derived secrets
+	for _, s := range comp.Secrets {
+		envKey := secretToEnvKey(s.Name)
+		if existing[envKey] || s.Derived == "" {
+			continue
+		}
+		value := s.Derived
+		for k, v := range resolved {
+			value = strings.ReplaceAll(value, "${"+k+"}", v)
+		}
+		value = strings.ReplaceAll(value, "${project}", projectName)
+		resolved[s.Name] = value
+
+		// Try OpenBao, fall back to .env
+		if cfg != nil {
+			backend, _ := secrets.StoreSecret(context.Background(), cfg, rootPath, s.Name, value)
+			if backend == "openbao" {
+				continue
+			}
+		}
+		envEntries = append(envEntries, fmt.Sprintf("%s=%s", envKey, value))
+	}
+
+	// Append remaining entries to .env
+	if len(envEntries) > 0 {
+		f, err := os.OpenFile(envPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		content := "\n# Added by: angee add " + comp.Name + "\n"
+		for _, entry := range envEntries {
+			content += entry + "\n"
+		}
+		if _, err := f.WriteString(content); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// secretToEnvKey converts a secret name to an env var key: "db-password" → "DB_PASSWORD"
+func secretToEnvKey(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+}
+
+// loadEnvKeys reads an .env file and returns a set of defined variable names.
+func loadEnvKeys(path string) map[string]bool {
+	keys := make(map[string]bool)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return keys
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.Index(line, "="); idx > 0 {
+			keys[line[:idx]] = true
+		}
+	}
+	return keys
+}
+
+// readEnvValue reads a specific env var's value from a .env file.
+func readEnvValue(path, key string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, key+"=") {
+			return line[len(key)+1:]
+		}
+	}
+	return ""
+}
+
+// generateSecret creates a cryptographically random string.
+func generateSecret(length int, charset string) (string, error) {
+	if charset == "" {
+		charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	}
+	if length == 0 {
+		length = 32
+	}
+	runes := []rune(charset)
+	result := make([]rune, length)
+	for i := range result {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(runes))))
+		if err != nil {
+			return "", err
+		}
+		result[i] = runes[n.Int64()]
+	}
+	return string(result), nil
 }
 
 // cacheCredentialOutputs writes the full ComponentConfig to .angee/credential-outputs/

@@ -9,6 +9,7 @@ services:
   operator:
     image: ghcr.io/fyltr/angee-operator:latest
     lifecycle: system
+    infrastructure: true
     ports:
       - "9000:9000"
     raw_volumes:
@@ -27,6 +28,7 @@ services:
   traefik:
     image: traefik:v3
     lifecycle: system
+    infrastructure: true
     ports:
       - "3333:80"
       - "443:443"
@@ -48,6 +50,7 @@ services:
   openbao:
     image: openbao/openbao:2
     lifecycle: system
+    infrastructure: true
     ports:
       - "8200:8200"
     command: server -dev -dev-root-token-id=dev-root-token

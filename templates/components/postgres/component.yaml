@@ -28,9 +28,13 @@ services:
 
 secrets:
   - name: db-password
-    description: "Postgres superuser password — auto-generated and stored in OpenBao"
+    description: "Postgres superuser password"
     required: true
+    generated: true
+    length: 32
+    charset: "abcdefghijklmnopqrstuvwxyz0123456789"
 
   - name: db-url
     description: "Full DATABASE_URL (derived from db-password)"
     required: true
+    derived: "postgresql://angee:${db-password}@postgres:5432/${project}"

@@ -2,15 +2,18 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/fyltr/angee/internal/compiler"
+	"github.com/fyltr/angee/internal/component"
 	"github.com/fyltr/angee/internal/config"
 	"github.com/fyltr/angee/internal/git"
 	"github.com/fyltr/angee/internal/root"
+	secretslib "github.com/fyltr/angee/internal/secrets"
 	"github.com/fyltr/angee/internal/tmpl"
 	"github.com/spf13/cobra"
 )
@@ -25,9 +28,12 @@ var (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init",
+	Use:   "init [component]",
 	Short: "Initialize a new ANGEE_ROOT",
 	Long: `Initialize a new ANGEE_ROOT directory with angee.yaml and a git repository.
+
+If a component is specified, the base stack is initialized first, then the
+component and all its dependencies are added automatically.
 
 Generated secrets (django-secret-key, db-password, etc.) are written to
 ~/.angee/.env which is gitignored. Supply your own values with --secret.
@@ -38,12 +44,13 @@ The --template flag accepts a Git URL or a local directory path:
 
 Examples:
   angee init                                         # guided setup (default template)
+  angee init ../fyltr-django                         # init + add component with deps
+  angee init postgres                                # init + add built-in component
   angee init --yes                                   # accept all defaults
   angee init --template https://github.com/org/tmpl  # template from GitHub
-  angee init --template ./my-template                # local template directory
   angee init --repo https://github.com/org/app       # link a source repo
-  angee init --secret django-secret-key=mysecretkey  # supply a secret
-  angee init --secret db-password=mypass --yes       # non-interactive`,
+  angee init --secret anthropic-api-key=sk-...       # supply a secret`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
 }
 
@@ -57,6 +64,22 @@ func init() {
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	// Optional positional arg: component to add after init
+	var initComponent string
+	if len(args) == 1 {
+		initComponent = args[0]
+		// Resolve "." and relative paths to absolute
+		if initComponent == "." {
+			if wd, err := os.Getwd(); err == nil {
+				initComponent = wd
+			}
+		} else if strings.HasPrefix(initComponent, ".") || strings.HasPrefix(initComponent, "/") {
+			if abs, err := filepath.Abs(initComponent); err == nil {
+				initComponent = abs
+			}
+		}
+	}
+
 	// Auto-detect .angee-template/ in current directory
 	localTemplate := detectLocalTemplate()
 	templateSource := initTemplate
@@ -189,6 +212,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess(fmt.Sprintf("Created .env (%d secret(s) — gitignored, never committed)", len(secrets)))
 
+	// Try storing secrets in OpenBao (will fall back to .env if unreachable)
+	if initCfg, loadErr := config.Load(filepath.Join(path, "angee.yaml")); loadErr == nil {
+		for _, s := range secrets {
+			secretslib.StoreSecret(context.Background(), initCfg, path, s.Name, s.Value)
+		}
+	}
+
 	// Write operator.yaml
 	opCfg := config.DefaultOperatorConfig(path)
 	opCfg.TemplateSource = templateSource
@@ -260,6 +290,38 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Print secrets summary
 	printSecretsTable(secrets, r.EnvFilePath())
 
+	// If a component was specified, add it and all its dependencies
+	if initComponent != "" {
+		fmt.Printf("\n\033[1m  Adding component: %s\033[0m\n\n", initComponent)
+
+		// Set ANGEE_COMPONENTS_PATH for embedded component resolution
+		if exe, err := os.Executable(); err == nil {
+			compPath := filepath.Join(filepath.Dir(exe), "..", "templates", "components")
+			if info, statErr := os.Stat(compPath); statErr == nil && info.IsDir() {
+				os.Setenv("ANGEE_COMPONENTS_PATH", compPath)
+			}
+		}
+
+		// Resolve the dependency tree and add components in order
+		if err := addComponentWithDeps(initComponent, path); err != nil {
+			return fmt.Errorf("adding component: %w", err)
+		}
+
+		// Recompile docker-compose.yaml after components are added
+		cfg, err = config.Load(filepath.Join(path, "angee.yaml"))
+		if err != nil {
+			return fmt.Errorf("reloading angee.yaml: %w", err)
+		}
+		cf, err = comp.Compile(cfg)
+		if err != nil {
+			return fmt.Errorf("recompiling: %w", err)
+		}
+		if err := compiler.Write(cf, filepath.Join(path, "docker-compose.yaml")); err != nil {
+			return fmt.Errorf("writing docker-compose.yaml: %w", err)
+		}
+		printSuccess("Recompiled docker-compose.yaml")
+	}
+
 	fmt.Printf("\n\033[1m  Next steps:\033[0m\n\n")
 	printInfo("angee up          Start the platform")
 	printInfo("angee ls          View running agents and services")
@@ -267,6 +329,134 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	return nil
+}
+
+// addComponentWithDeps resolves a component's dependency tree and adds each
+// component in topological order (dependencies first).
+func addComponentWithDeps(source, rootPath string) error {
+	// Resolve the dependency order
+	order, err := resolveDependencyOrder(source)
+	if err != nil {
+		return err
+	}
+
+	for _, src := range order {
+		// Skip components already installed in the stack
+		if isComponentAlreadyInstalled(src, rootPath) {
+			printInfo(fmt.Sprintf("Skipping %s (already in stack)", src))
+			continue
+		}
+
+		printInfo(fmt.Sprintf("Adding %s...", src))
+		record, err := component.Add(component.AddOptions{
+			Source:   src,
+			Params:   make(map[string]string),
+			Yes:      true,
+			RootPath: rootPath,
+		})
+		if err != nil {
+			return fmt.Errorf("adding %s: %w", src, err)
+		}
+		if len(record.Added.Services) > 0 {
+			printSuccess("Services: " + strings.Join(record.Added.Services, ", "))
+		}
+		if len(record.Added.Agents) > 0 {
+			printSuccess("Agents: " + strings.Join(record.Added.Agents, ", "))
+		}
+		if len(record.Added.MCPServers) > 0 {
+			printSuccess("MCP servers: " + strings.Join(record.Added.MCPServers, ", "))
+		}
+		if len(record.Added.Secrets) > 0 {
+			printInfo("Secrets: " + strings.Join(record.Added.Secrets, ", "))
+		}
+	}
+	return nil
+}
+
+// resolveDependencyOrder loads a component, recursively resolves its requires,
+// and returns a flat list in install order (dependencies before dependents).
+func resolveDependencyOrder(source string) ([]string, error) {
+	visited := make(map[string]bool)
+	var order []string
+
+	var resolve func(src string) error
+	resolve = func(src string) error {
+		// Load the component to read its requires
+		compDir, cleanupDir, err := component.FetchComponent(src)
+		if err != nil {
+			return fmt.Errorf("fetching %s: %w", src, err)
+		}
+		if cleanupDir != "" {
+			defer os.RemoveAll(cleanupDir)
+		}
+
+		compPath := component.ResolveComponentFile(compDir)
+		comp, err := config.LoadComponent(compPath)
+		if err != nil {
+			return fmt.Errorf("loading %s: %w", src, err)
+		}
+
+		// Use the component name as the visited key (to dedup different paths to same component)
+		key := comp.Name
+		if key == "" {
+			key = src
+		}
+		if visited[key] {
+			return nil
+		}
+		visited[key] = true
+
+		// Recursively resolve dependencies first
+		for _, req := range comp.Requires {
+			if err := resolve(req); err != nil {
+				return err
+			}
+		}
+
+		// Add this component after its dependencies
+		order = append(order, src)
+		return nil
+	}
+
+	if err := resolve(source); err != nil {
+		return nil, err
+	}
+	return order, nil
+}
+
+// isComponentAlreadyInstalled checks whether a component's services already exist
+// in the stack config. This is used during init to skip dependency components
+// (like postgres) that are already provided by the base template.
+func isComponentAlreadyInstalled(source, rootPath string) bool {
+	// Load the component definition
+	compDir, cleanupDir, err := component.FetchComponent(source)
+	if err != nil {
+		return false
+	}
+	if cleanupDir != "" {
+		defer os.RemoveAll(cleanupDir)
+	}
+
+	compPath := component.ResolveComponentFile(compDir)
+	comp, err := config.LoadComponent(compPath)
+	if err != nil {
+		return false
+	}
+
+	// Load current stack config
+	cfg, err := config.Load(filepath.Join(rootPath, "angee.yaml"))
+	if err != nil {
+		return false
+	}
+
+	// If any service from this component already exists, consider it installed
+	for name := range comp.Services {
+		if _, exists := cfg.Services[name]; exists {
+			return true
+		}
+	}
+
+	return false
 }
 
 // parseSecretFlags converts ["key=value", ...] to a map.

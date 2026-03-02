@@ -34,20 +34,20 @@ func TestResolveComponentFile(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "angee-component.yaml"), []byte("name: test"), 0644)
 	os.WriteFile(filepath.Join(dir, "component.yaml"), []byte("name: test-alt"), 0644)
 
-	got := resolveComponentFile(dir)
+	got := ResolveComponentFile(dir)
 	want := filepath.Join(dir, "angee-component.yaml")
 	if got != want {
-		t.Errorf("resolveComponentFile() = %q, want %q", got, want)
+		t.Errorf("ResolveComponentFile() = %q, want %q", got, want)
 	}
 
 	// Falls back to component.yaml
 	dir2 := t.TempDir()
 	os.WriteFile(filepath.Join(dir2, "component.yaml"), []byte("name: test"), 0644)
 
-	got2 := resolveComponentFile(dir2)
+	got2 := ResolveComponentFile(dir2)
 	want2 := filepath.Join(dir2, "component.yaml")
 	if got2 != want2 {
-		t.Errorf("resolveComponentFile() = %q, want %q", got2, want2)
+		t.Errorf("ResolveComponentFile() = %q, want %q", got2, want2)
 	}
 }
 
@@ -55,15 +55,15 @@ func TestFetchComponentLocalDir(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "component.yaml"), []byte("name: test\nservices:\n  test:\n    image: test:latest\n"), 0644)
 
-	got, cleanup, err := fetchComponent(dir)
+	got, cleanup, err := FetchComponent(dir)
 	if err != nil {
-		t.Fatalf("fetchComponent() error: %v", err)
+		t.Fatalf("FetchComponent() error: %v", err)
 	}
 	if cleanup != "" {
 		t.Error("expected no cleanup dir for local path")
 	}
 	if got != dir {
-		t.Errorf("fetchComponent() = %q, want %q", got, dir)
+		t.Errorf("FetchComponent() = %q, want %q", got, dir)
 	}
 }
 
@@ -71,15 +71,15 @@ func TestFetchComponentLocalDirWithAngeeComponent(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "angee-component.yaml"), []byte("name: test\nservices:\n  test:\n    image: test:latest\n"), 0644)
 
-	got, cleanup, err := fetchComponent(dir)
+	got, cleanup, err := FetchComponent(dir)
 	if err != nil {
-		t.Fatalf("fetchComponent() error: %v", err)
+		t.Fatalf("FetchComponent() error: %v", err)
 	}
 	if cleanup != "" {
 		t.Error("expected no cleanup dir for local path")
 	}
 	if got != dir {
-		t.Errorf("fetchComponent() = %q, want %q", got, dir)
+		t.Errorf("FetchComponent() = %q, want %q", got, dir)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fyltr/angee/internal/config"
 )
@@ -17,13 +18,20 @@ func newTestServer(t *testing.T) *httptest.Server {
 	store := make(map[string]string) // path → value
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Require token
+		path := strings.TrimPrefix(r.URL.Path, "/v1/")
+
+		// Health check — no auth required
+		if r.Method == http.MethodGet && path == "sys/health" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"initialized":true,"sealed":false}`))
+			return
+		}
+
+		// Require token for all other endpoints
 		if r.Header.Get("X-Vault-Token") != "test-token" {
 			http.Error(w, `{"errors":["permission denied"]}`, http.StatusForbidden)
 			return
 		}
-
-		path := strings.TrimPrefix(r.URL.Path, "/v1/")
 
 		switch {
 		// KV v2 read: GET secret/data/...
@@ -299,5 +307,127 @@ func TestExtractKVv2Keys(t *testing.T) {
 	}
 	if len(keys) != 3 {
 		t.Errorf("keys = %v", keys)
+	}
+}
+
+func TestIsReachable(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+	b := newTestBackend(t, srv)
+
+	if !b.IsReachable(context.Background()) {
+		t.Error("expected reachable for test server")
+	}
+
+	// Unreachable backend
+	b2 := &Backend{addr: "http://127.0.0.1:1", token: "test", prefix: "angee", env: "dev"}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if b2.IsReachable(ctx) {
+		t.Error("expected unreachable for invalid address")
+	}
+}
+
+func TestWaitReady(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+	b := newTestBackend(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := b.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady: %v", err)
+	}
+}
+
+func TestWaitReadyTimeout(t *testing.T) {
+	b := &Backend{addr: "http://127.0.0.1:1", token: "test", prefix: "angee", env: "dev"}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := b.WaitReady(ctx); err == nil {
+		t.Error("expected timeout error")
+	}
+}
+
+func TestSetIfAbsent(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+	b := newTestBackend(t, srv)
+	ctx := context.Background()
+
+	// First write should succeed
+	written, err := b.SetIfAbsent(ctx, "new-secret", "value1")
+	if err != nil {
+		t.Fatalf("SetIfAbsent: %v", err)
+	}
+	if !written {
+		t.Error("expected written=true for new secret")
+	}
+
+	// Second write should be a no-op
+	written, err = b.SetIfAbsent(ctx, "new-secret", "value2")
+	if err != nil {
+		t.Fatalf("SetIfAbsent: %v", err)
+	}
+	if written {
+		t.Error("expected written=false for existing secret")
+	}
+
+	// Value should be the original
+	val, _ := b.Get(ctx, "new-secret")
+	if val != "value1" {
+		t.Errorf("expected 'value1', got %q", val)
+	}
+}
+
+func TestTryNewUnreachable(t *testing.T) {
+	t.Setenv("BAO_TOKEN", "test-token")
+	cfg := &config.OpenBaoConfig{
+		Address: "http://127.0.0.1:1",
+		Auth:    config.OpenBaoAuthConfig{Method: "token"},
+	}
+	b := TryNew(cfg, "dev")
+	if b != nil {
+		t.Error("expected nil for unreachable server")
+	}
+}
+
+func TestTryNewMissingToken(t *testing.T) {
+	t.Setenv("BAO_TOKEN", "")
+	cfg := &config.OpenBaoConfig{
+		Address: "http://localhost:8200",
+		Auth:    config.OpenBaoAuthConfig{Method: "token"},
+	}
+	b := TryNew(cfg, "dev")
+	if b != nil {
+		t.Error("expected nil for missing token")
+	}
+}
+
+func TestTryNewNilConfig(t *testing.T) {
+	b := TryNew(nil, "dev")
+	if b != nil {
+		t.Error("expected nil for nil config")
+	}
+}
+
+func TestTryNewReachable(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	t.Setenv("TEST_BAO_TOKEN_TRY", "test-token")
+	cfg := &config.OpenBaoConfig{
+		Address: srv.URL,
+		Auth: config.OpenBaoAuthConfig{
+			Method:   "token",
+			TokenEnv: "TEST_BAO_TOKEN_TRY",
+		},
+	}
+	b := TryNew(cfg, "dev")
+	if b == nil {
+		t.Fatal("expected non-nil backend for reachable server")
+	}
+	if b.prefix != "angee" {
+		t.Errorf("prefix = %q", b.prefix)
 	}
 }

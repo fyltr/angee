@@ -64,6 +64,10 @@ type SecretRef struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 	Required    bool   `yaml:"required,omitempty"`
+	Generated   bool   `yaml:"generated,omitempty"` // auto-generate value if not supplied
+	Derived     string `yaml:"derived,omitempty"`    // expression: e.g. "postgresql://angee:${db-password}@postgres:5432/${project}"
+	Length      int    `yaml:"length,omitempty"`      // length of generated value (default: 32)
+	Charset     string `yaml:"charset,omitempty"`     // charset for generated value
 }
 
 // Lifecycle values for services and agents.
@@ -78,19 +82,20 @@ const (
 
 // ServiceSpec defines a platform service (web, DB, workers, etc.).
 type ServiceSpec struct {
-	Image      string            `yaml:"image,omitempty"`
-	Build      *BuildSpec        `yaml:"build,omitempty"`
-	Command    string            `yaml:"command,omitempty"`
-	Lifecycle  string            `yaml:"lifecycle,omitempty"`
-	Domains    []DomainSpec      `yaml:"domains,omitempty"`
-	Resources  ResourceSpec      `yaml:"resources,omitempty"`
-	Env        map[string]string `yaml:"env,omitempty"`
-	Volumes    []VolumeSpec      `yaml:"volumes,omitempty"`
-	Ports      []string          `yaml:"ports,omitempty"`
-	RawVolumes []string          `yaml:"raw_volumes,omitempty"`
-	Health     *HealthSpec       `yaml:"health,omitempty"`
-	Replicas   int               `yaml:"replicas,omitempty"`
-	DependsOn  []string          `yaml:"depends_on,omitempty"`
+	Image          string            `yaml:"image,omitempty"`
+	Build          *BuildSpec        `yaml:"build,omitempty"`
+	Command        string            `yaml:"command,omitempty"`
+	Lifecycle      string            `yaml:"lifecycle,omitempty"`
+	Infrastructure bool              `yaml:"infrastructure,omitempty"`
+	Domains        []DomainSpec      `yaml:"domains,omitempty"`
+	Resources      ResourceSpec      `yaml:"resources,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty"`
+	Volumes        []VolumeSpec      `yaml:"volumes,omitempty"`
+	Ports          []string          `yaml:"ports,omitempty"`
+	RawVolumes     []string          `yaml:"raw_volumes,omitempty"`
+	Health         *HealthSpec       `yaml:"health,omitempty"`
+	Replicas       int               `yaml:"replicas,omitempty"`
+	DependsOn      []string          `yaml:"depends_on,omitempty"`
 }
 
 // BuildSpec defines how to build a service image from source.

@@ -1,14 +1,19 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/fyltr/angee/internal/compiler"
 	"github.com/fyltr/angee/internal/config"
+	"github.com/fyltr/angee/internal/credentials/openbao"
 	"github.com/fyltr/angee/internal/root"
+	"github.com/fyltr/angee/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -80,9 +85,46 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess("Compiled docker-compose.yaml")
 
-	// docker compose up -d — detects changes and recreates affected services.
+	// Two-phase startup when OpenBao is configured:
+	// 1. Start infrastructure services (operator, traefik, openbao)
+	// 2. Seed OpenBao from .env, pull .env from OpenBao
+	// 3. Start all remaining services
+	if hasOpenBaoBackend(cfg) {
+		infraServices := identifyInfraServices(cfg)
+		if len(infraServices) > 0 {
+			printInfo("Phase 1: Starting infrastructure services...")
+			infraArgs := append([]string{"up", "-d"}, infraServices...)
+			if err := runDockerCompose(composePath, path, projectName, infraArgs...); err != nil {
+				fmt.Printf("  \033[33m!\033[0m  Some infrastructure containers failed to start\n")
+			} else {
+				printSuccess(fmt.Sprintf("Infrastructure started (%s)", strings.Join(infraServices, ", ")))
+			}
+
+			// Wait for OpenBao, seed secrets, pull .env
+			envPath := filepath.Join(path, ".env")
+			if bao, err := waitForOpenBao(cfg, 60*time.Second); err != nil {
+				printInfo(fmt.Sprintf("OpenBao not ready (%v) — using .env as-is", err))
+			} else {
+				seeded, err := secrets.SeedOpenBao(context.Background(), bao, envPath)
+				if err != nil {
+					printInfo(fmt.Sprintf("Seed warning: %v", err))
+				} else if seeded > 0 {
+					printSuccess(fmt.Sprintf("Seeded %d secret(s) into OpenBao", seeded))
+				}
+
+				count, err := secrets.PullToEnvFile(context.Background(), bao, envPath)
+				if err != nil {
+					printInfo(fmt.Sprintf("Pull warning: %v", err))
+				} else if count > 0 {
+					printSuccess(fmt.Sprintf("Regenerated .env from OpenBao (%d secret(s))", count))
+				}
+			}
+		}
+	}
+
+	// Start all services (infrastructure already running = no-op for those)
 	printInfo("Starting stack...")
-	if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--remove-orphans"); err != nil {
+	if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--build", "--remove-orphans"); err != nil {
 		fmt.Printf("  \033[33m!\033[0m  Some containers failed to start (run 'angee logs' to investigate)\n")
 	} else {
 		printSuccess("Stack started")
@@ -90,6 +132,88 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	printPlatformReady()
 	return nil
+}
+
+// hasOpenBaoBackend returns true if the config declares an openbao secrets backend.
+func hasOpenBaoBackend(cfg *config.AngeeConfig) bool {
+	return cfg.SecretsBackend != nil && cfg.SecretsBackend.Type == "openbao" && cfg.SecretsBackend.OpenBao != nil
+}
+
+// identifyInfraServices returns the names of services marked infrastructure: true.
+func identifyInfraServices(cfg *config.AngeeConfig) []string {
+	var names []string
+	for name, svc := range cfg.Services {
+		if svc.Infrastructure {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// waitForOpenBao creates an OpenBao backend using the host-reachable address
+// and waits for it to become ready.
+func waitForOpenBao(cfg *config.AngeeConfig, timeout time.Duration) (*openbao.Backend, error) {
+	obCfg := resolveOpenBaoHostAddress(cfg)
+	env := cfg.Environment
+	if env == "" {
+		env = "dev"
+	}
+
+	// Ensure the token env var is set. In dev mode, the token is often
+	// hardcoded in the operator/openbao service env block rather than in
+	// the host environment. Look it up and export it.
+	ensureBaoTokenEnv(cfg, obCfg)
+
+	// Use NewFromEnv (no reachability check) since we'll WaitReady below.
+	bao := openbao.NewFromEnv(obCfg, env)
+	if bao == nil {
+		return nil, fmt.Errorf("cannot create OpenBao client (token missing?)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := bao.WaitReady(ctx); err != nil {
+		return nil, err
+	}
+	return bao, nil
+}
+
+// ensureBaoTokenEnv sets the BAO_TOKEN env var from angee.yaml service configs
+// if it's not already set in the host environment. This handles the common dev
+// pattern where BAO_TOKEN=dev-root-token is in the operator service env block.
+func ensureBaoTokenEnv(cfg *config.AngeeConfig, obCfg *config.OpenBaoConfig) {
+	tokenEnv := obCfg.Auth.TokenEnv
+	if tokenEnv == "" {
+		tokenEnv = "BAO_TOKEN"
+	}
+	if os.Getenv(tokenEnv) != "" {
+		return // already set
+	}
+
+	// Search service env blocks for the token variable
+	for _, svc := range cfg.Services {
+		if val, ok := svc.Env[tokenEnv]; ok && val != "" {
+			os.Setenv(tokenEnv, val)
+			return
+		}
+	}
+}
+
+// resolveOpenBaoHostAddress returns a copy of the OpenBao config with the
+// container-internal address replaced by a host-reachable one.
+// "http://openbao:8200" → "http://localhost:8200"
+func resolveOpenBaoHostAddress(cfg *config.AngeeConfig) *config.OpenBaoConfig {
+	ob := *cfg.SecretsBackend.OpenBao // shallow copy
+	addr := ob.Address
+	// Replace container hostname with localhost for host-side access
+	addr = strings.Replace(addr, "://openbao:", "://localhost:", 1)
+	addr = strings.Replace(addr, "://openbao/", "://localhost/", 1)
+	// Handle case where address is just "http://openbao:8200" (no trailing path)
+	if strings.HasSuffix(addr, "://openbao") {
+		addr = strings.Replace(addr, "://openbao", "://localhost", 1)
+	}
+	ob.Address = addr
+	return &ob
 }
 
 func printPlatformReady() {

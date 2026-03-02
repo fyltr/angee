@@ -77,6 +77,7 @@ func init() {
 		removeCmd,
 		listComponentsCmd,
 		credentialCmd,
+		destroyCmd,
 	)
 }
 

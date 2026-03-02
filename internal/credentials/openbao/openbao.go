@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fyltr/angee/internal/config"
 )
@@ -80,6 +81,113 @@ func New(obCfg *config.OpenBaoConfig, environment string) (*Backend, error) {
 	}
 
 	return b, nil
+}
+
+// TryNew creates an OpenBao backend if reachable and configured, otherwise returns nil.
+// Used during init/add when OpenBao may not be running yet.
+func TryNew(obCfg *config.OpenBaoConfig, environment string) *Backend {
+	b := tryBuild(obCfg, environment)
+	if b == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if !b.IsReachable(ctx) {
+		return nil
+	}
+
+	return b
+}
+
+// NewFromEnv creates an OpenBao backend from config without checking reachability.
+// Returns nil if the config is missing or the token env var is unset.
+// Used when the caller will handle readiness checks separately (e.g. WaitReady).
+func NewFromEnv(obCfg *config.OpenBaoConfig, environment string) *Backend {
+	return tryBuild(obCfg, environment)
+}
+
+// tryBuild creates a Backend from config by reading the token from env vars.
+// Returns nil if config is missing or the token is unset.
+func tryBuild(obCfg *config.OpenBaoConfig, environment string) *Backend {
+	if obCfg == nil || obCfg.Address == "" {
+		return nil
+	}
+
+	prefix := obCfg.Prefix
+	if prefix == "" {
+		prefix = "angee"
+	}
+	if environment == "" {
+		environment = "dev"
+	}
+
+	envVar := obCfg.Auth.TokenEnv
+	if envVar == "" {
+		envVar = "BAO_TOKEN"
+	}
+	token := os.Getenv(envVar)
+	if token == "" {
+		return nil
+	}
+
+	return &Backend{
+		addr:   strings.TrimRight(obCfg.Address, "/"),
+		token:  token,
+		prefix: prefix,
+		env:    environment,
+	}
+}
+
+// IsReachable returns true if OpenBao responds to a health check (HTTP 200 or 429).
+func (b *Backend) IsReachable(ctx context.Context) bool {
+	url := b.addr + "/v1/sys/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == 200 || resp.StatusCode == 429
+}
+
+// WaitReady polls IsReachable every 500ms until the context expires.
+func (b *Backend) WaitReady(ctx context.Context) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	// Check immediately before first tick
+	if b.IsReachable(ctx) {
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("openbao not ready: %w", ctx.Err())
+		case <-ticker.C:
+			if b.IsReachable(ctx) {
+				return nil
+			}
+		}
+	}
+}
+
+// SetIfAbsent writes a secret only if it does not already exist in OpenBao.
+// Returns true if the value was written, false if it already existed.
+func (b *Backend) SetIfAbsent(ctx context.Context, name, value string) (bool, error) {
+	_, err := b.Get(ctx, name)
+	if err == nil {
+		return false, nil // already exists
+	}
+	// 404 means not found — safe to write
+	if err := b.Set(ctx, name, value); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (b *Backend) Type() string { return "openbao" }

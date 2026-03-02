@@ -142,13 +142,3 @@ secrets:
     generated: true
     length: 50
     charset: "abcdefghijklmnopqrstuvwxyz0123456789!@#%^&*(-_=+)"
-
-# Recommended agent additions when using angee-django:
-#
-# Add django-mcp to angee-admin's mcp_servers list:
-#   agents.angee-admin.mcp_servers: [angee-operator, angee-files, django-mcp]
-#
-# Add angee-developer agent with workspace pointing to the base repo:
-#   Use the angee-developer component with:
-#     workspace.repository: base
-#     mcp_servers: [angee-files, django-mcp]
