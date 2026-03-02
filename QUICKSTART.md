@@ -151,7 +151,7 @@ services:
 
   celery:
     build:
-      context: src/base
+      context: src/fyltr-django
     command: celery -A config worker -l info
     lifecycle: worker
 
@@ -199,7 +199,7 @@ repositories:
     role: base
 ```
 
-Then `angee deploy` — your source is cloned into `~/.angee/src/base/`.
+Then `angee deploy` — your source is cloned into `~/.angee/src/fyltr-django/`.
 
 ---
 
