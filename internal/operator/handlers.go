@@ -163,66 +163,6 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, rc) //nolint:errcheck
 }
 
-// ── Connectors ──────────────────────────────────────────────────────────────
-
-func (s *Server) handleConnectorList(w http.ResponseWriter, r *http.Request) {
-	tags := r.URL.Query()["tags"]
-	result, err := s.Platform.ConnectorList(tags)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) handleConnectorGet(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	result, err := s.Platform.ConnectorGet(name)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) handleConnectorCreate(w http.ResponseWriter, r *http.Request) {
-	var req api.ConnectorCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err)
-		return
-	}
-	result, err := s.Platform.ConnectorCreate(r.Context(), req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) handleConnectorUpdate(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	var req api.ConnectorUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err)
-		return
-	}
-	result, err := s.Platform.ConnectorUpdate(r.Context(), name, req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) handleConnectorDelete(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if err := s.Platform.ConnectorDelete(r.Context(), name); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "deleted"})
-}
-
 // ── History ─────────────────────────────────────────────────────────────────
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

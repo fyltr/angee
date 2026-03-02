@@ -307,6 +307,39 @@ Get logs for an agent.
 
 ---
 
+### Credential management
+
+#### `credentials_list`
+
+List all stored credentials.
+
+**Parameters:** none
+
+**Returns:** A list of credential names.
+
+#### `credentials_set`
+
+Store a credential in the secrets backend.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | yes | Credential name |
+| `value` | string | yes | Credential value |
+
+#### `credentials_delete`
+
+Remove a credential from the secrets backend.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | string | yes | Credential name |
+
+---
+
 ### Repository management *(planned)*
 
 #### `repo_list` *(planned)*
@@ -458,11 +491,14 @@ Get the config change history (commits in ANGEE_ROOT).
 | `agent_start` | maps to implemented endpoint |
 | `agent_stop` | maps to implemented endpoint |
 | `agent_logs` | maps to implemented endpoint |
+| `credentials_list` | maps to implemented endpoint |
+| `credentials_set` | maps to implemented endpoint |
+| `credentials_delete` | maps to implemented endpoint |
+| `history` | maps to implemented endpoint |
 | `repo_list` | planned |
 | `repo_clone` | planned |
 | `repo_pull` | planned |
 | `repo_checkout` | planned |
 | `repo_status` | planned |
 | `repo_log` | planned |
-| `history` | maps to implemented endpoint |
 | **MCP endpoint itself** | **implemented** (`POST /mcp`) |

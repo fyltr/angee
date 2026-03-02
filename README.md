@@ -136,6 +136,9 @@ angee plan                           Dry-run — what would change
 angee rollback <sha|HEAD~N>          Revert to a previous deploy
 angee logs <service> [-f]            Tail logs
 angee status                         Platform status
+angee add <component>                Add a component (postgres, redis, etc.)
+angee remove <component>             Remove a component
+angee destroy                        Destroy ANGEE_ROOT completely
 
 angee admin                          Chat with the admin agent
 angee develop                        Chat with the developer agent

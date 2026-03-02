@@ -13,29 +13,29 @@ import (
 
 // ComposeFile mirrors the docker-compose.yaml top-level structure.
 type ComposeFile struct {
-	Name     string                     `yaml:"name,omitempty"`
-	Services map[string]ComposeService  `yaml:"services"`
-	Volumes  map[string]ComposeVolume   `yaml:"volumes,omitempty"`
-	Networks map[string]ComposeNetwork  `yaml:"networks,omitempty"`
+	Name     string                    `yaml:"name,omitempty"`
+	Services map[string]ComposeService `yaml:"services"`
+	Volumes  map[string]ComposeVolume  `yaml:"volumes,omitempty"`
+	Networks map[string]ComposeNetwork `yaml:"networks,omitempty"`
 }
 
 // ComposeService mirrors a docker-compose service definition.
 type ComposeService struct {
-	Image       string            `yaml:"image,omitempty"`
-	Build       *ComposeBuild     `yaml:"build,omitempty"`
-	Command     string            `yaml:"command,omitempty"`
-	Restart     string            `yaml:"restart,omitempty"`
-	StdinOpen   bool              `yaml:"stdin_open,omitempty"`
-	Tty         bool              `yaml:"tty,omitempty"`
-	Ports       []string          `yaml:"ports,omitempty"`
-	Environment []string          `yaml:"environment,omitempty"`
-	EnvFile     []string          `yaml:"env_file,omitempty"`
-	Volumes     []string          `yaml:"volumes,omitempty"`
-	Networks    []string          `yaml:"networks,omitempty"`
-	Labels      map[string]string `yaml:"labels,omitempty"`
-	DependsOn   []string          `yaml:"depends_on,omitempty"`
+	Image       string              `yaml:"image,omitempty"`
+	Build       *ComposeBuild       `yaml:"build,omitempty"`
+	Command     string              `yaml:"command,omitempty"`
+	Restart     string              `yaml:"restart,omitempty"`
+	StdinOpen   bool                `yaml:"stdin_open,omitempty"`
+	Tty         bool                `yaml:"tty,omitempty"`
+	Ports       []string            `yaml:"ports,omitempty"`
+	Environment []string            `yaml:"environment,omitempty"`
+	EnvFile     []string            `yaml:"env_file,omitempty"`
+	Volumes     []string            `yaml:"volumes,omitempty"`
+	Networks    []string            `yaml:"networks,omitempty"`
+	Labels      map[string]string   `yaml:"labels,omitempty"`
+	DependsOn   []string            `yaml:"depends_on,omitempty"`
 	Healthcheck *ComposeHealthcheck `yaml:"healthcheck,omitempty"`
-	Deploy      *ComposeDeploy    `yaml:"deploy,omitempty"`
+	Deploy      *ComposeDeploy      `yaml:"deploy,omitempty"`
 }
 
 type ComposeBuild struct {
@@ -52,12 +52,12 @@ type ComposeHealthcheck struct {
 }
 
 type ComposeDeploy struct {
-	Replicas  int               `yaml:"replicas,omitempty"`
-	Resources ComposeResources  `yaml:"resources,omitempty"`
+	Replicas  int              `yaml:"replicas,omitempty"`
+	Resources ComposeResources `yaml:"resources,omitempty"`
 }
 
 type ComposeResources struct {
-	Limits   ComposeResourceValues `yaml:"limits,omitempty"`
+	Limits       ComposeResourceValues `yaml:"limits,omitempty"`
 	Reservations ComposeResourceValues `yaml:"reservations,omitempty"`
 }
 

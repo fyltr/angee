@@ -7,13 +7,13 @@ import (
 
 // validLifecycles is the set of recognised lifecycle values.
 var validLifecycles = map[string]bool{
-	"":                 true, // empty is allowed (defaults applied later)
-	LifecyclePlatform:  true,
-	LifecycleSidecar:   true,
-	LifecycleWorker:    true,
-	LifecycleSystem:    true,
-	LifecycleAgent:     true,
-	LifecycleJob:       true,
+	"":                true, // empty is allowed (defaults applied later)
+	LifecyclePlatform: true,
+	LifecycleSidecar:  true,
+	LifecycleWorker:   true,
+	LifecycleSystem:   true,
+	LifecycleAgent:    true,
+	LifecycleJob:      true,
 }
 
 // Validate checks an AngeeConfig for structural errors. It collects all

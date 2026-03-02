@@ -183,24 +183,6 @@ After editing: `angee deploy`
 
 ---
 
-## Default template (angee-django)
-
-The official Django template includes:
-
-| Service | Image | Purpose |
-|---------|-------|---------|
-| `django` | your app | Web + API |
-| `postgres` | `pgvector/pgvector:pg17` | Database with vector search |
-| `redis` | `redis:7-alpine` | Cache + message broker |
-| `celery` | your app | Async task workers |
-| `celery-beat` | your app | Scheduled tasks |
-
-```sh
-angee init --template https://github.com/fyltr/angee-django-template --repo https://github.com/org/myapp
-```
-
----
-
 ## Next: link a source repo
 
 ```sh
@@ -237,6 +219,8 @@ angee chat [agent]
 angee admin
 angee develop
 angee ask <message> [--agent name]
+angee add <component>                Add a component (postgres, redis, etc.)
+angee remove <component>             Remove a component
 ```
 
 ---

@@ -204,9 +204,9 @@ func TestResolveSecretsDerived(t *testing.T) {
 
 func TestSplitFragment(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantURL  string
-		wantSub  string
+		input   string
+		wantURL string
+		wantSub string
 	}{
 		{"https://github.com/org/repo#templates/default", "https://github.com/org/repo", "templates/default"},
 		{"https://github.com/org/repo", "https://github.com/org/repo", ""},

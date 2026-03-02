@@ -12,7 +12,7 @@ import (
 // This file is NOT committed to git — it tells the operator which
 // runtime backend to use and how to find the Django control plane.
 type OperatorConfig struct {
-	Runtime        string           `yaml:"runtime"`     // docker-compose | kubernetes
+	Runtime        string           `yaml:"runtime"` // docker-compose | kubernetes
 	Port           int              `yaml:"port,omitempty"`
 	AngeeRoot      string           `yaml:"angee_root,omitempty"`
 	DjangoURL      string           `yaml:"django_url,omitempty"`

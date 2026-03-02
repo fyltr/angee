@@ -406,10 +406,10 @@ func TestNormalizeMemory(t *testing.T) {
 		{"1Gi", "1g"},
 		{"256Mi", "256m"},
 		{"512Ki", "512k"},
-		{"512m", "512m"},   // already docker-style
-		{"1g", "1g"},       // already docker-style
-		{"1024", "1024"},   // bare number
-		{"", ""},           // empty
+		{"512m", "512m"}, // already docker-style
+		{"1g", "1g"},     // already docker-style
+		{"1024", "1024"}, // bare number
+		{"", ""},         // empty
 	}
 	for _, tt := range tests {
 		got := normalizeMemory(tt.input)

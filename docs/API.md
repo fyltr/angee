@@ -328,6 +328,50 @@ Recent git log for the repository.
 
 ---
 
+### Credential management
+
+#### `GET /credentials`
+
+Lists all stored credential names.
+
+**Response:**
+```json
+["db-password", "anthropic-api-key"]
+```
+
+#### `POST /credentials`
+
+Stores a credential value.
+
+**Request:**
+```json
+{
+  "name": "my-api-key",
+  "value": "sk-..."
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Credential name |
+| `value` | string | yes | Credential value |
+
+**Response:**
+```json
+{"status": "ok"}
+```
+
+#### `DELETE /credentials/{name}`
+
+Deletes a stored credential.
+
+**Response:**
+```json
+{"status": "deleted"}
+```
+
+---
+
 ### Git history
 
 #### `GET /history`

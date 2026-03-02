@@ -113,38 +113,6 @@ type ConfigGetResponse struct {
 	Config any `json:"config"`
 }
 
-// ── Connectors ──────────────────────────────────────────────────────────────
-
-// ConnectorInfo describes a connector with its connection status.
-type ConnectorInfo struct {
-	Name        string         `json:"name"`
-	Provider    string         `json:"provider"`
-	Type        string         `json:"type"`
-	Description string         `json:"description,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	Connected   bool           `json:"connected"`
-}
-
-// ConnectorCreateRequest is sent to POST /connectors.
-type ConnectorCreateRequest struct {
-	Name        string            `json:"name"`
-	Provider    string            `json:"provider"`
-	Type        string            `json:"type"`
-	Description string            `json:"description,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	Metadata    map[string]any    `json:"metadata,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Credential  string            `json:"credential,omitempty"`
-}
-
-// ConnectorUpdateRequest is sent to PATCH /connectors/{name}.
-type ConnectorUpdateRequest struct {
-	Description *string        `json:"description,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-}
-
 // ── Credentials ─────────────────────────────────────────────────────────────
 
 // CredentialSetRequest is sent to POST /credentials.

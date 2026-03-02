@@ -170,13 +170,17 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 	case "agent_list":
 		return s.Platform.AgentList(ctx)
 	case "agent_start":
-		var p struct{ Name string `json:"name"` }
+		var p struct {
+			Name string `json:"name"`
+		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 		return s.Platform.AgentStart(ctx, p.Name)
 	case "agent_stop":
-		var p struct{ Name string `json:"name"` }
+		var p struct {
+			Name string `json:"name"`
+		}
 		if err := json.Unmarshal(args, &p); err != nil {
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
@@ -191,24 +195,6 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 		}
 		return s.Platform.AgentLogs(ctx, p.Name, p.Lines)
 
-	// Connectors
-	case "connector_list":
-		var p struct{ Tags []string `json:"tags"` }
-		json.Unmarshal(args, &p) //nolint:errcheck
-		return s.Platform.ConnectorList(p.Tags)
-	case "connector_create":
-		var p api.ConnectorCreateRequest
-		if err := json.Unmarshal(args, &p); err != nil {
-			return nil, fmt.Errorf("invalid arguments: %w", err)
-		}
-		return s.Platform.ConnectorCreate(ctx, p)
-	case "connector_delete":
-		var p struct{ Name string `json:"name"` }
-		if err := json.Unmarshal(args, &p); err != nil {
-			return nil, fmt.Errorf("invalid arguments: %w", err)
-		}
-		return nil, s.Platform.ConnectorDelete(ctx, p.Name)
-
 	// Credentials
 	case "credentials_list":
 		return nil, fmt.Errorf("credentials backend not configured")
@@ -219,7 +205,9 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 
 	// History
 	case "history":
-		var p struct{ N int `json:"n"` }
+		var p struct {
+			N int `json:"n"`
+		}
 		json.Unmarshal(args, &p) //nolint:errcheck
 		return s.Platform.History(p.N)
 
@@ -302,30 +290,6 @@ func mcpToolDefinitions() []mcpToolDef {
 			"properties": map[string]any{
 				"name":  map[string]any{"type": "string", "description": "Agent name"},
 				"lines": map[string]any{"type": "integer", "description": "Number of lines (default: 200)"},
-			},
-			"required": []string{"name"},
-		}},
-		{Name: "connector_list", Description: "List all connectors", InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by tags"},
-			},
-		}},
-		{Name: "connector_create", Description: "Create a new connector", InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name":        map[string]any{"type": "string"},
-				"provider":    map[string]any{"type": "string"},
-				"type":        map[string]any{"type": "string", "description": "oauth | api_key | token | setup_command"},
-				"description": map[string]any{"type": "string"},
-				"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			},
-			"required": []string{"name", "provider", "type"},
-		}},
-		{Name: "connector_delete", Description: "Delete a connector", InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Connector name"},
 			},
 			"required": []string{"name"},
 		}},

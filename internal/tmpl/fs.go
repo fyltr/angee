@@ -70,7 +70,7 @@ type SecretDef struct {
 	Description string `yaml:"description"`
 	Required    bool   `yaml:"required"`
 	Generated   bool   `yaml:"generated"` // auto-generate a value if not supplied
-	Derived     string `yaml:"derived"`    // ${other-secret} expression
+	Derived     string `yaml:"derived"`   // ${other-secret} expression
 	Length      int    `yaml:"length"`
 	Charset     string `yaml:"charset"`
 }

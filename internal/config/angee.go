@@ -10,59 +10,28 @@ import (
 
 // AngeeConfig is the top-level structure of angee.yaml.
 type AngeeConfig struct {
-	Name         string                        `yaml:"name"`
-	Version      string                        `yaml:"version,omitempty"`
-	Connectors   map[string]ConnectorSpec      `yaml:"connectors,omitempty"`
-	Repositories map[string]RepositorySpec     `yaml:"repositories,omitempty"`
-	Services     map[string]ServiceSpec        `yaml:"services,omitempty"`
-	MCPServers   map[string]MCPServerSpec      `yaml:"mcp_servers,omitempty"`
-	Agents       map[string]AgentSpec          `yaml:"agents,omitempty"`
-	Skills       map[string]SkillSpec          `yaml:"skills,omitempty"`
-	Secrets      []SecretRef                   `yaml:"secrets,omitempty"`
-	SecretsBackend *SecretsBackendConfig       `yaml:"secrets_backend,omitempty"`
-}
-
-// ConnectorSpec defines an external service connection (OAuth, API key, IMAP, etc.).
-type ConnectorSpec struct {
-	Provider     string            `yaml:"provider"`
-	Type         string            `yaml:"type"`                    // oauth | api_key | token | setup_command
-	Description  string            `yaml:"description,omitempty"`
-	Required     bool              `yaml:"required,omitempty"`
-	Tags         []string          `yaml:"tags,omitempty"`
-	Metadata     map[string]any    `yaml:"metadata,omitempty"`
-	Env          map[string]string `yaml:"env,omitempty"`
-	OAuth        *OAuthConfig      `yaml:"oauth,omitempty"`
-	SetupCommand *SetupCommandSpec `yaml:"setup_command,omitempty"`
-}
-
-// OAuthConfig defines OAuth provider settings.
-type OAuthConfig struct {
-	ClientID     string   `yaml:"client_id,omitempty"`
-	ClientSecret string   `yaml:"client_secret,omitempty"`
-	AuthURL      string   `yaml:"auth_url,omitempty"`
-	TokenURL     string   `yaml:"token_url,omitempty"`
-	Scopes       []string `yaml:"scopes,omitempty"`
-	RedirectURL  string   `yaml:"redirect_url,omitempty"`
-}
-
-// SetupCommandSpec defines a host-side command that produces a credential.
-type SetupCommandSpec struct {
-	Command []string `yaml:"command"`
-	Prompt  string   `yaml:"prompt,omitempty"`
-	Parse   string   `yaml:"parse,omitempty"` // stdout | last_line
+	Name           string                    `yaml:"name"`
+	Version        string                    `yaml:"version,omitempty"`
+	Repositories   map[string]RepositorySpec `yaml:"repositories,omitempty"`
+	Services       map[string]ServiceSpec    `yaml:"services,omitempty"`
+	MCPServers     map[string]MCPServerSpec  `yaml:"mcp_servers,omitempty"`
+	Agents         map[string]AgentSpec      `yaml:"agents,omitempty"`
+	Skills         map[string]SkillSpec      `yaml:"skills,omitempty"`
+	Secrets        []SecretRef               `yaml:"secrets,omitempty"`
+	SecretsBackend *SecretsBackendConfig     `yaml:"secrets_backend,omitempty"`
 }
 
 // SecretsBackendConfig configures where secrets are stored.
 type SecretsBackendConfig struct {
-	Type    string          `yaml:"type"` // openbao | env
-	OpenBao *OpenBaoConfig  `yaml:"openbao,omitempty"`
+	Type    string         `yaml:"type"` // openbao | env
+	OpenBao *OpenBaoConfig `yaml:"openbao,omitempty"`
 }
 
 // OpenBaoConfig configures the OpenBao secrets backend.
 type OpenBaoConfig struct {
-	Address string           `yaml:"address"`
+	Address string            `yaml:"address"`
 	Auth    OpenBaoAuthConfig `yaml:"auth"`
-	Prefix  string           `yaml:"prefix,omitempty"`
+	Prefix  string            `yaml:"prefix,omitempty"`
 }
 
 // OpenBaoAuthConfig configures authentication for OpenBao.
@@ -119,7 +88,6 @@ type ServiceSpec struct {
 	Health     *HealthSpec       `yaml:"health,omitempty"`
 	Replicas   int               `yaml:"replicas,omitempty"`
 	DependsOn  []string          `yaml:"depends_on,omitempty"`
-	Connectors []string          `yaml:"connectors,omitempty"`
 }
 
 // BuildSpec defines how to build a service image from source.
@@ -160,17 +128,17 @@ type HealthSpec struct {
 
 // MCPServerSpec defines an MCP server that agents can connect to.
 type MCPServerSpec struct {
-	Transport   string            `yaml:"transport"` // stdio | sse | streamable-http
-	URL         string            `yaml:"url,omitempty"`
-	Image       string            `yaml:"image,omitempty"`
-	Command     []string          `yaml:"command,omitempty"`
-	Args        []string          `yaml:"args,omitempty"`
-	Credentials CredentialSpec    `yaml:"credentials,omitempty"`
+	Transport   string         `yaml:"transport"` // stdio | sse | streamable-http
+	URL         string         `yaml:"url,omitempty"`
+	Image       string         `yaml:"image,omitempty"`
+	Command     []string       `yaml:"command,omitempty"`
+	Args        []string       `yaml:"args,omitempty"`
+	Credentials CredentialSpec `yaml:"credentials,omitempty"`
 }
 
 // CredentialSpec defines how credentials are sourced for an MCP server.
 type CredentialSpec struct {
-	Source      string   `yaml:"source"`       // connect.account | service_account | sso | none
+	Source      string   `yaml:"source"` // connect.account | service_account | sso | none
 	AccountType string   `yaml:"account_type,omitempty"`
 	RunAs       string   `yaml:"run_as,omitempty"`
 	Scopes      []string `yaml:"scopes,omitempty"`
@@ -191,11 +159,10 @@ type AgentSpec struct {
 	Command      string            `yaml:"command,omitempty"`
 	Template     string            `yaml:"template,omitempty"`
 	Version      string            `yaml:"version,omitempty"`
-	Lifecycle    string            `yaml:"lifecycle,omitempty"`  // system | on-demand
-	Role         string            `yaml:"role,omitempty"`       // operator | user
+	Lifecycle    string            `yaml:"lifecycle,omitempty"` // system | on-demand
+	Role         string            `yaml:"role,omitempty"`      // operator | user
 	MCPServers   []string          `yaml:"mcp_servers,omitempty"`
 	Skills       []string          `yaml:"skills,omitempty"`
-	Connectors   []string          `yaml:"connectors,omitempty"`
 	Files        []FileMount       `yaml:"files,omitempty"`
 	RunAs        string            `yaml:"run_as,omitempty"`
 	Workspace    WorkspaceSpec     `yaml:"workspace,omitempty"`

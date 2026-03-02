@@ -271,34 +271,28 @@ Same `angee.yaml`, same API, same MCP tools, different runtime.
 
 ## What a real stack looks like
 
-The default template produces a Django stack:
+The default template produces a stack with the operator, Traefik, OpenBao, and an admin agent. You add application services via components:
 
 | Service | Lifecycle | What it is |
 |---------|-----------|------------|
 | `operator` | system | angee-operator (HTTP API + MCP) |
 | `traefik` | system | Reverse proxy, TLS termination |
-| `django` | platform | Web app, routed via Traefik |
-| `postgres` | sidecar | Database (pgvector) |
-| `redis` | sidecar | Cache + Celery broker |
-| `celery-worker` | worker | Background task processing |
-| `celery-beat` | worker | Task scheduler |
+| `openbao` | system | Secrets vault (KV v2) |
 
 | Agent | Role | MCP servers | What it does |
 |-------|------|-------------|--------------|
-| `admin` | operator | operator, filesystem, django | Manages deployment, config, secrets |
-| `developer` | user | github, filesystem, django | Writes code, reviews PRs, fixes bugs |
+| `admin` | operator | operator, filesystem | Manages deployment, config, secrets |
 
-| MCP server | Transport | What it provides |
-|------------|-----------|-----------------|
-| `angee-operator` | streamable-http | Deploy, status, logs, scale, rollback |
-| `angee-files` | stdio | Filesystem access in agent workspace |
-| `django-mcp` | streamable-http | App-level tools (messages, contacts, agents) |
+Add more services and agents by editing `angee.yaml` or using `angee add`:
 
-That's 7 services, 2 agents, 3 MCP servers, 4 secrets — all from one `angee.yaml` and one `angee init`.
+```sh
+angee add postgres     # adds postgres service + db-password secret
+angee add redis        # adds redis cache
+```
 
 ## What Angee is not
 
 - **Not a generic Docker management tool.** It manages a specific platform defined in `angee.yaml`, not arbitrary containers.
 - **Not a PaaS.** You own the infrastructure. Angee is a config compiler and lifecycle manager.
 - **Not an agent framework.** Angee doesn't build agents — it runs them. Bring any terminal-based agentic tool as a container image.
-- **Not opinionated about your stack.** The default template is Django, but `angee.yaml` can describe any set of services. Templates are pluggable.
+- **Not opinionated about your stack.** The default template is a minimal infrastructure base (operator + Traefik + OpenBao), but `angee.yaml` can describe any set of services. Templates are pluggable.

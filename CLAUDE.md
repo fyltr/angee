@@ -64,6 +64,8 @@ Requirements: Go 1.25+, Docker, git, golangci-lint (for linting)
 - `.env` — secrets, gitignored
 - `agents/<name>/workspace/` — per-agent persistent workspaces
 
+**Connectors are application-managed.** Angee does not manage connectors (OAuth, API keys, IMAP, etc.) — the application layer (e.g., Django's `fyltr.connect`) handles connection management. Angee's role is limited to storing secrets via `${secret:name}` resolution.
+
 **RuntimeBackend interface** (`internal/runtime/backend.go`): All runtime interaction goes through this interface (Diff, Apply, Status, Logs, Scale, Stop, Down). Adding a new backend means implementing this interface.
 
 ## Dependencies

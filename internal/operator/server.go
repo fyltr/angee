@@ -62,13 +62,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
 
-	// Connectors
-	mux.HandleFunc("GET /connectors", s.handleConnectorList)
-	mux.HandleFunc("POST /connectors", s.handleConnectorCreate)
-	mux.HandleFunc("GET /connectors/{name}", s.handleConnectorGet)
-	mux.HandleFunc("PATCH /connectors/{name}", s.handleConnectorUpdate)
-	mux.HandleFunc("DELETE /connectors/{name}", s.handleConnectorDelete)
-
 	// Git history
 	mux.HandleFunc("GET /history", s.handleHistory)
 

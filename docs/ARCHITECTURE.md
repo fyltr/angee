@@ -43,40 +43,6 @@ The single file that declares the entire platform. Committed to git. This is wha
 ```yaml
 name: my-project                              # required
 
-# --- Connectors (OAuth, API keys, IMAP, SMTP, WhatsApp, etc.) ---
-connectors:
-  github:
-    provider: github                           # well-known: google, github, anthropic
-    type: oauth                                # oauth | api_key | token | setup_command
-    oauth:
-      client_id: "${secret:github-client-id}"
-      client_secret: "${secret:github-client-secret}"
-      scopes: [repo, read:org]
-    env:                                       # how to expose to containers
-      GH_TOKEN: oauth_token
-    description: "GitHub for repo access"
-    required: true
-
-  email-work:
-    provider: custom
-    type: api_key
-    description: "Work IMAP account"
-    tags: [email, imap]                            # filterable tags
-    metadata:                                      # non-secret connection details
-      host: mail.company.com
-      port: 993
-      username: user@company.com
-      ssl: true
-
-  whatsapp:
-    provider: custom
-    type: setup_command
-    setup_command:
-      command: [whatsapp-bridge, auth]
-      prompt: "Scan QR code to link WhatsApp"
-      parse: stdout
-    tags: [messaging, whatsapp]
-
 # --- Platform services ---
 services:
   web:
@@ -137,7 +103,6 @@ agents:
     description: "Platform admin agent"
     mcp_servers: [angee-operator, filesystem]
     skills: [deploy]
-    connectors: [github]                        # shared connector access
     files:
       - template: opencode.json.tmpl
         mount: /root/.config/opencode/opencode.json
@@ -151,7 +116,6 @@ agents:
     lifecycle: system
     role: user
     skills: [code-review]
-    connectors: [github, email]
     workspace:
       repository: base
       persistent: true
@@ -187,13 +151,7 @@ secrets:
     required: true
     description: "Anthropic API key (console.anthropic.com)"
 
-  - name: github-client-id
-    required: true
-
-  - name: github-client-secret
-    required: true
-
-# --- Secrets backend configuration ---
+  # --- Secrets backend configuration ---
 secrets_backend:
   type: openbao                                # openbao | env
   openbao:
@@ -209,10 +167,9 @@ secrets_backend:
 | Section | Purpose |
 |---------|---------|
 | `name` | Project identifier (required) |
-| `connectors` | External service connections (OAuth, IMAP, WhatsApp, etc.) shared across agents/services |
 | `services` | Docker containers: web apps, databases, workers, proxies |
 | `mcp_servers` | MCP tool servers that agents connect to |
-| `agents` | AI agent containers with workspace, MCP, skills, connector access |
+| `agents` | AI agent containers with workspace, MCP, skills |
 | `skills` | Reusable capability bundles (MCP servers + prompt) |
 | `repositories` | Source code repos linked to agent workspaces |
 | `secrets` | Credential declarations (generated, derived, required) |
@@ -234,35 +191,6 @@ Every service and agent has a lifecycle that determines restart policy and routi
 #### Secret references
 
 In any `env` value: `${secret:name}` → resolved to `${ENV_NAME}` in docker-compose (which reads from `.env`).
-
-#### Connector types
-
-| Type | Flow | Storage |
-|------|------|---------|
-| `oauth` | Browser redirect → callback → token exchange | access token in vault |
-| `api_key` | Interactive prompt during `angee connect` | key in vault |
-| `token` | Interactive prompt during `angee connect` | token in vault |
-| `setup_command` | Run host command, capture stdout | parsed output in vault |
-
-#### Connector fields
-
-| Field | Purpose |
-|-------|---------|
-| `provider` | Well-known provider (`google`, `github`, `anthropic`) or `custom` |
-| `type` | Auth type: `oauth`, `api_key`, `token`, `setup_command` |
-| `env` | Map of env var name → credential field to inject at deploy time |
-| `tags` | Filterable labels (e.g., `[email, imap]`, `[messaging, whatsapp]`) |
-| `metadata` | Non-secret connection details (host, port, username, ssl) |
-| `description` | Human-readable label |
-| `required` | Block init if not connected |
-
-#### Connector management
-
-The operator's connector API (`/connectors`) is the **single source of truth**. All connectors — whether added via `angee connect`, by an agent via MCP, or by the application via the operator API — are managed the same way: declaration in `angee.yaml` (git-tracked), credential in OpenBao.
-
-The `env` field is a convenience: if present, the compiler injects the credential as an environment variable at deploy time (useful for agent API keys). But the canonical way for applications to access connectors at runtime is through the operator API — `GET /connectors?tags=email` to discover, `GET /credentials/connector-{name}` to read credentials. This allows dynamic multi-account scenarios (multiple Gmail/IMAP accounts) without redeploying.
-
-Applications use a client library (e.g., `django-angee` for Django) that wraps the operator API, giving them clean access to connectors without knowing about angee.yaml or OpenBao directly.
 
 ### 2.2 `operator.yaml` — Local Runtime Config
 
@@ -299,7 +227,6 @@ The compiler applies these transformations:
 - Agents prefixed with `agent-` (e.g., `admin` → `agent-admin`)
 - MCP server URLs injected as env vars (`ANGEE_MCP_SERVERS`, `ANGEE_MCP_{NAME}_URL`)
 - Agent workspace volumes resolved (explicit path > repository > default)
-- Connector credentials injected as env vars
 - Kubernetes memory format normalized (`1Gi` → `1g`)
 - Agent config files rendered from templates
 - Single network (`angee-net`) attached to all services
@@ -313,14 +240,9 @@ The compiler applies these transformations:
 DB_PASSWORD=a1b2c3d4...
 DB_URL=postgresql://app:a1b2c3d4...@postgres:5432/mydb
 ANTHROPIC_API_KEY=sk-ant-...
-GITHUB_CLIENT_ID=...
-GITHUB_CLIENT_SECRET=...
-CONNECTOR_GITHUB=gho_...        # connector tokens
-CONNECTOR_EMAIL=...
 ```
 
 Secret name conversion: `db-password` → `DB_PASSWORD` (hyphens to underscores, uppercase).
-Connectors stored as: `CONNECTOR_{NAME}` → credential value.
 
 ### 2.5 `.angee-template.yaml` — Template Metadata
 
@@ -364,10 +286,8 @@ Templates contain `angee.yaml.tmpl` (Go `text/template`) that renders into `ange
 │
 ├── agents/                            # per-agent directories
 │   ├── admin/
-│   │   ├── .env                       # agent-specific env (connector creds)
 │   │   └── workspace/                 # persistent workspace
 │   └── developer/
-│       ├── .env
 │       └── workspace/
 │
 ├── src/                               # cloned repositories
@@ -384,7 +304,7 @@ Templates contain `angee.yaml.tmpl` (Go `text/template`) that renders into `ange
     └── opencode.json.tmpl
 ```
 
-Everything in ANGEE_ROOT is a git repo. `.env`, `operator.yaml`, agent workspaces, and agent `.env` files are gitignored. The committed state (angee.yaml + docker-compose.yaml) is the deployable truth.
+Everything in ANGEE_ROOT is a git repo. `.env`, `operator.yaml`, and agent workspaces are gitignored. The committed state (angee.yaml + docker-compose.yaml) is the deployable truth.
 
 ---
 
@@ -407,7 +327,6 @@ cli/                                   # CLI command implementations
 ├── ls.go                              # angee ls (GET /status)
 ├── logs.go                            # angee logs (GET /logs)
 ├── chat.go                            # angee chat/admin/develop (docker exec)
-├── connect.go                         # angee connect (connectors)
 ├── credential.go                      # angee credential (secrets management)
 ├── add.go                             # angee add (components)
 ├── remove.go                          # angee remove (components)
@@ -436,7 +355,6 @@ internal/
 │   ├── server.go                      #   Server struct, routing, middleware
 │   ├── handlers.go                    #   deploy, rollback, status, logs, agents, config
 │   ├── handlers_credentials.go        #   credential CRUD endpoints
-│   ├── handlers_connectors.go        #   Connector flows (OAuth, status, list)
 │   ├── mcp.go                         #   MCP JSON-RPC 2.0 endpoint + tool dispatch
 │   ├── healthcheck.go                 #   active health probing
 │   └── openapi.go                     #   OpenAPI 3.1 schema generation
@@ -520,19 +438,6 @@ Auth: `Authorization: Bearer <api-key>` (when configured). `/health` and `/opena
 | POST | `/agents/{name}/start` | Start agent |
 | POST | `/agents/{name}/stop` | Stop agent |
 | GET | `/agents/{name}/logs` | Agent logs |
-
-### Connectors
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/connectors` | List all connectors + status (query: `tags`, `provider`) |
-| POST | `/connectors` | Create a new connector (declaration + credential) |
-| GET | `/connectors/{name}` | Get connector details |
-| PATCH | `/connectors/{name}` | Update connector metadata/tags |
-| DELETE | `/connectors/{name}` | Remove connector + credential |
-| GET | `/connectors/{name}/start` | Initiate OAuth flow (redirects to provider) |
-| GET | `/connectors/callback` | OAuth callback (exchanges code for token) |
-| GET | `/connectors/{name}/status` | Check if connector is connected |
 
 ### Credentials
 
@@ -660,18 +565,6 @@ CLI: angee rollback HEAD~1
   ← RollbackResponse {rolled_back_to, deploy}
 ```
 
-### Connect (OAuth)
-
-```
-CLI: angee connect github
-  → Print URL: http://localhost:9000/connectors/github/start
-  → User opens browser → redirected to GitHub OAuth
-  → GitHub calls back: GET /connectors/callback?code=...&state=...
-  → Operator exchanges code for token
-  → Token stored in credential backend as connector-github
-  → CLI polls GET /connectors/github/status until connected
-```
-
 ### Agent Self-Management
 
 ```
@@ -757,8 +650,7 @@ Install records stored in `.angee/components/{name}.yaml`.
 3. **Secrets never in git** — credentials live in OpenBao or `.env`, both gitignored.
 4. **Compiler, not runtime** — angee compiles to docker-compose.yaml. Docker Compose is the runtime. Clean separation.
 5. **Agents are containers** — no special runtime. An agent is a Docker container with MCP connections and a persistent workspace.
-6. **Shared connectors** — connectors are stack-level resources, shared across agents and services.
-7. **Self-managing** — the operator MCP server lets agents deploy, scale, and manage the platform.
-8. **Two dependencies** — Cobra + yaml.v3. Everything else is stdlib. OpenBao uses pure net/http.
-9. **Backend-agnostic** — RuntimeBackend interface means Docker Compose today, Kubernetes tomorrow. Same angee.yaml.
-10. **No magic** — the compiler output (docker-compose.yaml) is readable. You can always inspect what angee generated.
+6. **Self-managing** — the operator MCP server lets agents deploy, scale, and manage the platform.
+7. **Two dependencies** — Cobra + yaml.v3. Everything else is stdlib. OpenBao uses pure net/http.
+8. **Backend-agnostic** — RuntimeBackend interface means Docker Compose today, Kubernetes tomorrow. Same angee.yaml.
+9. **No magic** — the compiler output (docker-compose.yaml) is readable. You can always inspect what angee generated.
