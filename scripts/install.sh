@@ -58,7 +58,8 @@ if [ -z "$ANGEE_VERSION" ]; then
     exit 1
   }
 
-  (cd "$SRCDIR" && go build -o angee ./cmd/angee/) || {
+  BUILD_VERSION="$(cd "$SRCDIR" && git describe --tags --always 2>/dev/null || echo dev)"
+  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/fyltr/angee/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
     echo "  ✗ Build failed."
     exit 1
   }
@@ -72,7 +73,7 @@ if [ -z "$ANGEE_VERSION" ]; then
   fi
 
   echo ""
-  echo "  ✔ angee (built from source) installed to ${INSTALL_DIR}/angee"
+  echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
   echo ""
   echo "  Get started:"
   echo "    angee init"
