@@ -99,6 +99,34 @@ func (c *AngeeConfig) Validate() error {
 		}
 	}
 
+	// Connected account type validation
+	validAccountTypes := map[string]bool{
+		"oauth": true, "api_key": true, "token": true, "setup_command": true,
+	}
+	for name, acct := range c.ConnectedAccounts {
+		if acct.Provider == "" {
+			errs = append(errs, fmt.Sprintf("connected_account %q: provider is required", name))
+		}
+		if !validAccountTypes[acct.Type] {
+			errs = append(errs, fmt.Sprintf("connected_account %q: invalid type %q (must be oauth, api_key, token, or setup_command)", name, acct.Type))
+		}
+		if acct.Type == "oauth" && acct.OAuth == nil {
+			errs = append(errs, fmt.Sprintf("connected_account %q: oauth config is required for type oauth", name))
+		}
+		if acct.Type == "setup_command" && (acct.SetupCommand == nil || len(acct.SetupCommand.Command) == 0) {
+			errs = append(errs, fmt.Sprintf("connected_account %q: setup_command.command is required for type setup_command", name))
+		}
+	}
+
+	// Agent connected_accounts references
+	for name, agent := range c.Agents {
+		for _, ref := range agent.ConnectedAccounts {
+			if _, ok := c.ConnectedAccounts[ref]; !ok {
+				errs = append(errs, fmt.Sprintf("agent %q: connected_account %q is not defined in connected_accounts", name, ref))
+			}
+		}
+	}
+
 	// Host port conflicts: same host port on two services
 	hostPorts := make(map[string]string)
 	for name, svc := range c.Services {

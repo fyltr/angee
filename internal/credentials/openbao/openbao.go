@@ -360,3 +360,96 @@ func extractKVv2Keys(body []byte) ([]string, error) {
 	}
 	return resp.Data.Keys, nil
 }
+
+// ── OAuthApp Plugin Methods ─────────────────────────────────────────────────
+
+// OAuthAppConfigServer writes the OAuth provider server config to the oauthapp
+// secrets engine. This registers a provider (e.g. Google, GitHub) with its
+// client credentials and endpoints.
+func (b *Backend) OAuthAppConfigServer(ctx context.Context, name string, cfg OAuthAppServerConfig) error {
+	path := fmt.Sprintf("oauthapp/servers/%s", name)
+	payload := map[string]any{
+		"client_id":     cfg.ClientID,
+		"client_secret": cfg.ClientSecret,
+		"provider":      cfg.Provider,
+	}
+	if cfg.ProviderOptions != nil {
+		payload["provider_options"] = cfg.ProviderOptions
+	}
+	_, err := b.request(ctx, http.MethodPut, path, payload)
+	return err
+}
+
+// OAuthAppAuthCodeURL returns the authorization URL for the given credential name.
+// The caller redirects the user's browser to this URL.
+func (b *Backend) OAuthAppAuthCodeURL(ctx context.Context, name string, scopes []string, redirectURL, state string) (string, error) {
+	path := fmt.Sprintf("oauthapp/auth-code-url")
+	payload := map[string]any{
+		"server":       name,
+		"scopes":       scopes,
+		"redirect_url": redirectURL,
+		"state":        state,
+	}
+	body, err := b.request(ctx, http.MethodPut, path, payload)
+	if err != nil {
+		return "", fmt.Errorf("getting auth code URL: %w", err)
+	}
+
+	var resp struct {
+		Data struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	return resp.Data.URL, nil
+}
+
+// OAuthAppWriteCreds stores an OAuth authorization code in the oauthapp engine.
+// After this, the plugin handles token exchange and refresh automatically.
+func (b *Backend) OAuthAppWriteCreds(ctx context.Context, name, server, code, redirectURL string) error {
+	path := fmt.Sprintf("oauthapp/creds/%s", name)
+	payload := map[string]any{
+		"server":       server,
+		"code":         code,
+		"redirect_url": redirectURL,
+	}
+	_, err := b.request(ctx, http.MethodPut, path, payload)
+	return err
+}
+
+// OAuthAppReadCreds reads the current access token for a credential.
+// The plugin auto-refreshes if the token is expired and a refresh token exists.
+func (b *Backend) OAuthAppReadCreds(ctx context.Context, name string) (*OAuthAppCreds, error) {
+	path := fmt.Sprintf("oauthapp/creds/%s", name)
+	body, err := b.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reading oauthapp creds %q: %w", name, err)
+	}
+
+	var resp struct {
+		Data OAuthAppCreds `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.Data, nil
+}
+
+// OAuthAppServerConfig is the configuration for registering an OAuth provider
+// in the oauthapp secrets engine.
+type OAuthAppServerConfig struct {
+	ClientID        string         `json:"client_id"`
+	ClientSecret    string         `json:"client_secret"`
+	Provider        string         `json:"provider"` // "google", "github", "custom"
+	ProviderOptions map[string]any `json:"provider_options,omitempty"`
+}
+
+// OAuthAppCreds represents the current credentials from the oauthapp engine.
+type OAuthAppCreds struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresAt    string `json:"expire_time,omitempty"`
+	ServerName   string `json:"server,omitempty"`
+}

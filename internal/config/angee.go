@@ -10,16 +10,46 @@ import (
 
 // AngeeConfig is the top-level structure of angee.yaml.
 type AngeeConfig struct {
-	Name           string                    `yaml:"name"`
-	Version        string                    `yaml:"version,omitempty"`
-	Environment    string                    `yaml:"environment,omitempty"`        // dev | staging | prod
-	SecretsBackend *SecretsBackendConfig     `yaml:"secrets_backend,omitempty"`
-	Repositories   map[string]RepositorySpec `yaml:"repositories,omitempty"`
-	Services       map[string]ServiceSpec    `yaml:"services,omitempty"`
-	MCPServers     map[string]MCPServerSpec  `yaml:"mcp_servers,omitempty"`
-	Agents         map[string]AgentSpec      `yaml:"agents,omitempty"`
-	Skills         map[string]SkillSpec      `yaml:"skills,omitempty"`
-	Secrets        []SecretRef               `yaml:"secrets,omitempty"`
+	Name              string                            `yaml:"name"`
+	Version           string                            `yaml:"version,omitempty"`
+	Environment       string                            `yaml:"environment,omitempty"`        // dev | staging | prod
+	SecretsBackend    *SecretsBackendConfig             `yaml:"secrets_backend,omitempty"`
+	Repositories      map[string]RepositorySpec         `yaml:"repositories,omitempty"`
+	Services          map[string]ServiceSpec            `yaml:"services,omitempty"`
+	MCPServers        map[string]MCPServerSpec          `yaml:"mcp_servers,omitempty"`
+	Agents            map[string]AgentSpec              `yaml:"agents,omitempty"`
+	Skills            map[string]SkillSpec              `yaml:"skills,omitempty"`
+	Secrets           []SecretRef                       `yaml:"secrets,omitempty"`
+	ConnectedAccounts map[string]ConnectedAccountSpec   `yaml:"connected_accounts,omitempty"`
+}
+
+// ConnectedAccountSpec defines an external account connection (OAuth, API key, etc.).
+type ConnectedAccountSpec struct {
+	Provider     string            `yaml:"provider"`                // google, github, anthropic, custom
+	Type         string            `yaml:"type"`                    // oauth, api_key, token, setup_command
+	SetupCommand *SetupCommandSpec `yaml:"setup_command,omitempty"` // for type: setup_command
+	OAuth        *OAuthConfig      `yaml:"oauth,omitempty"`         // for type: oauth (browser flow via OpenBao plugin)
+	Env          map[string]string `yaml:"env,omitempty"`           // how to expose: ENV_NAME: field_path
+	Description  string            `yaml:"description,omitempty"`   // shown during angee init
+	Required     bool              `yaml:"required,omitempty"`      // block init if not provided
+}
+
+// SetupCommandSpec defines a host-side command that performs auth and outputs a credential.
+// The command's stdout is captured and stored as the credential value.
+type SetupCommandSpec struct {
+	Command []string `yaml:"command"`          // e.g. ["claude", "setup-token"]
+	Prompt  string   `yaml:"prompt,omitempty"` // message shown to user before running
+	Parse   string   `yaml:"parse,omitempty"`  // how to extract value: "stdout" (default), "last_line"
+}
+
+// OAuthConfig defines OAuth provider settings for browser-based authorization flows.
+type OAuthConfig struct {
+	ClientID     string   `yaml:"client_id,omitempty"`     // or ${secret:google-client-id}
+	ClientSecret string   `yaml:"client_secret,omitempty"` // or ${secret:google-client-secret}
+	AuthURL      string   `yaml:"auth_url,omitempty"`      // override for custom providers
+	TokenURL     string   `yaml:"token_url,omitempty"`     // override for custom providers
+	Scopes       []string `yaml:"scopes,omitempty"`
+	RedirectURL  string   `yaml:"redirect_url,omitempty"`  // default: http://localhost:9000/oauth/callback
 }
 
 // SecretsBackendConfig configures the credential resolution backend.
@@ -180,6 +210,7 @@ type AgentSpec struct {
 	SystemPrompt       string            `yaml:"system_prompt,omitempty"`
 	Description        string            `yaml:"description,omitempty"`
 	CredentialBindings []string          `yaml:"credential_bindings,omitempty"` // credential names this agent can access
+	ConnectedAccounts  []string          `yaml:"connected_accounts,omitempty"`  // connected account names from top-level connected_accounts
 	Permissions        []string          `yaml:"permissions,omitempty"`         // operator-enforced capability permissions
 }
 

@@ -134,6 +134,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /credentials/{name}", s.handleCredentialSet)
 	mux.HandleFunc("DELETE /credentials/{name}", s.handleCredentialDelete)
 
+	// OAuth / Connected Accounts
+	mux.HandleFunc("GET /oauth/start/{account}", s.handleOAuthStart)
+	mux.HandleFunc("GET /oauth/callback", s.handleOAuthCallback)
+	mux.HandleFunc("GET /oauth/status/{account}", s.handleOAuthStatus)
+	mux.HandleFunc("GET /connected-accounts", s.handleConnectedAccountsList)
+
 	// MCP endpoint (JSON-RPC 2.0 over streamable HTTP)
 	mux.HandleFunc("POST /mcp", s.handleMCP)
 
@@ -239,7 +245,8 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 // The /health endpoint always bypasses auth.
 func authMiddleware(next http.Handler, apiKey string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if apiKey == "" || r.URL.Path == "/health" || r.URL.Path == "/openapi.json" {
+		if apiKey == "" || r.URL.Path == "/health" || r.URL.Path == "/openapi.json" ||
+			strings.HasPrefix(r.URL.Path, "/oauth/") {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -3,11 +3,13 @@ description: "OpenBao — secrets management and credential storage"
 
 services:
   openbao:
-    image: openbao/openbao:2
+    build:
+      context: ./services/openbao
+      dockerfile: Dockerfile
     lifecycle: system
     ports:
       - "8200:8200"
-    command: server -dev -dev-root-token-id=dev-root-token
+    command: server -dev -dev-root-token-id=dev-root-token -dev-plugin-dir=/openbao/plugins
     env:
       BAO_DEV_ROOT_TOKEN_ID: dev-root-token
     volumes:

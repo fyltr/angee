@@ -359,6 +359,23 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 		}
 	}
 
+	// Connected accounts: resolve env vars from connected_accounts spec.
+	// For each account the agent references, inject the env mappings.
+	// Non-OAuth accounts resolve via the same ${secret:name} pattern.
+	// OAuth accounts are resolved at deploy time by the operator.
+	for _, acctName := range agent.ConnectedAccounts {
+		acct, ok := cfg.ConnectedAccounts[acctName]
+		if !ok {
+			continue
+		}
+		for envKey := range acct.Env {
+			// The credential is stored under "account-{name}" in the secrets backend.
+			// Resolve it the same way as ${secret:...} — the actual value comes
+			// from .env or OpenBao at compose interpolation time.
+			cs.Environment = append(cs.Environment, envKey+"="+resolveSecretRefs("${secret:account-"+acctName+"}"))
+		}
+	}
+
 	// Agent-declared config file mounts.
 	// Template files under /workspace/ are rendered directly into the
 	// workspace host directory by RenderAgentFiles, so they don't need a
