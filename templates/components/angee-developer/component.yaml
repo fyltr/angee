@@ -1,21 +1,22 @@
 name: angee-developer
-description: "Developer agent — writes code, fixes bugs, reviews PRs"
+description: "Developer agent — Claude Code for writing code, fixing bugs, running tests"
 
 requires:
   - angee-files       # MCP server (provided by base)
 
 agents:
   angee-developer:
-    image: ghcr.io/anomalyco/opencode:latest
-    command: serve --hostname 0.0.0.0 --port 4096
+    build:
+      context: ./agents/angee-developer
+      dockerfile: Dockerfile
     lifecycle: system
     role: user
-    description: "Developer agent — writes code, fixes bugs, reviews PRs"
+    description: "Developer agent — Claude Code for writing code, fixing bugs, running tests"
     mcp_servers:
       - angee-files
     files:
-      - template: opencode.json.tmpl
-        mount: /root/.config/opencode/opencode.json
+      - template: mcp.json.tmpl
+        mount: /workspace/.mcp.json
     workspace:
       persistent: true
     resources:
@@ -31,6 +32,7 @@ secrets:
 
 files:
   - agents/angee-developer/AGENTS.md
+  - agents/angee-developer/Dockerfile
 
 templates:
-  - opencode.json.tmpl
+  - mcp.json.tmpl

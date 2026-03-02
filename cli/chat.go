@@ -19,11 +19,11 @@ var agentContainerNames = map[string]string{
 var chatCmd = &cobra.Command{
 	Use:   "chat [agent]",
 	Short: "Attach to an agent's terminal (default: admin)",
-	Long: `Open an interactive terminal session inside an agent container.
+	Long: `Attach to an agent's interactive terminal.
 
-This runs docker exec -it into the agent's container, giving you direct
-terminal access. The agent can be running OpenCode, Claude Code, or any
-terminal-based coding agent.
+The agent (Claude Code, OpenCode, etc.) is already running inside the
+container. This command connects your terminal to the running session
+via docker attach. Use Ctrl-p Ctrl-q to detach without stopping the agent.
 
 Examples:
   angee chat              # attach to admin agent
@@ -76,12 +76,14 @@ func init() {
 	askCmd.Flags().StringVar(&askAgent, "agent", "admin", "Agent to send the message to")
 }
 
-// attachToAgent runs docker exec -it to connect to the agent's opencode server.
+// attachToAgent connects to the agent's interactive terminal.
+//
+// The strategy depends on how the agent runs:
+//   - Interactive PID 1 (e.g. claude): docker attach to the running process
+//   - Server PID 1 (e.g. opencode serve): docker exec a client into the container
 func attachToAgent(agentName string) error {
 	containerService := resolveAgentService(agentName)
 	projectName := resolveProjectName()
-
-	// Build the container name: <project>-<service>-1
 	containerName := fmt.Sprintf("%s-%s-1", projectName, containerService)
 
 	// Check if the container is running
@@ -91,11 +93,23 @@ func attachToAgent(agentName string) error {
 		return fmt.Errorf("agent %q is not running (container: %s) — start with 'angee up'", agentName, containerName)
 	}
 
-	fmt.Printf("\n\033[1mAttaching to %s agent\033[0m (%s)\n\n", agentName, containerName)
+	fmt.Printf("\n\033[1mAttaching to %s agent\033[0m (%s)\n", agentName, containerName)
 
-	// Attach to the opencode server running inside the container
-	cmd := exec.Command("docker", "exec", "-it", containerName,
-		"opencode", "attach", "http://localhost:4096")
+	// Detect the agent runtime from the container's entrypoint/cmd.
+	runtime := detectAgentRuntime(containerName)
+
+	var cmd *exec.Cmd
+	switch runtime {
+	case "opencode":
+		// OpenCode runs as a server; exec a client to attach.
+		cmd = exec.Command("docker", "exec", "-it", containerName,
+			"opencode", "attach", "http://localhost:4096")
+	default:
+		// Interactive agent (claude, etc.): attach directly to PID 1.
+		fmt.Println("  Use Ctrl-p Ctrl-q to detach.")
+		cmd = exec.Command("docker", "attach", containerName)
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -124,12 +138,39 @@ func runAsk(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("agent %q is not running — start with 'angee up'", askAgent)
 	}
 
-	// Run a one-shot message via opencode run
-	execCmd := exec.Command("docker", "exec", containerName,
-		"opencode", "run", message)
+	// Detect runtime to pick the right one-shot command.
+	runtime := detectAgentRuntime(containerName)
+
+	var execCmd *exec.Cmd
+	switch runtime {
+	case "opencode":
+		execCmd = exec.Command("docker", "exec", containerName, "opencode", "run", message)
+	default:
+		execCmd = exec.Command("docker", "exec", "-w", "/workspace", containerName, "claude", "-p", message)
+	}
+
 	execCmd.Stdout = os.Stdout
 	execCmd.Stderr = os.Stderr
 	return execCmd.Run()
+}
+
+// detectAgentRuntime inspects the container's entrypoint and command to
+// determine which agent runtime is running. Returns "opencode", "claude",
+// or "" (unknown/fallback to docker attach).
+func detectAgentRuntime(containerName string) string {
+	out, err := exec.Command("docker", "inspect", "--format",
+		"{{.Config.Entrypoint}} {{.Config.Cmd}}", containerName).Output()
+	if err != nil {
+		return ""
+	}
+	s := strings.ToLower(strings.TrimSpace(string(out)))
+	if strings.Contains(s, "opencode") {
+		return "opencode"
+	}
+	if strings.Contains(s, "claude") {
+		return "claude"
+	}
+	return ""
 }
 
 // resolveAgentService maps an agent name to its docker compose service name.

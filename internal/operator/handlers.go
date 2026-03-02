@@ -108,7 +108,8 @@ func (s *Server) prepareAndCompile(cfg *config.AngeeConfig) error {
 		}
 	}
 	for agentName, agent := range cfg.Agents {
-		if err := compiler.RenderAgentFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
+		wsDir := compiler.ResolveWorkspaceDir(s.Root.Path, agent, cfg)
+		if err := compiler.RenderAgentFiles(s.Root.Path, s.Root.AgentDir(agentName), agent, cfg.MCPServers, wsDir); err != nil {
 			return fmt.Errorf("agent files for %s: %w", agentName, err)
 		}
 	}

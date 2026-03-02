@@ -52,7 +52,8 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		if err := r.EnsureAgentDir(agentName); err != nil {
 			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
 		}
-		if err := compiler.RenderAgentFiles(path, r.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
+		wsDir := compiler.ResolveWorkspaceDir(path, agent, cfg)
+		if err := compiler.RenderAgentFiles(path, r.AgentDir(agentName), agent, cfg.MCPServers, wsDir); err != nil {
 			return fmt.Errorf("agent files for %s: %w", agentName, err)
 		}
 	}

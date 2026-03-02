@@ -21,8 +21,9 @@ type AgentFileData struct {
 
 // templateFuncs is the FuncMap available to agent config templates.
 var templateFuncs = template.FuncMap{
-	"opencodeMCP": opencodeMCP,
-	"toJSON":      toJSON,
+	"opencodeMCP":    opencodeMCP,
+	"claudeCodeMCP":  claudeCodeMCP,
+	"toJSON":         toJSON,
 }
 
 // RenderAgentFiles renders template-based config files declared in agent.Files.
@@ -31,10 +32,12 @@ var templateFuncs = template.FuncMap{
 // compile time (volume mounts) and skipped here.
 //
 // Files whose mount path falls under /workspace/ are written directly into
-// the agent's workspace directory (so they're included in the workspace bind
-// mount). Other files are written to the agent directory and need a separate
-// volume mount added by the compiler.
-func RenderAgentFiles(rootPath, agentDir string, agent config.AgentSpec, allMCP map[string]config.MCPServerSpec) error {
+// the workspace directory (so they're included in the workspace bind mount).
+// By default this is agentDir/workspace/, but callers can override it via
+// workspaceDir for agents whose workspace is backed by a repository checkout.
+// Other files are written to the agent directory and need a separate volume
+// mount added by the compiler.
+func RenderAgentFiles(rootPath, agentDir string, agent config.AgentSpec, allMCP map[string]config.MCPServerSpec, workspaceDir ...string) error {
 	// Resolve the MCP servers this agent references.
 	resolved := make(map[string]config.MCPServerSpec)
 	for _, name := range agent.MCPServers {
@@ -70,7 +73,11 @@ func RenderAgentFiles(rootPath, agentDir string, agent config.AgentSpec, allMCP 
 			return fmt.Errorf("rendering template %s: %w", f.Template, err)
 		}
 
-		outPath := RenderedFilePath(agentDir, f)
+		wsDir := ""
+		if len(workspaceDir) > 0 && workspaceDir[0] != "" {
+			wsDir = workspaceDir[0]
+		}
+		outPath := renderedFilePathWithWorkspace(agentDir, f, wsDir)
 		if dir := filepath.Dir(outPath); dir != agentDir {
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				return fmt.Errorf("creating directory for %s: %w", outPath, err)
@@ -89,9 +96,19 @@ func RenderAgentFiles(rootPath, agentDir string, agent config.AgentSpec, allMCP 
 // subdirectory (avoiding nested bind mount conflicts). Others go into the
 // agent directory root.
 func RenderedFilePath(agentDir string, f config.FileMount) string {
+	return renderedFilePathWithWorkspace(agentDir, f, "")
+}
+
+// renderedFilePathWithWorkspace is like RenderedFilePath but accepts an
+// explicit workspace directory. When wsDir is non-empty and the mount is
+// under /workspace/, files are written there (e.g. the repo checkout dir)
+// instead of agentDir/workspace/.
+func renderedFilePathWithWorkspace(agentDir string, f config.FileMount, wsDir string) string {
 	if isUnderWorkspace(f.Mount) {
-		// Strip the /workspace/ prefix and write into the workspace subdir.
 		rel := strings.TrimPrefix(f.Mount, "/workspace/")
+		if wsDir != "" {
+			return filepath.Join(wsDir, rel)
+		}
 		return filepath.Join(agentDir, "workspace", rel)
 	}
 	return filepath.Join(agentDir, filepath.Base(f.Mount))
@@ -213,6 +230,54 @@ func opencodeMCP(mcpServers map[string]config.MCPServerSpec) (string, error) {
 	return string(data), nil
 }
 
+// claudeCodeMCP generates a Claude Code .mcp.json config from MCP server specs.
+// See https://code.claude.com/docs/en/mcp for the expected schema.
+func claudeCodeMCP(mcpServers map[string]config.MCPServerSpec) (string, error) {
+	type remoteDef struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+
+	type stdioDef struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+
+	servers := make(map[string]any)
+	for name, spec := range mcpServers {
+		switch spec.Transport {
+		case "streamable-http":
+			servers[name] = remoteDef{
+				Type: "http",
+				URL:  spec.URL,
+			}
+		case "sse":
+			servers[name] = remoteDef{
+				Type: "sse",
+				URL:  spec.URL,
+			}
+		case "stdio":
+			var cmd string
+			var args []string
+			if len(spec.Command) > 0 {
+				cmd = spec.Command[0]
+				args = append(spec.Command[1:], spec.Args...)
+			}
+			servers[name] = stdioDef{
+				Command: cmd,
+				Args:    args,
+			}
+		}
+	}
+
+	wrapper := map[string]any{"mcpServers": servers}
+	data, err := json.MarshalIndent(wrapper, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // toJSON marshals any value to indented JSON.
 func toJSON(v any) (string, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
@@ -220,6 +285,29 @@ func toJSON(v any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ResolveWorkspaceDir returns the absolute host path for an agent's workspace.
+// When the agent uses a repository workspace, this resolves to the repo checkout
+// directory. Otherwise it returns "" (the default agentDir/workspace/ is used).
+func ResolveWorkspaceDir(rootPath string, agent config.AgentSpec, cfg *config.AngeeConfig) string {
+	if agent.Workspace.Path != "" {
+		p := agent.Workspace.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(rootPath, p)
+		}
+		return p
+	}
+	if agent.Workspace.Repository != "" {
+		repoPath := filepath.Join("src", agent.Workspace.Repository)
+		if cfg != nil {
+			if spec, ok := cfg.Repositories[agent.Workspace.Repository]; ok && spec.Path != "" {
+				repoPath = spec.Path
+			}
+		}
+		return filepath.Join(rootPath, repoPath)
+	}
+	return ""
 }
 
 // ExpandHome replaces a leading ~ with the user's home directory.

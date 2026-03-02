@@ -164,6 +164,7 @@ type FileMount struct {
 // AgentSpec defines an AI agent.
 type AgentSpec struct {
 	Image              string            `yaml:"image,omitempty"`
+	Build              *BuildSpec        `yaml:"build,omitempty"`
 	Command            string            `yaml:"command,omitempty"`
 	Template           string            `yaml:"template,omitempty"`
 	Version            string            `yaml:"version,omitempty"`

@@ -225,8 +225,8 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config.AngeeConfig) (ComposeService, error) {
 	mcpServers := cfg.MCPServers
 	image := agent.Image
-	if image == "" {
-		// Default agent image
+	if image == "" && agent.Build == nil {
+		// Default agent image (only when no build is specified)
 		image = "ghcr.io/fyltr/angee-agent:latest"
 	}
 
@@ -244,6 +244,14 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 			"angee.lifecycle": agent.Lifecycle,
 			"angee.role":      agent.Role,
 		},
+	}
+
+	if agent.Build != nil {
+		cs.Build = &ComposeBuild{
+			Context:    agent.Build.Context,
+			Dockerfile: agent.Build.Dockerfile,
+			Target:     agent.Build.Target,
+		}
 	}
 
 	// Per-agent .env file (written by operator at start time)
@@ -352,9 +360,9 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 	}
 
 	// Agent-declared config file mounts.
-	// Template files under /workspace/ are written into the workspace dir by
-	// RenderAgentFiles, so they don't need a separate volume mount (they're
-	// already part of the workspace bind mount above).
+	// Template files under /workspace/ are rendered directly into the
+	// workspace host directory by RenderAgentFiles, so they don't need a
+	// separate volume mount (they're already part of the workspace bind mount).
 	for _, f := range agent.Files {
 		if f.Template != "" {
 			if isUnderWorkspace(f.Mount) {

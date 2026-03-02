@@ -372,6 +372,161 @@ func TestRenderCredentialFilesNoBindings(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeMCP(t *testing.T) {
+	mcpServers := map[string]config.MCPServerSpec{
+		"angee-operator": {
+			Transport: "streamable-http",
+			URL:       "http://operator:9000/mcp",
+		},
+		"angee-files": {
+			Transport: "stdio",
+			Command:   []string{"node", "/usr/local/lib/mcp-filesystem/dist/index.js"},
+			Args:      []string{"/workspace"},
+		},
+		"django-mcp": {
+			Transport: "sse",
+			URL:       "http://django:8000/mcp/",
+		},
+	}
+
+	result, err := claudeCodeMCP(mcpServers)
+	if err != nil {
+		t.Fatalf("claudeCodeMCP() error: %v", err)
+	}
+
+	var parsed struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+
+	if len(parsed.MCPServers) != 3 {
+		t.Errorf("expected 3 MCP servers, got %d", len(parsed.MCPServers))
+	}
+
+	// Check HTTP server (streamable-http → "http")
+	var remoteServer struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+	if err := json.Unmarshal(parsed.MCPServers["angee-operator"], &remoteServer); err != nil {
+		t.Fatal(err)
+	}
+	if remoteServer.Type != "http" {
+		t.Errorf("angee-operator type = %q, want %q", remoteServer.Type, "http")
+	}
+	if remoteServer.URL != "http://operator:9000/mcp" {
+		t.Errorf("angee-operator url = %q", remoteServer.URL)
+	}
+
+	// Check SSE server (sse → "sse")
+	if err := json.Unmarshal(parsed.MCPServers["django-mcp"], &remoteServer); err != nil {
+		t.Fatal(err)
+	}
+	if remoteServer.Type != "sse" {
+		t.Errorf("django-mcp type = %q, want %q", remoteServer.Type, "sse")
+	}
+
+	// Check stdio server
+	var stdioServer struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if err := json.Unmarshal(parsed.MCPServers["angee-files"], &stdioServer); err != nil {
+		t.Fatal(err)
+	}
+	if stdioServer.Command != "node" {
+		t.Errorf("angee-files command = %q, want %q", stdioServer.Command, "node")
+	}
+	wantArgs := []string{"/usr/local/lib/mcp-filesystem/dist/index.js", "/workspace"}
+	if len(stdioServer.Args) != len(wantArgs) {
+		t.Fatalf("angee-files args = %v, want %v", stdioServer.Args, wantArgs)
+	}
+	for i, a := range wantArgs {
+		if stdioServer.Args[i] != a {
+			t.Errorf("angee-files args[%d] = %q, want %q", i, stdioServer.Args[i], a)
+		}
+	}
+}
+
+func TestClaudeCodeMCPEmpty(t *testing.T) {
+	result, err := claudeCodeMCP(nil)
+	if err != nil {
+		t.Fatalf("claudeCodeMCP() error: %v", err)
+	}
+
+	var parsed struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if len(parsed.MCPServers) != 0 {
+		t.Errorf("expected empty mcpServers, got %d", len(parsed.MCPServers))
+	}
+}
+
+func TestRenderAgentFilesClaudeCodeTemplate(t *testing.T) {
+	rootDir := t.TempDir()
+	agentDir := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(agentDir, "workspace"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tmplContent := `{{ claudeCodeMCP .MCPServers }}
+`
+	if err := os.WriteFile(filepath.Join(rootDir, "mcp.json.tmpl"), []byte(tmplContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	agent := config.AgentSpec{
+		MCPServers: []string{"angee-files", "django-mcp"},
+		Files: []config.FileMount{
+			{
+				Template: "mcp.json.tmpl",
+				Mount:    "/workspace/.mcp.json",
+			},
+		},
+	}
+
+	allMCP := map[string]config.MCPServerSpec{
+		"angee-files": {
+			Transport: "stdio",
+			Command:   []string{"node", "/usr/local/lib/mcp-filesystem/dist/index.js"},
+			Args:      []string{"/workspace"},
+		},
+		"django-mcp": {
+			Transport: "sse",
+			URL:       "http://django:8000/mcp/",
+		},
+	}
+
+	if err := RenderAgentFiles(rootDir, agentDir, agent, allMCP); err != nil {
+		t.Fatalf("RenderAgentFiles() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(agentDir, "workspace", ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+
+	var parsed struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parsing .mcp.json: %v", err)
+	}
+
+	if _, ok := parsed.MCPServers["angee-files"]; !ok {
+		t.Error("expected angee-files in mcpServers")
+	}
+	if _, ok := parsed.MCPServers["django-mcp"]; !ok {
+		t.Error("expected django-mcp in mcpServers")
+	}
+}
+
 func TestToJSON(t *testing.T) {
 	result, err := toJSON(map[string]string{"hello": "world"})
 	if err != nil {

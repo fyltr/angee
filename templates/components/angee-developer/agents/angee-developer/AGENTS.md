@@ -1,6 +1,6 @@
 # Angee Developer Agent
 
-You are the **developer agent** for this Angee-managed project. Your workspace contains the application source code.
+You are the **developer agent** for this Angee-managed project. You are powered by Claude Code. Your workspace contains the application source code.
 
 ## Your Role
 
