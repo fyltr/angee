@@ -1,89 +1,36 @@
 // Package operator implements the HTTP API and MCP server for the angee operator.
+// All business logic lives in internal/service — this package is a thin adapter.
 package operator
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"runtime/debug"
 	"strings"
 
-	"github.com/fyltr/angee/internal/compiler"
-	"github.com/fyltr/angee/internal/config"
-	"github.com/fyltr/angee/internal/git"
-	"github.com/fyltr/angee/internal/root"
-	"github.com/fyltr/angee/internal/runtime"
-	composeruntime "github.com/fyltr/angee/internal/runtime/compose"
+	"github.com/fyltr/angee/api"
+	"github.com/fyltr/angee/internal/service"
 )
 
-// Server is the angee operator: it owns ANGEE_ROOT and manages the runtime.
+// Server is the angee operator HTTP server.
+// It delegates all business logic to Platform.
 type Server struct {
-	Root     *root.Root
-	Cfg      *config.OperatorConfig
-	Backend  runtime.RuntimeBackend
-	Compiler *compiler.Compiler
-	Git      *git.Repo
+	Platform *service.Platform
 	Log      *slog.Logger
-	Health   *HealthChecker
-
-	// healthCancel stops the current health-probe goroutines so they can be
-	// restarted with an updated config after a deploy.
-	healthCancel context.CancelFunc
 }
 
 // New creates an operator Server for the given ANGEE_ROOT path.
 func New(angeeRoot string, logger *slog.Logger) (*Server, error) {
-	r, err := root.Open(angeeRoot)
+	plat, err := service.NewPlatform(angeeRoot, logger)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg, err := r.LoadOperatorConfig()
-	if err != nil {
-		return nil, fmt.Errorf("loading operator config: %w", err)
-	}
-
 	if logger == nil {
-		logger = slog.Default()
+		logger = plat.Log
 	}
-
-	comp := compiler.New(angeeRoot, cfg.Docker.Network)
-
-	s := &Server{
-		Root:     r,
-		Cfg:      cfg,
-		Git:      git.New(angeeRoot),
-		Log:      logger,
-		Compiler: comp,
-		Health:   newHealthChecker(logger),
-	}
-
-	// Pass the resolved API key to the compiler so it can auto-inject it
-	// into operator-role agents.
-	comp.APIKey = s.resolveAPIKey()
-
-	// Load angee.yaml to get the project name for the compose backend
-	angeeCfg, err := r.LoadAngeeConfig()
-	if err != nil {
-		return nil, fmt.Errorf("loading angee.yaml: %w", err)
-	}
-	projectName := angeeCfg.Name
-	if projectName == "" {
-		projectName = "angee"
-	}
-
-	// Select runtime backend
-	switch cfg.Runtime {
-	case "kubernetes":
-		return nil, fmt.Errorf("kubernetes backend not yet implemented")
-	default:
-		s.Backend = composeruntime.New(angeeRoot, projectName)
-	}
-
-	return s, nil
+	return &Server{Platform: plat, Log: logger}, nil
 }
 
 // Handler returns the HTTP handler for the operator API.
@@ -110,22 +57,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /down", s.handleDown)
 
 	// Agent operations
+	mux.HandleFunc("GET /agents", s.handleAgentList)
 	mux.HandleFunc("POST /agents/{name}/start", s.handleAgentStart)
 	mux.HandleFunc("POST /agents/{name}/stop", s.handleAgentStop)
 	mux.HandleFunc("GET /agents/{name}/logs", s.handleAgentLogs)
-	mux.HandleFunc("GET /agents", s.handleAgentList)
+
+	// Connectors
+	mux.HandleFunc("GET /connectors", s.handleConnectorList)
+	mux.HandleFunc("POST /connectors", s.handleConnectorCreate)
+	mux.HandleFunc("GET /connectors/{name}", s.handleConnectorGet)
+	mux.HandleFunc("PATCH /connectors/{name}", s.handleConnectorUpdate)
+	mux.HandleFunc("DELETE /connectors/{name}", s.handleConnectorDelete)
 
 	// Git history
 	mux.HandleFunc("GET /history", s.handleHistory)
 
-	// MCP endpoint (JSON-RPC 2.0 over streamable HTTP)
+	// MCP endpoint
 	mux.HandleFunc("POST /mcp", s.handleMCP)
 
-	// OpenAPI schema (public, no auth required)
+	// OpenAPI
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 
-	apiKey := s.resolveAPIKey()
-	origins := s.Cfg.CORSOrigins
+	apiKey := s.Platform.APIKey()
+	origins := s.Platform.Cfg.CORSOrigins
 
 	return recoveryMiddleware(
 		corsMiddleware(
@@ -141,15 +95,9 @@ func (s *Server) Handler() http.Handler {
 
 // Start runs the operator HTTP server.
 func (s *Server) Start(ctx context.Context, addr string) error {
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: s.Handler(),
-	}
-
-	s.Log.Info("operator started", "addr", addr, "root", s.Root.Path, "runtime", s.Cfg.Runtime)
-
-	// Start health probes for the current config.
-	s.startHealthProbes(ctx)
+	srv := &http.Server{Addr: addr, Handler: s.Handler()}
+	s.Log.Info("operator started", "addr", addr, "root", s.Platform.Root.Path, "runtime", s.Platform.Cfg.Runtime)
+	s.Platform.RestartHealthProbes(ctx)
 
 	go func() {
 		<-ctx.Done()
@@ -162,65 +110,22 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	return nil
 }
 
-// startHealthProbes (re)starts health-check goroutines for the current config.
-// It cancels any previously running probes first.
-func (s *Server) startHealthProbes(parentCtx context.Context) {
-	if s.healthCancel != nil {
-		s.healthCancel()
-	}
+// ── Response helpers ────────────────────────────────────────────────────────
 
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		s.Log.Warn("skipping health probes: cannot load angee.yaml", "error", err)
-		return
-	}
-
-	probes := s.Health.Reload(cfg)
-	if len(probes) == 0 {
-		return
-	}
-
-	ctx, cancel := context.WithCancel(parentCtx)
-	s.healthCancel = cancel
-	s.Health.Run(ctx, probes)
-	s.Log.Info("health probes started", "count", len(probes))
-}
-
-// compileAndWrite compiles angee.yaml → docker-compose.yaml.
-func (s *Server) compileAndWrite(cfg *config.AngeeConfig) error {
-	cf, err := s.Compiler.Compile(cfg)
-	if err != nil {
-		return fmt.Errorf("compile: %w", err)
-	}
-	return compiler.Write(cf, s.Root.ComposePath())
-}
-
-// resolveAPIKey returns the API key from environment or config.
-// Environment variable ANGEE_API_KEY takes precedence.
-func (s *Server) resolveAPIKey() string {
-	if key := os.Getenv("ANGEE_API_KEY"); key != "" {
-		return key
-	}
-	return s.Cfg.APIKey
-}
-
-// jsonOK writes a JSON 200 response.
-func jsonOK(w http.ResponseWriter, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v) //nolint:errcheck
 }
 
-// jsonErr writes a JSON error response.
-func jsonErr(w http.ResponseWriter, code int, msg string) {
+func writeError(w http.ResponseWriter, err error) {
+	code := service.ErrorStatus(err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg}) //nolint:errcheck
+	json.NewEncoder(w).Encode(api.ErrorResponse{Error: err.Error()}) //nolint:errcheck
 }
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// ── Middleware ───────────────────────────────────────────────────────────────
 
-// authMiddleware checks for a valid Bearer token when an API key is configured.
-// The /health endpoint always bypasses auth.
 func authMiddleware(next http.Handler, apiKey string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if apiKey == "" || r.URL.Path == "/health" || r.URL.Path == "/openapi.json" {
@@ -230,35 +135,34 @@ func authMiddleware(next http.Handler, apiKey string, log *slog.Logger) http.Han
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != apiKey {
 			log.Warn("unauthorized request", "path", r.URL.Path, "remote", r.RemoteAddr)
-			jsonErr(w, http.StatusUnauthorized, "unauthorized")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(api.ErrorResponse{Error: "unauthorized"}) //nolint:errcheck
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// recoveryMiddleware catches panics, logs the stack trace, and returns 500.
 func recoveryMiddleware(next http.Handler, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Error("panic recovered", "error", rec, "stack", string(debug.Stack()))
-				jsonErr(w, http.StatusInternalServerError, "internal server error")
+				writeError(w, &service.ServiceError{Status: 500, Message: "internal server error"})
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
 }
 
-// corsMiddleware sets CORS headers. It supports trailing-* wildcards in origin
-// patterns (e.g. "http://localhost:*" matches any port).
 func corsMiddleware(next http.Handler, origins []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" && matchOrigin(origin, origins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -268,8 +172,6 @@ func corsMiddleware(next http.Handler, origins []string) http.Handler {
 	})
 }
 
-// matchOrigin checks if origin matches any of the allowed patterns.
-// A pattern ending in "*" acts as a prefix match.
 func matchOrigin(origin string, patterns []string) bool {
 	for _, p := range patterns {
 		if strings.HasSuffix(p, "*") {

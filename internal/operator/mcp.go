@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/compiler"
-	"github.com/fyltr/angee/internal/runtime"
 )
 
-// ── JSON-RPC 2.0 types ──────────────────────────────────────────────────────
+// ── JSON-RPC 2.0 types ─────────────────────────────────────────────────────
 
-// jsonRPCRequest is a JSON-RPC 2.0 request.
 type jsonRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Method  string          `json:"method"`
@@ -23,7 +18,6 @@ type jsonRPCRequest struct {
 	ID      any             `json:"id"`
 }
 
-// jsonRPCResponse is a JSON-RPC 2.0 response.
 type jsonRPCResponse struct {
 	JSONRPC string        `json:"jsonrpc"`
 	Result  any           `json:"result,omitempty"`
@@ -31,57 +25,37 @@ type jsonRPCResponse struct {
 	ID      any           `json:"id"`
 }
 
-// jsonRPCError is a JSON-RPC 2.0 error object.
 type jsonRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-// ── MCP protocol types ───────────────────────────────────────────────────────
-
-// mcpToolCallParams is the params object for tools/call.
 type mcpToolCallParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
-// mcpContent is a single content item in an MCP tool result.
 type mcpContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
-// mcpToolResult is the result of a tools/call.
 type mcpToolResult struct {
 	Content []mcpContent `json:"content"`
 	IsError bool         `json:"isError,omitempty"`
 }
 
-// mcpToolDef describes one tool for tools/list.
 type mcpToolDef struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-// mcpInitializeResult is returned by initialize.
-type mcpInitializeResult struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    map[string]any `json:"capabilities"`
-	ServerInfo      mcpServerInfo  `json:"serverInfo"`
-}
+// ── Handler ─────────────────────────────────────────────────────────────────
 
-type mcpServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// ── Handler ──────────────────────────────────────────────────────────────────
-
-// handleMCP handles JSON-RPC 2.0 requests from MCP clients (agents).
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "POST required")
+		writeError(w, fmt.Errorf("POST required"))
 		return
 	}
 
@@ -97,29 +71,22 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "initialize":
-		mcpWriteResult(w, req.ID, mcpInitializeResult{
-			ProtocolVersion: "2025-03-26",
-			Capabilities:    map[string]any{"tools": map[string]any{}},
-			ServerInfo:      mcpServerInfo{Name: "angee-operator", Version: "0.1.0"},
+		mcpWriteResult(w, req.ID, map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "angee-operator", "version": "0.1.0"},
 		})
-
 	case "notifications/initialized":
-		// Client acknowledgement — no response needed for notifications.
 		w.WriteHeader(http.StatusNoContent)
-
 	case "tools/list":
 		mcpWriteResult(w, req.ID, map[string]any{"tools": mcpToolDefinitions()})
-
 	case "tools/call":
 		s.handleMCPToolCall(w, r.Context(), req)
-
 	default:
 		mcpWriteError(w, req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
 	}
 }
 
-// handleMCPToolCall dispatches a tools/call request to the appropriate
-// business logic method.
 func (s *Server) handleMCPToolCall(w http.ResponseWriter, ctx context.Context, req jsonRPCRequest) {
 	var params mcpToolCallParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -150,336 +117,118 @@ func (s *Server) handleMCPToolCall(w http.ResponseWriter, ctx context.Context, r
 	})
 }
 
-// dispatchTool routes a tool name to the corresponding business logic.
+// ── Dispatch: every case is unmarshal args → call Platform method ────────
+
 func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMessage) (any, error) {
 	switch name {
+	// Platform
 	case "platform_health":
-		return s.toolHealth()
+		return s.Platform.HealthCheck(), nil
 	case "platform_status":
-		return s.toolStatus(ctx)
-	case "config_get":
-		return s.toolConfigGet()
-	case "config_set":
-		return s.toolConfigSet(ctx, args)
-	case "deploy":
-		return s.toolDeploy(ctx)
-	case "deploy_plan":
-		return s.toolPlan(ctx)
-	case "deploy_rollback":
-		return s.toolRollback(ctx, args)
-	case "service_logs":
-		return s.toolServiceLogs(ctx, args)
-	case "service_scale":
-		return s.toolServiceScale(ctx, args)
+		return s.Platform.Status(ctx)
 	case "platform_down":
-		return s.toolDown(ctx)
+		return api.DownResponse{Status: "down"}, s.Platform.Down(ctx)
+
+	// Config
+	case "config_get":
+		return s.Platform.ConfigGet()
+	case "config_set":
+		var p api.ConfigSetRequest
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.ConfigSet(ctx, p.Content, p.Message, p.Deploy)
+
+	// Deploy
+	case "deploy":
+		return s.Platform.Deploy(ctx, "")
+	case "deploy_plan":
+		return s.Platform.Plan(ctx)
+	case "deploy_rollback":
+		var p api.RollbackRequest
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.Rollback(ctx, p.SHA)
+
+	// Services
+	case "service_logs":
+		var p struct {
+			Service string `json:"service"`
+			Lines   int    `json:"lines"`
+		}
+		json.Unmarshal(args, &p) //nolint:errcheck
+		return s.Platform.ServiceLogsText(ctx, p.Service, p.Lines)
+	case "service_scale":
+		var p api.ScaleRequest
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.Scale(ctx, p.Service, p.Replicas)
+
+	// Agents
 	case "agent_list":
-		return s.toolAgentList(ctx)
+		return s.Platform.AgentList(ctx)
 	case "agent_start":
-		return s.toolAgentStart(ctx, args)
+		var p struct{ Name string `json:"name"` }
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.AgentStart(ctx, p.Name)
 	case "agent_stop":
-		return s.toolAgentStop(ctx, args)
+		var p struct{ Name string `json:"name"` }
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return api.AgentActionResponse{Status: "stopped", Agent: p.Name}, s.Platform.AgentStop(ctx, p.Name)
 	case "agent_logs":
-		return s.toolAgentLogs(ctx, args)
+		var p struct {
+			Name  string `json:"name"`
+			Lines int    `json:"lines"`
+		}
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.AgentLogs(ctx, p.Name, p.Lines)
+
+	// Connectors
+	case "connector_list":
+		var p struct{ Tags []string `json:"tags"` }
+		json.Unmarshal(args, &p) //nolint:errcheck
+		return s.Platform.ConnectorList(p.Tags)
+	case "connector_create":
+		var p api.ConnectorCreateRequest
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return s.Platform.ConnectorCreate(ctx, p)
+	case "connector_delete":
+		var p struct{ Name string `json:"name"` }
+		if err := json.Unmarshal(args, &p); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+		return nil, s.Platform.ConnectorDelete(ctx, p.Name)
+
+	// Credentials
+	case "credentials_list":
+		return nil, fmt.Errorf("credentials backend not configured")
+	case "credentials_set":
+		return nil, fmt.Errorf("credentials backend not configured")
+	case "credentials_delete":
+		return nil, fmt.Errorf("credentials backend not configured")
+
+	// History
 	case "history":
-		return s.toolHistory(args)
+		var p struct{ N int `json:"n"` }
+		json.Unmarshal(args, &p) //nolint:errcheck
+		return s.Platform.History(p.N)
+
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 }
 
-// ── Tool implementations ─────────────────────────────────────────────────────
-// Each method extracts business logic from the corresponding HTTP handler.
-
-func (s *Server) toolHealth() (*api.HealthResponse, error) {
-	return &api.HealthResponse{Status: "ok", Root: s.Root.Path, Runtime: s.Cfg.Runtime}, nil
-}
-
-func (s *Server) toolStatus(ctx context.Context) ([]*runtime.ServiceStatus, error) {
-	statuses, err := s.Backend.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if statuses == nil {
-		statuses = []*runtime.ServiceStatus{}
-	}
-	return statuses, nil
-}
-
-func (s *Server) toolConfigGet() (*api.ConfigGetResponse, error) {
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		return nil, err
-	}
-	return &api.ConfigGetResponse{Config: cfg}, nil
-}
-
-func (s *Server) toolConfigSet(ctx context.Context, args json.RawMessage) (*api.ConfigSetResponse, error) {
-	var req api.ConfigSetRequest
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-	if req.Content == "" {
-		return nil, fmt.Errorf("content is required")
-	}
-	if req.Message == "" {
-		req.Message = "angee-agent: update config"
-	}
-
-	if err := s.Root.WriteAngeeYAML(req.Content); err != nil {
-		return nil, err
-	}
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		return nil, fmt.Errorf("invalid angee.yaml: %w", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
-	sha, err := s.Root.CommitConfig(req.Message)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := &api.ConfigSetResponse{SHA: sha, Message: req.Message}
-
-	if req.Deploy {
-		result, err := s.deploy(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp.Deploy = applyResultToAPI(result)
-	}
-
-	return resp, nil
-}
-
-func (s *Server) toolDeploy(ctx context.Context) (*api.ApplyResult, error) {
-	result, err := s.deploy(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return applyResultToAPI(result), nil
-}
-
-func (s *Server) toolPlan(ctx context.Context) (*api.ChangeSet, error) {
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		return nil, err
-	}
-	if err := s.compileAndWrite(cfg); err != nil {
-		return nil, err
-	}
-	changeset, err := s.Backend.Diff(ctx, s.Root.ComposePath())
-	if err != nil {
-		return nil, err
-	}
-	return &api.ChangeSet{Add: changeset.Add, Update: changeset.Update, Remove: changeset.Remove}, nil
-}
-
-func (s *Server) toolRollback(ctx context.Context, args json.RawMessage) (*api.RollbackResponse, error) {
-	var req struct {
-		SHA string `json:"sha"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil || req.SHA == "" {
-		return nil, fmt.Errorf("sha is required")
-	}
-
-	if err := s.Git.Revert(req.SHA); err != nil {
-		if err2 := s.Git.ResetHard(req.SHA); err2 != nil {
-			return nil, fmt.Errorf("rollback failed: %w", err)
-		}
-	}
-
-	result, err := s.deploy(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	sha, _ := s.Git.CurrentSHA()
-	return &api.RollbackResponse{RolledBackTo: sha, Deploy: applyResultToAPI(result)}, nil
-}
-
-func (s *Server) toolServiceLogs(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Service string `json:"service"`
-		Lines   int    `json:"lines"`
-		Since   string `json:"since"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
-	if params.Lines <= 0 {
-		params.Lines = 100
-	}
-
-	rc, err := s.Backend.Logs(ctx, params.Service, runtime.LogOptions{
-		Lines: params.Lines,
-		Since: params.Since,
-	})
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func (s *Server) toolServiceScale(ctx context.Context, args json.RawMessage) (*api.ScaleResponse, error) {
-	var req struct {
-		Service  string `json:"service"`
-		Replicas int    `json:"replicas"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
-	}
-	if req.Service == "" {
-		return nil, fmt.Errorf("service is required")
-	}
-	if err := s.Backend.Scale(ctx, req.Service, req.Replicas); err != nil {
-		return nil, err
-	}
-	return &api.ScaleResponse{Service: req.Service, Replicas: req.Replicas}, nil
-}
-
-func (s *Server) toolDown(ctx context.Context) (*api.DownResponse, error) {
-	if err := s.Backend.Down(ctx); err != nil {
-		return nil, err
-	}
-	return &api.DownResponse{Status: "down"}, nil
-}
-
-func (s *Server) toolAgentList(ctx context.Context) ([]api.AgentInfo, error) {
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	statuses, _ := s.Backend.Status(ctx)
-	statusMap := make(map[string]*runtime.ServiceStatus)
-	for _, st := range statuses {
-		statusMap[st.Name] = st
-	}
-
-	var agents []api.AgentInfo
-	for name, agent := range cfg.Agents {
-		status := "stopped"
-		health := "unknown"
-		if st, ok := statusMap[compiler.AgentServicePrefix+name]; ok {
-			status = st.Status
-			health = st.Health
-		}
-		agents = append(agents, api.AgentInfo{
-			Name:      name,
-			Lifecycle: agent.Lifecycle,
-			Role:      agent.Role,
-			Status:    status,
-			Health:    health,
-		})
-	}
-	return agents, nil
-}
-
-func (s *Server) toolAgentStart(ctx context.Context, args json.RawMessage) (*api.ApplyResult, error) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil || req.Name == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-
-	cfg, err := s.Root.LoadAngeeConfig()
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := cfg.Agents[req.Name]; !ok {
-		return nil, fmt.Errorf("agent %q not found in angee.yaml", req.Name)
-	}
-
-	if err := s.prepareAndCompile(cfg); err != nil {
-		return nil, err
-	}
-
-	result, err := s.Backend.Apply(ctx, s.Root.ComposePath())
-	if err != nil {
-		return nil, err
-	}
-	return applyResultToAPI(result), nil
-}
-
-func (s *Server) toolAgentStop(ctx context.Context, args json.RawMessage) (*api.AgentActionResponse, error) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(args, &req); err != nil || req.Name == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-	if err := s.Backend.Stop(ctx, compiler.AgentServicePrefix+req.Name); err != nil {
-		return nil, err
-	}
-	return &api.AgentActionResponse{Status: "stopped", Agent: req.Name}, nil
-}
-
-func (s *Server) toolAgentLogs(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Name  string `json:"name"`
-		Lines int    `json:"lines"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil || params.Name == "" {
-		return "", fmt.Errorf("name is required")
-	}
-	if params.Lines <= 0 {
-		params.Lines = 200
-	}
-
-	rc, err := s.Backend.Logs(ctx, compiler.AgentServicePrefix+params.Name, runtime.LogOptions{
-		Lines: params.Lines,
-	})
-	if err != nil {
-		return "", err
-	}
-	defer rc.Close()
-
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func (s *Server) toolHistory(args json.RawMessage) ([]api.CommitInfo, error) {
-	var params struct {
-		N int `json:"n"`
-	}
-	json.Unmarshal(args, &params) //nolint:errcheck
-	n := params.N
-	if n <= 0 {
-		n = 20
-	}
-
-	commits, err := s.Git.Log(n)
-	if err != nil {
-		return []api.CommitInfo{}, nil
-	}
-
-	var resp []api.CommitInfo
-	for _, c := range commits {
-		resp = append(resp, api.CommitInfo{
-			SHA:     c.SHA,
-			Message: c.Message,
-			Author:  c.Author,
-			Date:    c.Date,
-		})
-	}
-	return resp, nil
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 func mcpWriteResult(w http.ResponseWriter, id any, result any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -491,7 +240,7 @@ func mcpWriteError(w http.ResponseWriter, id any, code int, msg string) {
 	json.NewEncoder(w).Encode(jsonRPCResponse{JSONRPC: "2.0", Error: &jsonRPCError{Code: code, Message: msg}, ID: id}) //nolint:errcheck
 }
 
-// ── Tool definitions ─────────────────────────────────────────────────────────
+// ── Tool definitions ────────────────────────────────────────────────────────
 
 func mcpToolDefinitions() []mcpToolDef {
 	obj := map[string]any{"type": "object", "properties": map[string]any{}}
@@ -522,7 +271,6 @@ func mcpToolDefinitions() []mcpToolDef {
 			"properties": map[string]any{
 				"service": map[string]any{"type": "string", "description": "Service name (omit for all)"},
 				"lines":   map[string]any{"type": "integer", "description": "Number of lines (default: 100)"},
-				"since":   map[string]any{"type": "string", "description": "Only logs after this timestamp"},
 			},
 		}},
 		{Name: "service_scale", Description: "Scale a service to N replicas", InputSchema: map[string]any{
@@ -557,6 +305,30 @@ func mcpToolDefinitions() []mcpToolDef {
 			},
 			"required": []string{"name"},
 		}},
+		{Name: "connector_list", Description: "List all connectors", InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Filter by tags"},
+			},
+		}},
+		{Name: "connector_create", Description: "Create a new connector", InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":        map[string]any{"type": "string"},
+				"provider":    map[string]any{"type": "string"},
+				"type":        map[string]any{"type": "string", "description": "oauth | api_key | token | setup_command"},
+				"description": map[string]any{"type": "string"},
+				"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			},
+			"required": []string{"name", "provider", "type"},
+		}},
+		{Name: "connector_delete", Description: "Delete a connector", InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Connector name"},
+			},
+			"required": []string{"name"},
+		}},
 		{Name: "history", Description: "Get config change history", InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -564,24 +336,4 @@ func mcpToolDefinitions() []mcpToolDef {
 			},
 		}},
 	}
-}
-
-// intDefault returns n if positive, otherwise def.
-func intDefault(n, def int) int {
-	if n > 0 {
-		return n
-	}
-	return def
-}
-
-// parseInt parses a string to int, returning def on failure.
-func parseInt(s string, def int) int {
-	if s == "" {
-		return def
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return def
-	}
-	return n
 }

@@ -13,6 +13,8 @@ type HealthResponse struct {
 	Runtime string `json:"runtime"`
 }
 
+// ── Deploy ──────────────────────────────────────────────────────────────────
+
 // DeployRequest is sent to POST /deploy.
 type DeployRequest struct {
 	Message string `json:"message,omitempty"`
@@ -43,9 +45,12 @@ type ChangeSet struct {
 	Remove []string `json:"remove"`
 }
 
+// ── Services ────────────────────────────────────────────────────────────────
+
 // ScaleRequest is sent to POST /scale/{service}.
 type ScaleRequest struct {
-	Replicas int `json:"replicas"`
+	Service  string `json:"service"`
+	Replicas int    `json:"replicas"`
 }
 
 // ScaleResponse is returned by POST /scale/{service}.
@@ -56,14 +61,21 @@ type ScaleResponse struct {
 
 // ServiceStatus describes the current state of a service or agent.
 type ServiceStatus struct {
-	Name            string `json:"name"`
-	Type            string `json:"type"`
-	Status          string `json:"status"`
-	Health          string `json:"health"`
-	ReplicasRunning int    `json:"replicas_running"`
-	ReplicasDesired int    `json:"replicas_desired"`
+	Name            string   `json:"name"`
+	Type            string   `json:"type"`
+	Status          string   `json:"status"`
+	Health          string   `json:"health"`
+	ReplicasRunning int      `json:"replicas_running"`
+	ReplicasDesired int      `json:"replicas_desired"`
 	Domains         []string `json:"domains,omitempty"`
 }
+
+// DownResponse is returned by POST /down.
+type DownResponse struct {
+	Status string `json:"status"`
+}
+
+// ── Agents ──────────────────────────────────────────────────────────────────
 
 // AgentInfo describes an agent with its runtime status.
 type AgentInfo struct {
@@ -73,6 +85,14 @@ type AgentInfo struct {
 	Status    string `json:"status"`
 	Health    string `json:"health"`
 }
+
+// AgentActionResponse is returned by agent start/stop operations.
+type AgentActionResponse struct {
+	Status string `json:"status,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+}
+
+// ── Config ──────────────────────────────────────────────────────────────────
 
 // ConfigSetRequest is sent to POST /config.
 type ConfigSetRequest struct {
@@ -88,10 +108,52 @@ type ConfigSetResponse struct {
 	Deploy  *ApplyResult `json:"deploy,omitempty"`
 }
 
-// DownResponse is returned by POST /down.
-type DownResponse struct {
-	Status string `json:"status"`
+// ConfigGetResponse wraps the config for JSON serialization from MCP.
+type ConfigGetResponse struct {
+	Config any `json:"config"`
 }
+
+// ── Connectors ──────────────────────────────────────────────────────────────
+
+// ConnectorInfo describes a connector with its connection status.
+type ConnectorInfo struct {
+	Name        string         `json:"name"`
+	Provider    string         `json:"provider"`
+	Type        string         `json:"type"`
+	Description string         `json:"description,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	Connected   bool           `json:"connected"`
+}
+
+// ConnectorCreateRequest is sent to POST /connectors.
+type ConnectorCreateRequest struct {
+	Name        string            `json:"name"`
+	Provider    string            `json:"provider"`
+	Type        string            `json:"type"`
+	Description string            `json:"description,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Metadata    map[string]any    `json:"metadata,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Credential  string            `json:"credential,omitempty"`
+}
+
+// ConnectorUpdateRequest is sent to PATCH /connectors/{name}.
+type ConnectorUpdateRequest struct {
+	Description *string        `json:"description,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+// ── Credentials ─────────────────────────────────────────────────────────────
+
+// CredentialSetRequest is sent to POST /credentials.
+type CredentialSetRequest struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// ── History ─────────────────────────────────────────────────────────────────
 
 // CommitInfo holds a single git log entry.
 type CommitInfo struct {
@@ -101,16 +163,7 @@ type CommitInfo struct {
 	Date    string `json:"date"`
 }
 
-// AgentActionResponse is returned by agent start/stop operations.
-type AgentActionResponse struct {
-	Status string `json:"status,omitempty"`
-	Agent  string `json:"agent,omitempty"`
-}
-
-// ConfigGetResponse wraps the config for JSON serialization from MCP.
-type ConfigGetResponse struct {
-	Config any `json:"config"`
-}
+// ── Chat ────────────────────────────────────────────────────────────────────
 
 // ChatRequest is sent to POST /agents/{name}/chat.
 type ChatRequest struct {

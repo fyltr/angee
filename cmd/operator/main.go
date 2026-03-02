@@ -41,7 +41,7 @@ func main() {
 
 	bind := os.Getenv("ANGEE_BIND_ADDRESS")
 	if bind == "" {
-		bind = srv.Cfg.BindAddress
+		bind = srv.Platform.Cfg.BindAddress
 	}
 	if bind == "" {
 		bind = "0.0.0.0"
