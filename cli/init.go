@@ -22,6 +22,7 @@ var (
 	initDir      string
 	initYes      bool
 	initSecrets  []string // --secret key=value (repeatable)
+	initDev      bool     // --dev: infrastructure-only mode for local development
 )
 
 var initCmd = &cobra.Command{
@@ -39,6 +40,7 @@ The --template flag accepts a Git URL or a local directory path:
 Examples:
   angee init                                         # guided setup (default template)
   angee init --yes                                   # accept all defaults
+  angee init --dev --yes                             # local dev (postgres, redis, mailhog only)
   angee init --template https://github.com/org/tmpl  # template from GitHub
   angee init --template ./my-template                # local template directory
   angee init --repo https://github.com/org/app       # link a source repo
@@ -54,6 +56,7 @@ func init() {
 	initCmd.Flags().StringVar(&initDir, "dir", "", "Directory to initialize (default: .angee/ or ~/.angee)")
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "Accept all defaults (non-interactive)")
 	initCmd.Flags().StringArrayVar(&initSecrets, "secret", nil, "Set a secret: --secret name=value (repeatable)")
+	initCmd.Flags().BoolVar(&initDev, "dev", false, "Infrastructure-only mode: generates docker-compose.yaml + .env for local development")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -80,6 +83,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 			path = resolveRoot()
 		}
 	}
+	// --dev always uses .angee/ in cwd (not ~/.angee)
+	if initDev && initDir == "" {
+		wd, _ := os.Getwd()
+		path = filepath.Join(wd, ".angee")
+	}
+
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()
 		path = filepath.Join(home, path[2:])
@@ -101,6 +110,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	params, err := gatherParams(projectName)
 	if err != nil {
 		return err
+	}
+	if initDev {
+		params.Dev = true
 	}
 
 	// Fetch template (clone if URL, use directly if local path)
@@ -157,8 +169,21 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess(fmt.Sprintf("Created ANGEE_ROOT at %s", path))
 
+	// Dev mode: create data directories for persistent volumes
+	if initDev {
+		os.MkdirAll(filepath.Join(path, "data", "postgres"), 0755)
+		os.MkdirAll(filepath.Join(path, "data", "redis"), 0755)
+	}
+
 	if err := r.WriteGitignore(); err != nil {
 		return err
+	}
+	// Dev mode: exclude data volumes from the .angee git repo
+	if initDev {
+		if f, ferr := os.OpenFile(filepath.Join(path, ".gitignore"), os.O_APPEND|os.O_WRONLY, 0644); ferr == nil {
+			f.WriteString("\n# Persistent data volumes\ndata/\n")
+			f.Close()
+		}
 	}
 	printSuccess("Created .gitignore")
 
@@ -189,6 +214,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess(fmt.Sprintf("Created .env (%d secret(s) — gitignored, never committed)", len(secrets)))
 
+	// Dev mode: write Django-friendly .env to project root
+	if initDev {
+		wd, _ := os.Getwd()
+		devEnvContent := tmpl.FormatDevEnvFile(secrets)
+		if err := os.WriteFile(filepath.Join(wd, ".env"), []byte(devEnvContent), 0600); err != nil {
+			return fmt.Errorf("writing dev .env: %w", err)
+		}
+		printSuccess("Created .env in project root (Django dev settings)")
+	}
+
 	// Write operator.yaml
 	opCfg := config.DefaultOperatorConfig(path)
 	opCfg.TemplateSource = templateSource
@@ -203,8 +238,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading angee.yaml: %w", err)
 	}
 
-	// Clone declared repositories into ANGEE_ROOT
+	// Clone declared repositories into ANGEE_ROOT (skipped in dev mode)
 	for repoName, spec := range cfg.Repositories {
+		if initDev {
+			break
+		}
 		if spec.URL == "" {
 			continue
 		}
@@ -228,24 +266,37 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Ensure agent directories + stub .env files exist before compiling,
 	// so docker compose doesn't fail on missing env_file references.
-	for agentName := range cfg.Agents {
-		if err := r.EnsureAgentDir(agentName); err != nil {
-			return fmt.Errorf("creating agent dir %s: %w", agentName, err)
+	// Skipped in dev mode — no agents in the dev config.
+	if !initDev {
+		for agentName := range cfg.Agents {
+			if err := r.EnsureAgentDir(agentName); err != nil {
+				return fmt.Errorf("creating agent dir %s: %w", agentName, err)
+			}
 		}
+
+		// Copy agent workspace files (AGENTS.md, etc.) from template
+		if err := tmpl.CopyAgentFiles(templateDir, path); err != nil {
+			return fmt.Errorf("copying agent workspace files: %w", err)
+		}
+		printSuccess("Copied agent workspace files")
 	}
 
-	// Copy agent workspace files (AGENTS.md, etc.) from template
-	if err := tmpl.CopyAgentFiles(templateDir, path); err != nil {
-		return fmt.Errorf("copying agent workspace files: %w", err)
+	// Dev mode: compile with CWD as root so volume paths resolve correctly,
+	// and write docker-compose.yaml to CWD (not inside .angee/).
+	compRootPath := path
+	composeOutputPath := filepath.Join(path, "docker-compose.yaml")
+	if initDev {
+		wd, _ := os.Getwd()
+		compRootPath = wd
+		composeOutputPath = filepath.Join(wd, "docker-compose.yaml")
 	}
-	printSuccess("Copied agent workspace files")
 
-	comp := compiler.New(path, opCfg.Docker.Network)
+	comp := compiler.New(compRootPath, opCfg.Docker.Network)
 	cf, err := comp.Compile(cfg)
 	if err != nil {
 		return fmt.Errorf("compiling angee.yaml: %w", err)
 	}
-	if err := compiler.Write(cf, filepath.Join(path, "docker-compose.yaml")); err != nil {
+	if err := compiler.Write(cf, composeOutputPath); err != nil {
 		return fmt.Errorf("writing docker-compose.yaml: %w", err)
 	}
 	printSuccess("Compiled docker-compose.yaml")
@@ -261,9 +312,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 	printSecretsTable(secrets, r.EnvFilePath())
 
 	fmt.Printf("\n\033[1m  Next steps:\033[0m\n\n")
-	printInfo("angee up          Start the platform")
-	printInfo("angee ls          View running agents and services")
-	printInfo("angee admin       Chat with the admin agent")
+	if initDev {
+		printInfo("docker compose up -d   Start infrastructure (postgres, redis, mailhog)")
+		printInfo("just migrate           Run database migrations")
+		printInfo("just runserver         Start Django dev server")
+		printInfo("just dev               Or: do all of the above at once")
+	} else {
+		printInfo("angee up          Start the platform")
+		printInfo("angee ls          View running agents and services")
+		printInfo("angee admin       Chat with the admin agent")
+	}
 	fmt.Println()
 
 	return nil
