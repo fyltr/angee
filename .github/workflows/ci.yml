@@ -180,11 +180,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # Run govulncheck directly instead of via golang/govulncheck-action.
+      # The action conflicts with actions/setup-go's git auth ("Duplicate
+      # header: Authorization") on PR runs as of v6 of setup-go.
       - name: govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: ${{ env.GO_VERSION }}
-          go-package: ./...
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
   # ── Stage 6: Docker images (no push) ─────────────────────────────────
   docker:
