@@ -99,17 +99,42 @@ curl -fsSL "$URL" -o "${TMP}/${FILENAME}" || {
 }
 tar -xzf "${TMP}/${FILENAME}" -C "$TMP"
 
-# Install
-if [ -w "$INSTALL_DIR" ]; then
-  cp "${TMP}/angee-${OS}-${ARCH}" "${INSTALL_DIR}/angee"
-  chmod +x "${INSTALL_DIR}/angee"
+# As of v0.2.0+ the tarball contains plain `angee` and `angee-operator`
+# binaries. Older releases shipped `angee-${OS}-${ARCH}` instead, so we
+# fall back to that layout for backward compatibility.
+if [ -f "${TMP}/angee" ]; then
+  CLI_BIN="${TMP}/angee"
+elif [ -f "${TMP}/angee-${OS}-${ARCH}" ]; then
+  CLI_BIN="${TMP}/angee-${OS}-${ARCH}"
 else
-  sudo cp "${TMP}/angee-${OS}-${ARCH}" "${INSTALL_DIR}/angee"
-  sudo chmod +x "${INSTALL_DIR}/angee"
+  echo "  ✗ Unexpected tarball layout — no angee binary found in:"
+  ls -1 "${TMP}"
+  exit 1
+fi
+
+# Install CLI; install operator too when the tarball ships it (>=v0.2.0).
+install_bin() {
+  src="$1"
+  dst="$2"
+  if [ -w "$INSTALL_DIR" ]; then
+    cp "$src" "$dst"
+    chmod +x "$dst"
+  else
+    sudo cp "$src" "$dst"
+    sudo chmod +x "$dst"
+  fi
+}
+
+install_bin "$CLI_BIN" "${INSTALL_DIR}/angee"
+if [ -f "${TMP}/angee-operator" ]; then
+  install_bin "${TMP}/angee-operator" "${INSTALL_DIR}/angee-operator"
 fi
 
 echo ""
 echo "  ✔ angee v${ANGEE_VERSION} installed to ${INSTALL_DIR}/angee"
+if [ -f "${INSTALL_DIR}/angee-operator" ]; then
+  echo "  ✔ angee-operator v${ANGEE_VERSION} installed to ${INSTALL_DIR}/angee-operator"
+fi
 echo ""
 echo "  Get started:"
 echo "    angee init"
