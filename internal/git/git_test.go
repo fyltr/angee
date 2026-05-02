@@ -167,3 +167,47 @@ func TestIsRepo(t *testing.T) {
 		t.Error("expected IsRepo=false for empty dir")
 	}
 }
+
+func TestValidateRef(t *testing.T) {
+	good := []string{
+		"abc123",
+		"v1.2.3",
+		"main",
+		"feature/foo",
+		"release-2024-01",
+	}
+	for _, ref := range good {
+		if err := validateRef(ref); err != nil {
+			t.Errorf("validateRef(%q) = %v, want nil", ref, err)
+		}
+	}
+	bad := []string{
+		"",
+		"-flag",
+		"--upload-pack=evil",
+		"foo bar",
+		"foo;rm -rf /",
+		"foo`bar",
+		"foo$(bar)",
+		"foo|bar",
+	}
+	for _, ref := range bad {
+		if err := validateRef(ref); err == nil {
+			t.Errorf("validateRef(%q) = nil, want error", ref)
+		}
+	}
+}
+
+// Revert/ResetHard with an injected flag should be rejected before git
+// is invoked. Without validation, `--upload-pack=...` would have been
+// passed to git's argv.
+func TestRevertCtx_rejectsFlagInjection(t *testing.T) {
+	r := newTestRepo(t)
+	commitFile(t, r, "test.txt", "x", "first")
+	if err := r.Revert("--upload-pack=evil"); err == nil {
+		t.Fatal("Revert with flag-shaped sha should error")
+	}
+	if err := r.ResetHard("--upload-pack=evil"); err == nil {
+		t.Fatal("ResetHard with flag-shaped ref should error")
+	}
+}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -133,7 +134,11 @@ func (hc *HealthChecker) probe(ctx context.Context, p probeSpec) {
 		hc.store(p.Name, false, err.Error())
 		return
 	}
-	resp.Body.Close()
+	// Drain + close so the connection can be reused. Without io.Copy the
+	// body is closed mid-stream and the conn is dropped from the pool —
+	// every probe interval (default 30s) burns a fresh TCP handshake.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	healthy := resp.StatusCode >= 200 && resp.StatusCode < 400
 	errMsg := ""
 	if !healthy {

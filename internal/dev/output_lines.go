@@ -51,7 +51,7 @@ func (s *LineSink) Writer(name string) io.Writer {
 	pw, w := io.Pipe()
 	pre := s.colorPrefix(name)
 	go func() {
-		defer pw.Close()
+		defer func() { _ = pw.Close() }()
 		scan := bufio.NewScanner(pw)
 		// Default Scanner buffer is 64 KiB; we extend to 1 MiB to be
 		// safe for very long log lines (think Django tracebacks).

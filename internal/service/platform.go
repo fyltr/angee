@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/compiler"
@@ -27,8 +29,16 @@ type Platform struct {
 	Health   *HealthChecker
 	Log      *slog.Logger
 
-	// healthCancel stops current health-probe goroutines for restart.
+	// healthMu guards healthCancel against racing RestartHealthProbes calls
+	// (e.g. when two HTTP clients trigger Deploy concurrently).
+	healthMu     sync.Mutex
 	healthCancel context.CancelFunc
+
+	// writeMu serializes mutating operations (Deploy, Rollback, ConfigSet,
+	// AgentStart/Stop) so concurrent requests can't race on angee.yaml /
+	// docker-compose.yaml on disk. Read-only operations (Status, Plan,
+	// History, AgentList) are not serialized.
+	writeMu sync.Mutex
 }
 
 // NewPlatform creates a Platform for the given ANGEE_ROOT path.
@@ -73,7 +83,9 @@ func NewPlatform(angeeRoot string, logger *slog.Logger) (*Platform, error) {
 	case "kubernetes":
 		return nil, fmt.Errorf("kubernetes backend not yet implemented")
 	default:
-		p.Backend = composeruntime.New(angeeRoot, projectName)
+		bk := composeruntime.New(angeeRoot, projectName)
+		bk.Log = logger
+		p.Backend = bk
 	}
 
 	return p, nil
@@ -100,7 +112,14 @@ func (p *Platform) HealthCheck() *api.HealthResponse {
 }
 
 // Deploy compiles angee.yaml and applies it to the runtime.
+//
+// Deploy holds writeMu for the duration so concurrent requests serialize on
+// the on-disk angee.yaml/docker-compose.yaml pair. Compose itself serializes
+// per-project, but the in-process compile step is racy.
 func (p *Platform) Deploy(ctx context.Context, message string) (*api.ApplyResult, error) {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+
 	cfg, err := p.loadConfig()
 	if err != nil {
 		return nil, err
@@ -148,9 +167,12 @@ func (p *Platform) Rollback(ctx context.Context, sha string) (*api.RollbackRespo
 	if sha == "" {
 		return nil, BadRequest("sha is required")
 	}
-	if err := p.Git.Revert(sha); err != nil {
-		if err2 := p.Git.ResetHard(sha); err2 != nil {
-			return nil, fmt.Errorf("rollback failed: %w", err)
+	if err := p.Git.RevertCtx(ctx, sha); err != nil {
+		// Revert failed (often because the target SHA is the only ancestor).
+		// Fall back to a hard reset; surface BOTH errors so operators can
+		// see why each strategy failed.
+		if err2 := p.Git.ResetHardCtx(ctx, sha); err2 != nil {
+			return nil, fmt.Errorf("rollback failed: %w", errors.Join(err, err2))
 		}
 	}
 	result, err := p.Deploy(ctx, "")
@@ -223,21 +245,18 @@ func (p *Platform) compileAndWrite(cfg *config.AngeeConfig) error {
 	return compiler.Write(cf, p.Root.ComposePath())
 }
 
-func (p *Platform) writeAndCommit(cfg *config.AngeeConfig, message string) error {
-	if err := config.Write(cfg, p.Root.AngeeYAMLPath()); err != nil {
-		return err
-	}
-	if err := cfg.Validate(); err != nil {
-		return BadRequest(err.Error())
-	}
-	_, err := p.Root.CommitConfig(message)
-	return err
-}
-
 // RestartHealthProbes (re)starts health-check goroutines for the current config.
+//
+// Synchronised under healthMu — without it, two concurrent Deploys can read
+// the same `healthCancel`, both invoke it, and both assign new cancel funcs,
+// leaving an orphan goroutine running with a context nobody can cancel.
 func (p *Platform) RestartHealthProbes(parentCtx context.Context) {
+	p.healthMu.Lock()
+	defer p.healthMu.Unlock()
+
 	if p.healthCancel != nil {
 		p.healthCancel()
+		p.healthCancel = nil
 	}
 	cfg, err := p.Root.LoadAngeeConfig()
 	if err != nil {
@@ -260,8 +279,14 @@ func agentServiceName(name string) string {
 }
 
 // buildStatusMap returns a map of service name → runtime status.
+// On backend failure we log and return an empty map — callers get a
+// partial answer rather than a missing one, which is more useful for
+// list-style endpoints.
 func (p *Platform) buildStatusMap(ctx context.Context) map[string]*runtime.ServiceStatus {
-	statuses, _ := p.Backend.Status(ctx)
+	statuses, err := p.Backend.Status(ctx)
+	if err != nil {
+		p.Log.Warn("status lookup failed", "err", err)
+	}
 	m := make(map[string]*runtime.ServiceStatus, len(statuses))
 	for _, st := range statuses {
 		m[st.Name] = st

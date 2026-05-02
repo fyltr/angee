@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,9 +27,9 @@ import (
 // Plan is the resolved set of children to spawn. Built by `BuildPlan`
 // from the adapter + manifest + pyproject; consumed by `Run`.
 type Plan struct {
-	Watcher  *projmode.Process // build --watch (long-running); may be nil
-	Runtime  *projmode.Process // runserver (long-running); may be nil
-	Frontend *projmode.Process // pnpm dev (long-running); may be nil
+	Watcher  *projmode.Process   // build --watch (long-running); may be nil
+	Runtime  *projmode.Process   // runserver (long-running); may be nil
+	Frontend *projmode.Process   // pnpm dev (long-running); may be nil
 	Extras   []*projmode.Process // [tool.angee.dev.processes.*]
 	Marker   string              // adapter.FirstCycleMarker()
 }
@@ -392,8 +391,3 @@ func appendUnique(xs []string, s string) []string {
 	}
 	return append(xs, s)
 }
-
-// piped is exported as no-op for tests that need to disable the orchestrator's
-// realio.Discard usage; not actually used in production. Keeping the import
-// graph honest.
-var _ = io.Discard

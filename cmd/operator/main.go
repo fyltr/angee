@@ -15,6 +15,13 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "operator: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
@@ -32,8 +39,7 @@ func main() {
 
 	srv, err := operator.New(angeeRoot, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fatal: %s\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -44,11 +50,10 @@ func main() {
 		bind = srv.Platform.Cfg.BindAddress
 	}
 	if bind == "" {
-		bind = "0.0.0.0"
+		// Loopback default — see internal/config/operator.go DefaultOperatorConfig.
+		// This branch only fires when both env and config are unset.
+		bind = "127.0.0.1"
 	}
 	addr := bind + ":" + port
-	if err := srv.Start(ctx, addr); err != nil {
-		fmt.Fprintf(os.Stderr, "operator error: %s\n", err)
-		os.Exit(1)
-	}
+	return srv.Start(ctx, addr)
 }

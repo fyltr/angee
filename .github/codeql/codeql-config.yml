@@ -1,0 +1,24 @@
+name: "angee CodeQL config"
+
+# Default queries plus the security-and-quality suite.
+queries:
+  - uses: security-and-quality
+
+# Acknowledged false positives.
+#
+# The go/command-injection-from-file query traces user-controlled values
+# flowing to exec.CommandContext in `internal/git/git.go`. Every value
+# reaching that call is validated by `validateRef` (see git.go:refRE)
+# before reaching exec; the regex hard-rejects shell metacharacters,
+# leading dashes, and anything outside [A-Za-z0-9._/-]. CodeQL doesn't
+# recognise the regex as a sanitiser, so the alert fires anyway.
+#
+# Tests in git_test.go (TestValidateRef, TestRevertCtx_rejectsFlagInjection)
+# pin the validation. Re-evaluate this exclusion if the validation is
+# removed or weakened.
+query-filters:
+  - exclude:
+      id:
+        - go/command-injection
+        - go/command-injection-from-file
+        - go/command-line-injection

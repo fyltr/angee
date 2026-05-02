@@ -40,19 +40,57 @@ type KubernetesConfig struct {
 }
 
 // DefaultOperatorConfig returns sensible defaults.
+//
+// BindAddress defaults to 127.0.0.1 (loopback only). Operators must opt in to
+// non-loopback binds AND set APIKey — see Server.Start which refuses to listen
+// on a non-loopback address with no API key configured.
 func DefaultOperatorConfig(angeeRoot string) *OperatorConfig {
 	return &OperatorConfig{
 		Runtime:     "docker-compose",
 		Port:        9000,
 		AngeeRoot:   angeeRoot,
 		DjangoURL:   "http://localhost:8000",
-		BindAddress: "0.0.0.0",
+		BindAddress: "127.0.0.1",
 		CORSOrigins: []string{"http://localhost:*"},
 		Docker: DockerConfig{
 			Socket:  "/var/run/docker.sock",
 			Network: "angee-net",
 		},
 	}
+}
+
+// IsLoopbackBind reports whether the configured BindAddress is a loopback
+// address (127.0.0.0/8, ::1, or "localhost"). Used at startup to decide
+// whether an API key is mandatory.
+func (c *OperatorConfig) IsLoopbackBind() bool {
+	addr := c.BindAddress
+	if addr == "" || addr == "localhost" {
+		return true
+	}
+	// Strip an optional port if a host:port form was passed.
+	if i := lastIndex(addr, ':'); i >= 0 && !hasIPv6Brackets(addr) {
+		addr = addr[:i]
+	}
+	if addr == "::1" {
+		return true
+	}
+	if len(addr) >= 4 && addr[:4] == "127." {
+		return true
+	}
+	return false
+}
+
+func lastIndex(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+func hasIPv6Brackets(s string) bool {
+	return len(s) > 0 && s[0] == '['
 }
 
 // LoadOperatorConfig reads operator.yaml from the given path.

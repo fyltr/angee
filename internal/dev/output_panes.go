@@ -2,7 +2,6 @@ package dev
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -25,7 +24,6 @@ import (
 // updates via tea.Program.Send.
 type PaneSink struct {
 	prog    *tea.Program
-	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	startMu sync.Mutex
 	started bool
@@ -38,13 +36,10 @@ func NewPaneSink() *PaneSink {
 	model := newPanesModel()
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	ps := &PaneSink{prog: prog}
-	_, cancel := context.WithCancel(context.Background())
-	ps.cancel = cancel
 	ps.wg.Add(1)
 	go func() {
 		defer ps.wg.Done()
 		_, _ = prog.Run()
-		cancel()
 	}()
 	return ps
 }
@@ -55,7 +50,7 @@ func (ps *PaneSink) Writer(name string) io.Writer {
 	pr, pw := io.Pipe()
 	ps.markStarted(name)
 	go func() {
-		defer pr.Close()
+		defer func() { _ = pr.Close() }()
 		scan := bufio.NewScanner(pr)
 		scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scan.Scan() {
@@ -107,13 +102,13 @@ func (ps *PaneSink) markStarted(name string) {
 // ── bubbletea model ────────────────────────────────────────────────────
 
 type panesModel struct {
-	tabs    []string                 // ordered tab labels
-	lines   map[string][]string      // per-tab buffered lines
-	views   map[string]viewport.Model // per-tab viewport (lazy)
-	active  int                       // active tab index
-	width   int
-	height  int
-	ready   bool
+	tabs   []string                  // ordered tab labels
+	lines  map[string][]string       // per-tab buffered lines
+	views  map[string]viewport.Model // per-tab viewport (lazy)
+	active int                       // active tab index
+	width  int
+	height int
+	ready  bool
 }
 
 func newPanesModel() panesModel {
@@ -193,7 +188,7 @@ func (m panesModel) View() string {
 func (m panesModel) renderTabBar() string {
 	var parts []string
 	for i, name := range m.tabs {
-		st := tabStyle
+		var st lipgloss.Style
 		if i == m.active {
 			st = activeTabStyle.Foreground(colorFor(name))
 		} else {
@@ -271,9 +266,10 @@ var (
 			Padding(0, 1)
 )
 
-// stdoutIsTTY is exposed so callers can decide whether panes mode is
-// safe (it requires a real TTY for alt-screen).
-func stdoutIsTTY() bool {
+// IsStdoutTTY reports whether stdout is connected to a real terminal.
+// Callers use this to decide whether `--ui=panes` is safe (it requires the
+// alt-screen and won't render meaningfully when stdout is piped).
+func IsStdoutTTY() bool {
 	fi, err := os.Stdout.Stat()
 	if err != nil {
 		return false

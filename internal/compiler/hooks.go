@@ -132,7 +132,11 @@ func opencodeMCP(mcpServers map[string]config.MCPServerSpec) (string, error) {
 				Enabled: true,
 			}
 		case "stdio":
-			cmd := append(spec.Command, spec.Args...)
+			// Build a fresh slice so we don't mutate spec.Command's backing
+			// array on append.
+			cmd := make([]string, 0, len(spec.Command)+len(spec.Args))
+			cmd = append(cmd, spec.Command...)
+			cmd = append(cmd, spec.Args...)
 			oc.MCP[name] = mcpDef{
 				Type:    "local",
 				Command: cmd,

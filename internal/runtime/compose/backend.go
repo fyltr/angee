@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ type Backend struct {
 	ComposeFile string // path to the generated docker-compose.yaml
 	ProjectName string // docker compose project name
 	EnvFile     string // optional: path to root .env file
+	Log         *slog.Logger
 }
 
 // New creates a DockerCompose backend.
@@ -30,6 +32,7 @@ func New(rootPath, projectName string) *Backend {
 		ComposeFile: filepath.Join(rootPath, "docker-compose.yaml"),
 		ProjectName: projectName,
 		EnvFile:     filepath.Join(rootPath, ".env"),
+		Log:         slog.Default(),
 	}
 }
 
@@ -51,9 +54,22 @@ func (b *Backend) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("docker %s: %w\n%s", strings.Join(args[:2], " "), err, stderr.String())
+		// joinSubcommand renders just the user-relevant suffix of the argv.
+		// strings.Join(args[:2], " ") panicked when args had < 2 elements.
+		return nil, fmt.Errorf("docker %s: %w: %s", joinSubcommand(args), err, strings.TrimSpace(stderr.String()))
 	}
 	return out.Bytes(), nil
+}
+
+// joinSubcommand returns up to the first three argv elements joined for use
+// in error messages. We always start with "compose <verb>" so three is a
+// useful upper bound; falls back gracefully when args is short.
+func joinSubcommand(args []string) string {
+	n := len(args)
+	if n > 3 {
+		n = 3
+	}
+	return strings.Join(args[:n], " ")
 }
 
 // Diff shows what would change (docker compose up --dry-run is not universally available,
@@ -102,7 +118,12 @@ func (b *Backend) Diff(ctx context.Context, composeFile string) (*runtime.Change
 
 // Apply runs `docker compose up -d --remove-orphans`.
 func (b *Backend) Apply(ctx context.Context, composeFile string) (*runtime.ApplyResult, error) {
-	before, _ := b.Status(ctx)
+	before, beforeErr := b.Status(ctx)
+	if beforeErr != nil {
+		// Don't abort the deploy — we can still proceed and report a partial
+		// result — but log so a failing docker socket isn't silently masked.
+		b.Log.Warn("pre-apply status failed", "err", beforeErr)
+	}
 
 	_, err := b.run(ctx, b.args("up", "-d", "--remove-orphans", "--pull", "missing")...)
 	if err != nil {
@@ -142,10 +163,16 @@ type composePS struct {
 }
 
 // Status returns the current state of all containers in the project.
+//
+// Returns (nil, nil) when the project simply has no containers yet — this is
+// the "happy path" before the first deploy. Other failures (docker daemon
+// down, permission denied on /var/run/docker.sock) are logged but still
+// returned as an empty status to keep `ls`/`status` responsive; callers
+// that need authoritative data should check the operator log.
 func (b *Backend) Status(ctx context.Context) ([]*runtime.ServiceStatus, error) {
 	out, err := b.run(ctx, b.args("ps", "--format", "json", "--all")...)
 	if err != nil {
-		// Not an error if the project doesn't exist yet
+		b.Log.Warn("docker compose ps failed", "err", err)
 		return nil, nil
 	}
 
@@ -212,21 +239,29 @@ func (b *Backend) Logs(ctx context.Context, service string, opts runtime.LogOpti
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
+	// WaitDelay (Go 1.20+) ensures the kernel reaps the process even if the
+	// reader of `pr` stops draining — without this, a hung consumer leaks
+	// the goroutine below for the lifetime of the operator process.
+	cmd.WaitDelay = 5 * time.Second
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
 	go func() {
 		err := cmd.Run()
-		pw.CloseWithError(err)
+		_ = pw.CloseWithError(err)
 	}()
 
 	return pr, nil
 }
 
 // Scale adjusts the replica count for a service.
+//
+// `--no-recreate` keeps other services in the project untouched — without it,
+// docker compose may tear down and re-create unrelated services if their
+// config drifted, which is surprising for a "scale" operation.
 func (b *Backend) Scale(ctx context.Context, service string, replicas int) error {
-	_, err := b.run(ctx, b.args("up", "-d", "--scale", fmt.Sprintf("%s=%d", service, replicas))...)
+	_, err := b.run(ctx, b.args("up", "-d", "--no-recreate", "--scale", fmt.Sprintf("%s=%d", service, replicas))...)
 	return err
 }
 

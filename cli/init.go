@@ -121,7 +121,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching template: %w", err)
 	}
 	if cleanupDir != "" {
-		defer os.RemoveAll(cleanupDir)
+		defer func() { _ = os.RemoveAll(cleanupDir) }()
 	}
 
 	// If we cloned a git repo and it has .angee-template/ inside, use that
@@ -180,10 +180,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	printSuccess(fmt.Sprintf("Created ANGEE_ROOT at %s", path))
 
-	// Dev mode: create data directories for persistent volumes
+	// Dev mode: create data directories for persistent volumes. Failing
+	// silently here used to leave the user with cryptic docker compose mount
+	// errors later — surface the failure now instead.
 	if initDev {
-		os.MkdirAll(filepath.Join(path, "data", "postgres"), 0755)
-		os.MkdirAll(filepath.Join(path, "data", "redis"), 0755)
+		for _, sub := range []string{"postgres", "redis"} {
+			if err := os.MkdirAll(filepath.Join(path, "data", sub), 0755); err != nil {
+				return fmt.Errorf("creating data/%s: %w", sub, err)
+			}
+		}
 	}
 
 	if err := r.WriteGitignore(); err != nil {
@@ -191,9 +196,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	// Dev mode: exclude data volumes from the .angee git repo
 	if initDev {
-		if f, ferr := os.OpenFile(filepath.Join(path, ".gitignore"), os.O_APPEND|os.O_WRONLY, 0644); ferr == nil {
-			f.WriteString("\n# Persistent data volumes\ndata/\n")
-			f.Close()
+		f, ferr := os.OpenFile(filepath.Join(path, ".gitignore"), os.O_APPEND|os.O_WRONLY, 0644)
+		if ferr != nil {
+			return fmt.Errorf("appending to .gitignore: %w", ferr)
+		}
+		if _, err := f.WriteString("\n# Persistent data volumes\ndata/\n"); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("writing .gitignore: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("closing .gitignore: %w", err)
 		}
 	}
 	printSuccess("Created .gitignore")
@@ -267,8 +279,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 			printInfo(fmt.Sprintf("Repository %q already exists at %s — skipping clone", repoName, clonePath))
 			continue
 		}
-		// Remove stale symlinks or empty dirs so git clone can create the target
-		os.Remove(absPath)
+		// Remove stale symlinks or empty dirs so git clone can create the target.
+		// Failure is non-fatal — git clone will produce a helpful error itself
+		// if the path actually obstructs the clone.
+		_ = os.Remove(absPath)
 		if err := git.Clone(spec.URL, absPath, spec.Branch); err != nil {
 			return fmt.Errorf("cloning repository %q: %w", repoName, err)
 		}
@@ -388,13 +402,6 @@ func redact(v string) string {
 		return "****"
 	}
 	return v[:4] + strings.Repeat("*", min(len(v)-4, 12))
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // gatherParams collects template params, prompting interactively unless --yes.

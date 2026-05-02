@@ -17,6 +17,11 @@ import (
 // Defaults to "dev" for local builds.
 var Version = "dev"
 
+// httpClient is the package-level HTTP client used for CLI → operator calls.
+// 60-second timeout protects the CLI from a deadlocked operator. Streaming
+// endpoints (logs) bypass this and manage their own deadlines.
+var httpClient = &http.Client{Timeout: 60 * time.Second}
+
 var (
 	// rootFlags
 	angeeRoot   string
@@ -169,7 +174,7 @@ func doRequest(method, url string, body io.Reader) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(req)
+	return httpClient.Do(req)
 }
 
 func printSuccess(msg string) {
@@ -178,14 +183,6 @@ func printSuccess(msg string) {
 
 func printInfo(msg string) {
 	fmt.Printf("  \033[36m→\033[0m %s\n", msg)
-}
-
-func printError(msg string) {
-	fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m %s\n", msg)
-}
-
-func printHeader(msg string) {
-	fmt.Printf("\n\033[1m%s\033[0m\n", msg)
 }
 
 // isOperatorRunning checks if the operator HTTP health endpoint responds.
@@ -197,30 +194,10 @@ func isOperatorRunning() bool {
 		return false
 	}
 	req = req.WithContext(ctx)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return false
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode == 200
-}
-
-// triggerDeploy POSTs to the operator's deploy endpoint.
-func triggerDeploy() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	req, err := newRequest("POST", resolveOperator()+"/deploy", nil)
-	if err != nil {
-		return err
-	}
-	req = req.WithContext(ctx)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("operator returned %d", resp.StatusCode)
-	}
-	return nil
 }

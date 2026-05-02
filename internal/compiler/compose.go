@@ -5,11 +5,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/fyltr/angee/internal/config"
 	"gopkg.in/yaml.v3"
 )
+
+// sortedKeys returns the keys of m in deterministic ascending order.
+// Used everywhere we serialize map contents into ordered YAML slices so
+// the compiled docker-compose.yaml is byte-stable across runs.
+func sortedKeys[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
 
 // ComposeFile mirrors the docker-compose.yaml top-level structure.
 type ComposeFile struct {
@@ -105,8 +119,9 @@ func (c *Compiler) Compile(cfg *config.AngeeConfig) (*ComposeFile, error) {
 		},
 	}
 
-	// Compile services
-	for name, svc := range cfg.Services {
+	// Compile services (sorted for deterministic output)
+	for _, name := range sortedKeys(cfg.Services) {
+		svc := cfg.Services[name]
 		cs, err := c.compileService(name, svc)
 		if err != nil {
 			return nil, fmt.Errorf("service %q: %w", name, err)
@@ -121,8 +136,9 @@ func (c *Compiler) Compile(cfg *config.AngeeConfig) (*ComposeFile, error) {
 		}
 	}
 
-	// Compile agents
-	for name, agent := range cfg.Agents {
+	// Compile agents (sorted for deterministic output)
+	for _, name := range sortedKeys(cfg.Agents) {
+		agent := cfg.Agents[name]
 		cs, err := c.compileAgent(name, agent, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("agent %q: %w", name, err)
@@ -174,9 +190,10 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 		}
 	}
 
-	// Environment — translate ${secret:name} → ${ENV_NAME} for docker-compose interpolation
-	for k, v := range svc.Env {
-		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(v))
+	// Environment — translate ${secret:name} → ${ENV_NAME} for docker-compose interpolation.
+	// Iterate sorted keys so the generated docker-compose.yaml is byte-stable.
+	for _, k := range sortedKeys(svc.Env) {
+		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(svc.Env[k]))
 	}
 
 	// Ports
@@ -266,9 +283,10 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 		cs.Volumes = append(cs.Volumes, workspacePath+":/workspace")
 	}
 
-	// Agent-declared environment variables (e.g. ANTHROPIC_API_KEY)
-	for k, v := range agent.Env {
-		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(v))
+	// Agent-declared environment variables (e.g. ANTHROPIC_API_KEY).
+	// Iterate sorted keys so the generated docker-compose.yaml is byte-stable.
+	for _, k := range sortedKeys(agent.Env) {
+		cs.Environment = append(cs.Environment, k+"="+resolveSecretRefs(agent.Env[k]))
 	}
 
 	// System prompt via environment
@@ -388,21 +406,23 @@ func normalizeMemory(v string) string {
 }
 
 // restartPolicy returns the docker-compose restart policy for a lifecycle value.
+// Jobs are one-shot and must not be auto-restarted; system services are always
+// re-launched; everything else uses unless-stopped so user-issued `down` is
+// respected.
 func restartPolicy(lifecycle string) string {
-	if lifecycle == config.LifecycleSystem {
+	switch lifecycle {
+	case config.LifecycleSystem:
 		return "always"
+	case config.LifecycleJob:
+		return "no"
+	default:
+		return "unless-stopped"
 	}
-	return "unless-stopped"
 }
 
 // contains returns true if s is in the slice.
 func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, s)
 }
 
 // resolveSecretRefs translates ${secret:name} references into ${ENV_NAME}

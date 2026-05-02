@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/fyltr/angee/internal/projmode"
@@ -21,13 +23,8 @@ import (
 func dispatchToRuntime(sub string, args []string) error {
 	projectRoot := projmode.FindProjectRoot("")
 	if projectRoot == "" {
-		return fmt.Errorf(
-			"angee %s: no .angee/project.yaml found in this or any "+
-				"parent directory.\n"+
-				"  In compose-mode, this command isn't available; "+
-				"see `angee --help` for compose-mode commands.",
-			sub,
-		)
+		return errors.New("angee " + sub + ": no .angee/project.yaml found in this or any parent directory" +
+			" (in compose-mode, this command isn't available; see `angee --help`)")
 	}
 	manifest, err := projmode.LoadManifest(projectRoot)
 	if err != nil {
@@ -101,7 +98,7 @@ func mergeEnv(overlay map[string]string) []string {
 	seen := make(map[string]bool, len(overlay))
 	for _, kv := range base {
 		// Only override when the overlay has the key.
-		if eq := indexEq(kv); eq >= 0 {
+		if eq := strings.IndexByte(kv, '='); eq >= 0 {
 			key := kv[:eq]
 			if v, ok := overlay[key]; ok {
 				out = append(out, key+"="+v)
@@ -117,16 +114,4 @@ func mergeEnv(overlay map[string]string) []string {
 		}
 	}
 	return out
-}
-
-// indexEq returns the index of the first '=' in s, or -1 if absent.
-// Tiny helper — strings.Index would be fine, but this keeps the import
-// surface tight.
-func indexEq(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '=' {
-			return i
-		}
-	}
-	return -1
 }
