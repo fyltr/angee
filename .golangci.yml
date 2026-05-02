@@ -1,0 +1,84 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - gosec
+
+  settings:
+    errcheck:
+      # Skip error-checking for these calls. Each entry has a justification:
+      #   - fmt.Fprint*: writing to stdout/stderr in CLI — nothing useful to do on error
+      #   - resp.Body.Close: HTTP response body close — caller has already drained
+      #   - pr.Close / pw.Close: io.Pipe close — sibling reader/writer is what matters
+      #   - w.Flush (tabwriter): output side-effect, no actionable failure
+      #   - rc.Close (log streams): operator log streams close on disconnect
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fscan
+        - fmt.Fscanf
+        - fmt.Fscanln
+        - fmt.Scanln
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net/http.ResponseWriter).Write
+        - (*text/tabwriter.Writer).Flush
+        - (*encoding/json.Encoder).Encode
+        - syscall.Kill
+
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+
+    gosec:
+      excludes:
+        # G104: handled by errcheck
+        - G104
+        # G117: APIKey-style fields are for internal config, not JSON output to users
+        - G117
+        # G204: subprocess audit — angee shells out to docker/git/python by design;
+        # argv values flow from validated config, never raw user input.
+        - G204
+        # G301/G302: 0644/0755 on operator-generated files is intentional;
+        # docker-compose.yaml must be world-readable for the docker daemon.
+        - G301
+        - G302
+        # G304: file inclusion via variable is a CLI's job — paths come from
+        # the user (`angee init <template>`), validated where it matters.
+        - G304
+        # G306: 0644 on operator-generated docker-compose.yaml is intentional
+        - G306
+        # G704: SSRF via taint — the operator URL is set by the local user,
+        # not flowing from an untrusted network input.
+        - G704
+        # G705: XSS via taint — we write child stdout to a terminal, not HTML.
+        - G705
+
+  exclusions:
+    rules:
+      # Tests can be sloppier with errcheck.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # Generated openapi.go is mostly a static byte slice.
+      - path: internal/operator/openapi.go
+        linters:
+          - gocritic
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

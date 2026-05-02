@@ -108,6 +108,10 @@ type ResolvedSecret struct {
 // A fragment suffix selects a subdirectory within a git repo:
 //
 //	https://github.com/org/repo#templates/default
+//
+// Only https://, http:// (for localhost dev), git@host:org/repo (SSH), and
+// local filesystem paths are accepted; anything else is rejected. The clone
+// itself runs with `protocol.allow=...` to defeat URL-smuggling attacks.
 func FetchTemplate(source string) (dir string, cleanupDir string, err error) {
 	// Local path — use directly
 	if info, statErr := os.Stat(source); statErr == nil && info.IsDir() {
@@ -117,15 +121,25 @@ func FetchTemplate(source string) (dir string, cleanupDir string, err error) {
 	// Split url#subdir
 	repoURL, subdir := splitFragment(source)
 
-	// Git URL — clone to temp dir
+	if err := validateTemplateURL(repoURL); err != nil {
+		return "", "", err
+	}
+
+	// Git URL — clone to temp dir.
 	cloneDir, err := os.MkdirTemp("", "angee-tmpl-*")
 	if err != nil {
 		return "", "", err
 	}
-	cmd := exec.Command("git", "clone", "--depth", "1", repoURL, cloneDir)
+	// `--` ensures repoURL is treated as a positional arg even if it begins
+	// with `-` (defence in depth alongside the validateTemplateURL prefix
+	// check).
+	cmd := exec.Command("git",
+		"-c", "protocol.allow=https:always,http:user,ssh:user,file:user,git:never",
+		"clone", "--depth", "1", "--", repoURL, cloneDir,
+	)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		os.RemoveAll(cloneDir)
+		_ = os.RemoveAll(cloneDir)
 		return "", "", fmt.Errorf("cloning template %s: %w", repoURL, err)
 	}
 
@@ -133,7 +147,7 @@ func FetchTemplate(source string) (dir string, cleanupDir string, err error) {
 	if subdir != "" {
 		dir = filepath.Join(cloneDir, subdir)
 		if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-			os.RemoveAll(cloneDir)
+			_ = os.RemoveAll(cloneDir)
 			return "", "", fmt.Errorf("subdirectory %q not found in %s", subdir, repoURL)
 		}
 	}
@@ -141,15 +155,45 @@ func FetchTemplate(source string) (dir string, cleanupDir string, err error) {
 	return dir, cloneDir, nil
 }
 
-// splitFragment splits "url#subdir" into ("url", "subdir").
-// If there is no '#', subdir is empty.
-func splitFragment(source string) (string, string) {
-	// Only split on a '#' that comes after "://" to avoid mangling
-	// fragments that are actually part of a local path.
-	if idx := strings.LastIndex(source, "#"); idx > 0 {
-		return source[:idx], source[idx+1:]
+// validateTemplateURL refuses anything that isn't an obvious git URL or
+// SSH-form. We reject schemes like `ext::` or `--upload-pack=...` that have
+// historically been the source of git-clone CVEs, and disallow leading `-`.
+func validateTemplateURL(u string) error {
+	if u == "" {
+		return fmt.Errorf("empty template URL")
 	}
-	return source, ""
+	if strings.HasPrefix(u, "-") {
+		return fmt.Errorf("template URL must not start with '-'")
+	}
+	switch {
+	case strings.HasPrefix(u, "https://"):
+		return nil
+	case strings.HasPrefix(u, "http://"):
+		return nil
+	case strings.HasPrefix(u, "ssh://"):
+		return nil
+	// SSH "scp-like" form: user@host:path (e.g. git@github.com:org/repo).
+	case strings.Contains(u, "@") && strings.Contains(u, ":") && !strings.Contains(u, "://"):
+		return nil
+	}
+	return fmt.Errorf("unsupported template URL scheme: %s (allowed: https://, http://, ssh://, user@host:path)", u)
+}
+
+// splitFragment splits "url#subdir" into ("url", "subdir").
+// Only splits on a '#' that comes after "://" so local paths containing '#'
+// in their name are not mishandled.
+func splitFragment(source string) (string, string) {
+	scheme := strings.Index(source, "://")
+	if scheme < 0 {
+		return source, ""
+	}
+	rest := source[scheme+3:]
+	idx := strings.Index(rest, "#")
+	if idx < 0 {
+		return source, ""
+	}
+	abs := scheme + 3 + idx
+	return source[:abs], source[abs+1:]
 }
 
 // Render reads the appropriate angee.yaml template from a local directory and
@@ -456,16 +500,47 @@ func devEnvLine(sb *strings.Builder, key, value string) {
 }
 
 // FormatEnvFile formats resolved secrets as KEY=VALUE lines for a .env file.
+//
+// Values are double-quoted and special characters (`"`, `\`, newlines) are
+// escaped — the previous unquoted format silently broke when a generator or
+// user-supplied secret contained whitespace, quotes, or hash characters that
+// some .env parsers interpret as comments.
 func FormatEnvFile(secrets []ResolvedSecret) string {
 	var sb strings.Builder
 	sb.WriteString("# Angee secrets — written by angee init\n")
 	sb.WriteString("# DO NOT COMMIT — this file is gitignored\n\n")
 	for _, s := range secrets {
-		// Env var name: uppercase, hyphens → underscores
 		envKey := strings.ToUpper(strings.ReplaceAll(s.Name, "-", "_"))
-		// Escape $ as $$ so Docker Compose doesn't try to interpolate values
+		// Escape $ → $$ so docker-compose interpolation leaves the literal
+		// value intact, then double-quote with backslash escaping for safety.
 		val := strings.ReplaceAll(s.Value, "$", "$$")
-		sb.WriteString(fmt.Sprintf("%s=%s\n", envKey, val))
+		fmt.Fprintf(&sb, "%s=%s\n", envKey, escapeEnvValue(val))
 	}
+	return sb.String()
+}
+
+// escapeEnvValue produces a `.env`-safe representation of v.
+// Empty strings render as `""` rather than nothing so the parser can tell the
+// difference between "set to empty" and "missing".
+func escapeEnvValue(v string) string {
+	var sb strings.Builder
+	sb.Grow(len(v) + 2)
+	sb.WriteByte('"')
+	for _, r := range v {
+		switch r {
+		case '\\', '"':
+			sb.WriteByte('\\')
+			sb.WriteRune(r)
+		case '\n':
+			sb.WriteString(`\n`)
+		case '\r':
+			sb.WriteString(`\r`)
+		case '\t':
+			sb.WriteString(`\t`)
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteByte('"')
 	return sb.String()
 }

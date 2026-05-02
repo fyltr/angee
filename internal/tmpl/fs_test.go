@@ -212,11 +212,40 @@ func TestSplitFragment(t *testing.T) {
 		{"https://github.com/org/repo", "https://github.com/org/repo", ""},
 		{"./local/path", "./local/path", ""},
 		{"https://github.com/org/repo#sub/dir", "https://github.com/org/repo", "sub/dir"},
+		// Local paths containing '#' must NOT be mishandled. The previous
+		// implementation split on the last '#' regardless of scheme.
+		{"./weird#dir", "./weird#dir", ""},
 	}
 	for _, tt := range tests {
 		gotURL, gotSub := splitFragment(tt.input)
 		if gotURL != tt.wantURL || gotSub != tt.wantSub {
 			t.Errorf("splitFragment(%q) = (%q, %q), want (%q, %q)", tt.input, gotURL, gotSub, tt.wantURL, tt.wantSub)
+		}
+	}
+}
+
+func TestValidateTemplateURL(t *testing.T) {
+	good := []string{
+		"https://github.com/org/repo",
+		"http://localhost:3000/foo",
+		"ssh://git@host.example/repo.git",
+		"git@github.com:org/repo.git",
+	}
+	for _, u := range good {
+		if err := validateTemplateURL(u); err != nil {
+			t.Errorf("validateTemplateURL(%q) = %v, want nil", u, err)
+		}
+	}
+	bad := []string{
+		"",
+		"-flag-pretending-to-be-url",
+		"ext::nasty",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+	}
+	for _, u := range bad {
+		if err := validateTemplateURL(u); err == nil {
+			t.Errorf("validateTemplateURL(%q) = nil, want error", u)
 		}
 	}
 }
@@ -243,15 +272,20 @@ func TestFormatEnvFile(t *testing.T) {
 	secrets := []ResolvedSecret{
 		{Name: "db-password", Value: "hunter2", Source: "flag"},
 		{Name: "secret-key", Value: "abc123", Source: "generated"},
+		{Name: "tricky", Value: `multi"line\value`, Source: "flag"},
 	}
 
 	output := FormatEnvFile(secrets)
 
-	if !strings.Contains(output, "DB_PASSWORD=hunter2") {
-		t.Errorf("expected DB_PASSWORD=hunter2 in output, got:\n%s", output)
+	if !strings.Contains(output, `DB_PASSWORD="hunter2"`) {
+		t.Errorf("expected DB_PASSWORD=\"hunter2\" in output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "SECRET_KEY=abc123") {
-		t.Errorf("expected SECRET_KEY=abc123 in output, got:\n%s", output)
+	if !strings.Contains(output, `SECRET_KEY="abc123"`) {
+		t.Errorf("expected SECRET_KEY=\"abc123\" in output, got:\n%s", output)
+	}
+	// `"` and `\` are escaped with a leading backslash.
+	if !strings.Contains(output, `TRICKY="multi\"line\\value"`) {
+		t.Errorf("expected escaped TRICKY value, got:\n%s", output)
 	}
 	if !strings.Contains(output, "# Angee secrets") {
 		t.Error("expected header comment")

@@ -8,13 +8,53 @@ on:
 env:
   REGISTRY: ghcr.io
   OPERATOR_IMAGE: ghcr.io/fyltr/angee-operator
-  DJANGO_IMAGE: ghcr.io/fyltr/angee-django
+  CLI_IMAGE: ghcr.io/fyltr/angee-cli
+  GO_VERSION: "1.25"
+
+permissions:
+  contents: read
 
 jobs:
-  release-binaries:
-    name: Build release binaries
+  # Re-run the full test matrix before cutting a release.
+  verify:
+    name: verify (test + lint)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would reformat:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10.1
+          args: --timeout=5m
+
+      - name: test
+        run: go test -race ./...
+
+  release-binaries:
+    name: build release binaries
+    runs-on: ubuntu-latest
+    needs: verify
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: linux
@@ -35,45 +75,39 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Build CLI
+      - name: Build CLI + operator
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
         run: |
-          VERSION="${{ github.ref_name }}"
+          set -e
           EXT=""
           if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
 
-          go build \
-            -ldflags="-s -w -X main.version=${VERSION}" \
-            -o "dist/angee-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
+          mkdir -p dist
+          LDFLAGS="-s -w -X github.com/fyltr/angee/cli.Version=${VERSION}"
+
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o "dist/angee${EXT}" \
             ./cmd/angee
-
-          # Create tarball for unix
-          if [ "${{ matrix.os }}" != "windows" ]; then
-            cd dist
-            tar -czf "angee-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" \
-              "angee-${{ matrix.os }}-${{ matrix.arch }}"
-          fi
-
-      - name: Build operator
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: "0"
-        run: |
-          VERSION="${{ github.ref_name }}"
-          EXT=""
-          if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
-
-          go build \
-            -ldflags="-s -w -X main.version=${VERSION}" \
-            -o "dist/angee-operator-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o "dist/angee-operator${EXT}" \
             ./cmd/operator
+
+          # Bundle: tar.gz on unix, zip on windows
+          cd dist
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            zip "angee-${{ matrix.os }}-${{ matrix.arch }}.zip" "angee${EXT}" "angee-operator${EXT}"
+          else
+            tar -czf "angee-${{ matrix.os }}-${{ matrix.arch }}.tar.gz" "angee${EXT}" "angee-operator${EXT}"
+          fi
+          # Drop the loose binaries — only ship the bundle.
+          rm -f "angee${EXT}" "angee-operator${EXT}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -81,12 +115,12 @@ jobs:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
-            dist/*.exe
+            dist/*.zip
 
   create-release:
-    name: Create GitHub Release
+    name: create GitHub release
     runs-on: ubuntu-latest
-    needs: [release-binaries]
+    needs: release-binaries
     permissions:
       contents: write
     steps:
@@ -99,37 +133,45 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip 2>/dev/null > SHA256SUMS || true
+          cat SHA256SUMS
+
       - name: Create GitHub Release & upload assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/*.tar.gz
-            artifacts/*.exe
+            artifacts/*.zip
+            artifacts/SHA256SUMS
           generate_release_notes: true
 
   release-docker:
-    name: Build & push Docker images
+    name: build & push docker images
     runs-on: ubuntu-latest
+    needs: verify
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU (for multi-arch builds)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for operator image
+      - name: Extract operator metadata
         id: meta-operator
         uses: docker/metadata-action@v5
         with:
@@ -141,7 +183,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - name: Build and push operator image
+      - name: Build & push operator image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -153,8 +195,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Extract CLI metadata
+        id: meta-cli
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.CLI_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+
+      - name: Build & push CLI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cli
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-cli.outputs.tags }}
+          labels: ${{ steps.meta-cli.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   publish-install-script:
-    name: Publish install script
+    name: publish install script
     runs-on: ubuntu-latest
     needs: [create-release, release-docker]
     permissions:
@@ -162,12 +228,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update install script with latest version
+      - name: Pin install script to this version
         run: |
           VERSION="${{ github.ref_name }}"
-          sed "s/ANGEE_VERSION=.*/ANGEE_VERSION=${VERSION}/" \
-            scripts/install.sh > /tmp/install.sh
-          cp /tmp/install.sh scripts/install.sh
+          sed -i.bak "s/^ANGEE_VERSION=.*/ANGEE_VERSION=${VERSION}/" scripts/install.sh
+          rm -f scripts/install.sh.bak
 
       - name: Upload install script to release
         uses: softprops/action-gh-release@v2

@@ -3,6 +3,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,14 +20,18 @@ func New(path string) *Repo {
 	return &Repo{Path: path}
 }
 
-func (r *Repo) run(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+// run executes a git subcommand with the given context. Callers without a
+// caller-bound context can pass context.Background() — methods that flow
+// from HTTP handlers (Revert, ResetHard, Log) accept ctx so a client
+// disconnect cancels the underlying git process instead of leaking it.
+func (r *Repo) run(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = r.Path
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, stderr.String())
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
@@ -36,27 +41,27 @@ func (r *Repo) Init() error {
 	if err := os.MkdirAll(r.Path, 0755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
-	_, err := r.run("init", "-b", "main")
+	_, err := r.run(context.Background(), "init", "-b", "main")
 	if err != nil {
 		// Try without -b for older git versions
-		_, err = r.run("init")
+		_, err = r.run(context.Background(), "init")
 	}
 	return err
 }
 
 // ConfigureUser sets the local git user for commits.
 func (r *Repo) ConfigureUser(name, email string) error {
-	if _, err := r.run("config", "user.name", name); err != nil {
+	if _, err := r.run(context.Background(), "config", "user.name", name); err != nil {
 		return err
 	}
-	_, err := r.run("config", "user.email", email)
+	_, err := r.run(context.Background(), "config", "user.email", email)
 	return err
 }
 
 // Add stages the given paths (or "." for all).
 func (r *Repo) Add(paths ...string) error {
 	args := append([]string{"add"}, paths...)
-	_, err := r.run(args...)
+	_, err := r.run(context.Background(), args...)
 	return err
 }
 
@@ -70,7 +75,7 @@ type CommitInfo struct {
 
 // Commit creates a new commit. Returns the new SHA.
 func (r *Repo) Commit(message string) (string, error) {
-	_, err := r.run("commit", "-m", message)
+	_, err := r.run(context.Background(), "commit", "-m", message)
 	if err != nil {
 		return "", err
 	}
@@ -79,17 +84,22 @@ func (r *Repo) Commit(message string) (string, error) {
 
 // CurrentSHA returns the SHA of the current HEAD commit.
 func (r *Repo) CurrentSHA() (string, error) {
-	return r.run("rev-parse", "HEAD")
+	return r.run(context.Background(), "rev-parse", "HEAD")
 }
 
 // CurrentBranch returns the name of the current branch.
 func (r *Repo) CurrentBranch() (string, error) {
-	return r.run("rev-parse", "--abbrev-ref", "HEAD")
+	return r.run(context.Background(), "rev-parse", "--abbrev-ref", "HEAD")
 }
 
 // Log returns the last n commit log entries.
 func (r *Repo) Log(n int) ([]CommitInfo, error) {
-	out, err := r.run(
+	return r.LogCtx(context.Background(), n)
+}
+
+// LogCtx returns the last n commit log entries; ctx cancellation kills git.
+func (r *Repo) LogCtx(ctx context.Context, n int) ([]CommitInfo, error) {
+	out, err := r.run(ctx,
 		"log",
 		fmt.Sprintf("-%d", n),
 		"--pretty=format:%H|%an|%ad|%s",
@@ -119,17 +129,17 @@ func (r *Repo) Log(n int) ([]CommitInfo, error) {
 
 // Diff returns the unstaged diff of the repository.
 func (r *Repo) Diff() (string, error) {
-	return r.run("diff")
+	return r.run(context.Background(), "diff")
 }
 
 // DiffCached returns the staged diff.
 func (r *Repo) DiffCached() (string, error) {
-	return r.run("diff", "--cached")
+	return r.run(context.Background(), "diff", "--cached")
 }
 
 // Status returns the short git status output.
 func (r *Repo) Status() (string, error) {
-	return r.run("status", "--short")
+	return r.run(context.Background(), "status", "--short")
 }
 
 // HasChanges returns true if there are uncommitted changes.
@@ -148,36 +158,58 @@ func (r *Repo) Checkout(branch string, create bool) error {
 		args = append(args, "-b")
 	}
 	args = append(args, branch)
-	_, err := r.run(args...)
+	_, err := r.run(context.Background(), args...)
 	return err
 }
 
 // Revert creates a revert commit for the given SHA.
 func (r *Repo) Revert(sha string) error {
-	_, err := r.run("revert", "--no-edit", sha)
+	return r.RevertCtx(context.Background(), sha)
+}
+
+// RevertCtx creates a revert commit; ctx cancellation kills git.
+func (r *Repo) RevertCtx(ctx context.Context, sha string) error {
+	_, err := r.run(ctx, "revert", "--no-edit", sha)
 	return err
 }
 
 // ResetHard resets to a given ref (use with care).
 func (r *Repo) ResetHard(ref string) error {
-	_, err := r.run("reset", "--hard", ref)
+	return r.ResetHardCtx(context.Background(), ref)
+}
+
+// ResetHardCtx resets to ref; ctx cancellation kills git.
+func (r *Repo) ResetHardCtx(ctx context.Context, ref string) error {
+	_, err := r.run(ctx, "reset", "--hard", ref)
 	return err
 }
 
 // Clone clones a git repository into dest. If branch is non-empty, only that
 // branch is cloned (--branch). The dest directory must not already exist.
+//
+// `protocol.allow=https,file` restricts which transports git will follow,
+// limiting drive-by exposure if `url` ever flows from an untrusted source.
+// `--config` here applies only to this single invocation.
 func Clone(url, dest, branch string) error {
-	args := []string{"clone"}
+	return CloneCtx(context.Background(), url, dest, branch)
+}
+
+// CloneCtx is Clone with a context for cancellation.
+func CloneCtx(ctx context.Context, url, dest, branch string) error {
+	args := []string{
+		"-c", "protocol.allow=https:always,file:user,http:user,git:never,ssh:user",
+		"clone",
+	}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, url, dest)
+	args = append(args, "--", url, dest)
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git clone %s: %w\n%s", url, err, stderr.String())
+		return fmt.Errorf("git clone %s: %w: %s", url, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
@@ -190,6 +222,6 @@ func IsRepo(path string) bool {
 
 // HasInitialCommit returns true if the repo has at least one commit.
 func (r *Repo) HasInitialCommit() bool {
-	_, err := r.run("rev-parse", "HEAD")
+	_, err := r.run(context.Background(), "rev-parse", "HEAD")
 	return err == nil
 }

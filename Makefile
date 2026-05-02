@@ -1,7 +1,11 @@
-.PHONY: build build-operator build-cli test lint clean run-operator dev
+.PHONY: build build-operator build-cli test lint clean run-operator dev tools fmt vet check deps
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/fyltr/angee/cli.Version=$(VERSION)
+
+# Locate `goimports` from GOPATH/bin even when it isn't on PATH (common after
+# `go install` without PATH wiring). Falls back to whatever is on PATH.
+GOIMPORTS ?= $(shell command -v goimports 2>/dev/null || echo "$$(go env GOPATH)/bin/goimports")
 
 # ─── Build ────────────────────────────────────────────────
 
@@ -63,7 +67,16 @@ lint:
 
 fmt:
 	gofmt -w .
-	goimports -w .
+	@if [ -x "$(GOIMPORTS)" ]; then \
+		$(GOIMPORTS) -w .; \
+	else \
+		echo "warning: goimports not found — run 'make tools' first"; \
+	fi
+
+# tools installs the developer-only binaries used by `make fmt` / `make lint`.
+tools:
+	go install golang.org/x/tools/cmd/goimports@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
 
 vet:
 	go vet ./...

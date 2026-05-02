@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -63,11 +64,8 @@ func init() {
 func runDev(cmd *cobra.Command, args []string) error {
 	projectRoot := projmode.FindProjectRoot("")
 	if projectRoot == "" {
-		return fmt.Errorf(
-			"angee dev: no .angee/project.yaml found in this or any " +
-				"parent directory.\n" +
-				"  See `angee --help` for compose-mode commands.",
-		)
+		return errors.New("angee dev: no .angee/project.yaml found in this or any parent directory" +
+			" (see `angee --help` for compose-mode commands)")
 	}
 	manifest, err := projmode.LoadManifest(projectRoot)
 	if err != nil {
@@ -155,4 +153,3 @@ func pickSink(mode string) (dev.Sink, error) {
 		return nil, fmt.Errorf("--ui=%q: must be 'lines' or 'panes'", mode)
 	}
 }
-

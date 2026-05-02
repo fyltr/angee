@@ -30,6 +30,10 @@ func init() {
 func runDestroy(cmd *cobra.Command, args []string) error {
 	path := resolveRoot()
 
+	if err := safeToRemove(path); err != nil {
+		return err
+	}
+
 	fmt.Printf("\n\033[1mangee destroy\033[0m\n\n")
 
 	// Try to bring down the stack first
@@ -52,7 +56,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	if !destroyForce {
 		fmt.Printf("\n  Remove ANGEE_ROOT at %s? [y/N] ", path)
 		var answer string
-		fmt.Scanln(&answer)
+		_, _ = fmt.Scanln(&answer)
 		if answer != "y" && answer != "Y" {
 			printInfo("Aborted. Stack is stopped but ANGEE_ROOT is preserved.")
 			return nil
@@ -64,5 +68,29 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	}
 
 	printSuccess(fmt.Sprintf("Removed %s", path))
+	return nil
+}
+
+// safeToRemove blocks `destroy` from nuking obviously-wrong directories.
+// We require an angee.yaml inside the resolved path AND refuse "/", $HOME
+// and a missing path. Hardens the --force path against typo-CWD disasters.
+func safeToRemove(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolving path %s: %w", path, err)
+	}
+	clean := filepath.Clean(abs)
+	if clean == "/" || clean == "." {
+		return fmt.Errorf("refusing to remove root path %q", clean)
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == clean {
+		return fmt.Errorf("refusing to remove your home directory %q", clean)
+	}
+	if _, err := os.Stat(filepath.Join(clean, "angee.yaml")); err != nil {
+		return fmt.Errorf(
+			"refusing to remove %s: no angee.yaml found there (is this an ANGEE_ROOT?)",
+			clean,
+		)
+	}
 	return nil
 }

@@ -4,11 +4,23 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
+# Cancel superseded runs on the same PR/branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Test & Lint
+  # ── Stage 1: cheap static checks (fail fast) ─────────────────────────
+  static:
+    name: gofmt + vet + tidy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +28,67 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would reformat the following files:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod tidy is clean
+        run: |
+          go mod tidy
+          if ! git diff --quiet -- go.mod go.sum; then
+            echo "::error::go.mod / go.sum drift after 'go mod tidy':"
+            git --no-pager diff -- go.mod go.sum
+            exit 1
+          fi
+
+  # ── Stage 2: golangci-lint ───────────────────────────────────────────
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10.1
+          args: --timeout=5m
+
+  # ── Stage 3: tests on linux + macos with race detector ──────────────
+  test:
+    name: test (${{ matrix.os }})
+    needs: static
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Download dependencies
@@ -25,26 +97,23 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m
-
-      - name: Test
+      - name: Test (race + coverage)
         run: go test -v -race -coverprofile=coverage.out ./...
 
-      - name: Upload coverage
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v4
         with:
           file: coverage.out
         continue-on-error: true
 
+  # ── Stage 4: cross-compile sanity check ─────────────────────────────
   build:
-    name: Build binaries
+    name: build (${{ matrix.os }}/${{ matrix.arch }})
     runs-on: ubuntu-latest
-    needs: test
+    needs: [static, test]
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: linux
@@ -63,7 +132,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Build operator
@@ -74,7 +143,7 @@ jobs:
         run: |
           EXT=""
           if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
-          go build -ldflags="-s -w" \
+          go build -trimpath -ldflags="-s -w" \
             -o "dist/angee-operator-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
             ./cmd/operator
 
@@ -86,7 +155,7 @@ jobs:
         run: |
           EXT=""
           if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
-          go build -ldflags="-s -w" \
+          go build -trimpath -ldflags="-s -w" \
             -o "dist/angee-${{ matrix.os }}-${{ matrix.arch }}${EXT}" \
             ./cmd/angee
 
@@ -95,9 +164,31 @@ jobs:
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/
+          retention-days: 7
 
-  docker-build:
-    name: Docker build (no push)
+  # ── Stage 5: vulnerability scan (govulncheck) ────────────────────────
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ env.GO_VERSION }}
+          go-package: ./...
+
+  # ── Stage 6: Docker images (no push) ─────────────────────────────────
+  docker:
+    name: docker build
     runs-on: ubuntu-latest
     needs: test
     steps:

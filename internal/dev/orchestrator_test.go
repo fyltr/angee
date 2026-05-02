@@ -79,7 +79,7 @@ func dummyPlan() Plan {
 // --- LineSink output ---------------------------------------------------
 
 func TestLineSink_prefixesEachLine(t *testing.T) {
-	var buf bytes.Buffer
+	var buf safeBuf
 	s := NewLineSink(&buf, false)
 	w := s.Writer("kid")
 	fmt.Fprintln(w, "hello")
@@ -99,7 +99,7 @@ func TestLineSink_prefixesEachLine(t *testing.T) {
 }
 
 func TestLineSink_systemLine(t *testing.T) {
-	var buf bytes.Buffer
+	var buf safeBuf
 	s := NewLineSink(&buf, false)
 	s.SystemLine("hello %s", "world")
 	if !strings.Contains(buf.String(), "[angee] hello world") {

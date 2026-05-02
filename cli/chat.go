@@ -4,10 +4,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 
+	"github.com/fyltr/angee/internal/config"
 	"github.com/spf13/cobra"
 )
+
+// agentNameRE constrains agent names to docker-safe characters. Without this
+// guard, a user-supplied name flows into a docker container name string.
+// Docker rejects containers with `/` etc., but constraining at the CLI gives
+// a clearer error.
+var agentNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // agentContainerNames maps CLI shorthand → docker compose service name.
 var agentContainerNames = map[string]string{
@@ -81,6 +90,9 @@ func init() {
 
 // attachToAgent runs docker exec -it to connect to the agent's opencode server.
 func attachToAgent(agentName string) error {
+	if !agentNameRE.MatchString(agentName) {
+		return fmt.Errorf("invalid agent name %q: must match %s", agentName, agentNameRE.String())
+	}
 	containerService := resolveAgentService(agentName)
 	projectName := resolveProjectName()
 
@@ -115,6 +127,9 @@ func attachToAgent(agentName string) error {
 }
 
 func runAsk(cmd *cobra.Command, args []string) error {
+	if !agentNameRE.MatchString(askAgent) {
+		return fmt.Errorf("invalid agent name %q: must match %s", askAgent, agentNameRE.String())
+	}
 	message := strings.Join(args, " ")
 	containerService := resolveAgentService(askAgent)
 	projectName := resolveProjectName()
@@ -154,19 +169,13 @@ func resolveProjectName() string {
 	return cfg
 }
 
-// loadProjectName reads just the name field from angee.yaml.
+// loadProjectName parses angee.yaml properly and returns the top-level name.
+// The previous hand-rolled parser matched any indented `name:` key (e.g. inside
+// a service definition), giving wrong project names.
 func loadProjectName(rootPath string) (string, error) {
-	cfgPath := rootPath + "/angee.yaml"
-	data, err := os.ReadFile(cfgPath)
+	cfg, err := config.Load(filepath.Join(rootPath, "angee.yaml"))
 	if err != nil {
 		return "", err
 	}
-	// Quick parse — just find the name field
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "name:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "name:")), nil
-		}
-	}
-	return "", nil
+	return cfg.Name, nil
 }
