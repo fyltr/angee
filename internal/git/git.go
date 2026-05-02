@@ -7,8 +7,34 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// refRE constrains user-supplied git refs (SHAs, branches, tags) to
+// characters that can never be misinterpreted as a flag. Without this,
+// a value like `--upload-pack=evil` flowing from an HTTP request into
+// `git revert <ref>` would smuggle a flag into git's argv.
+//
+// The git-check-ref-format rules are stricter than this; we accept the
+// subset that's universally safe and reject everything else with a clear
+// error message rather than handing argv to git and hoping.
+var refRE = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// validateRef returns an error if ref contains anything outside refRE,
+// is empty, or starts with `-` (defence in depth).
+func validateRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("empty ref")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("ref must not start with '-': %q", ref)
+	}
+	if !refRE.MatchString(ref) {
+		return fmt.Errorf("ref %q contains characters outside %s", ref, refRE.String())
+	}
+	return nil
+}
 
 // Repo wraps git operations for a single repository.
 type Repo struct {
@@ -152,7 +178,13 @@ func (r *Repo) HasChanges() (bool, error) {
 }
 
 // Checkout switches to the given branch, creating it if create is true.
+//
+// `git checkout -b NAME` rejects a `--` separator before NAME, so we rely
+// on validateRef alone to keep the branch name out of git's flag namespace.
 func (r *Repo) Checkout(branch string, create bool) error {
+	if err := validateRef(branch); err != nil {
+		return err
+	}
 	args := []string{"checkout"}
 	if create {
 		args = append(args, "-b")
@@ -168,8 +200,12 @@ func (r *Repo) Revert(sha string) error {
 }
 
 // RevertCtx creates a revert commit; ctx cancellation kills git.
+// SHA is validated against refRE so it can't smuggle a git flag.
 func (r *Repo) RevertCtx(ctx context.Context, sha string) error {
-	_, err := r.run(ctx, "revert", "--no-edit", sha)
+	if err := validateRef(sha); err != nil {
+		return err
+	}
+	_, err := r.run(ctx, "revert", "--no-edit", "--", sha)
 	return err
 }
 
@@ -179,7 +215,13 @@ func (r *Repo) ResetHard(ref string) error {
 }
 
 // ResetHardCtx resets to ref; ctx cancellation kills git.
+// Ref is validated against refRE so it can't smuggle a git flag.
 func (r *Repo) ResetHardCtx(ctx context.Context, ref string) error {
+	if err := validateRef(ref); err != nil {
+		return err
+	}
+	// `git reset --hard` doesn't accept the `--` positional separator
+	// (it's not a pathspec command), so we rely on validateRef alone.
 	_, err := r.run(ctx, "reset", "--hard", ref)
 	return err
 }
