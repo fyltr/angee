@@ -74,6 +74,15 @@ func init() {
 		pullCmd,
 		restartCmd,
 		updateCmd,
+		// Project-mode forwarders (see cli/project.go + internal/projmode/).
+		// These exec the runtime framework via syscall.Exec when invoked
+		// inside a tree containing .angee/project.yaml.
+		buildCmd,
+		migrateCmd,
+		doctorCmd,
+		fixturesCmd,
+		// Project-mode orchestrator (see cli/dev.go + internal/dev/).
+		devCmd,
 	)
 }
 
@@ -98,10 +107,15 @@ func resolveRoot() string {
 			return wd
 		}
 	}
-	// Check for .angee/ in current directory
+	// Check for .angee/ in current directory. Skip when it's a project-mode
+	// marker (contains project.yaml) — those are NOT compose-mode roots
+	// and would mislead init / up / etc. into operating on the wrong tree.
+	// See docs/ARCHITECTURE.md §12, django-angee R-15.
 	if info, err := os.Stat(".angee"); err == nil && info.IsDir() {
-		if wd, err := os.Getwd(); err == nil {
-			return filepath.Join(wd, ".angee")
+		if _, isProj := os.Stat(filepath.Join(".angee", "project.yaml")); isProj != nil {
+			if wd, err := os.Getwd(); err == nil {
+				return filepath.Join(wd, ".angee")
+			}
 		}
 	}
 

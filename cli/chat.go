@@ -47,10 +47,13 @@ var adminCmd = &cobra.Command{
 	},
 }
 
-// developCmd is a shortcut for `angee chat developer`
+// developCmd is a shortcut for `angee chat developer`.
+//
+// Note: `dev` is intentionally NOT an alias here — it's claimed by the
+// project-mode orchestrator (cli/dev.go). `develop` and `developer` work.
 var developCmd = &cobra.Command{
 	Use:     "develop",
-	Aliases: []string{"developer", "dev"},
+	Aliases: []string{"developer"},
 	Short:   "Attach to the developer agent's terminal",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return attachToAgent("developer")

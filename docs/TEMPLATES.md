@@ -131,6 +131,21 @@ description: |
 version: "1.0"
 author: your-org
 
+# Project-mode marker (NEW in v1.1 — per ARCHITECTURE.md §12).
+# When set, `angee init --dev` runs the runtime-only branch: no
+# docker-compose generation, just the runtime manifest + .angee/data/
+# directories + the consumer-side fixture seed (see `fixtures` below).
+# Maps 1:1 to internal/runtime/<name>/ in the Go CLI.
+runtime: django-angee                # one of: django-angee | (future: rust, node)
+
+# Test-data fixtures loaded after the consumer's `migrate` runs (NEW in
+# v1.1). Paths are relative to the .angee-template/ root. Loaded with
+# the runtime adapter's loader (`uv run python manage.py loaddata` for
+# Django). Idempotent contract is the fixture's responsibility — use
+# stable PKs so re-runs overwrite cleanly.
+fixtures:
+  - fixtures/users.json
+
 # Parameters — customizable values injected into angee.yaml.tmpl
 parameters:
   - name: ProjectName

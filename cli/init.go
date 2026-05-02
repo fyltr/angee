@@ -138,6 +138,17 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading template metadata: %w", err)
 	}
 
+	// Project-mode (runtime-only) init: when the template declares a
+	// language runtime and no docker services, we skip docker-compose
+	// generation and just scaffold .angee/ + the runtime manifest +
+	// pyproject merge + post-migrate fixtures. See R-15 / R-16.
+	if meta.Runtime != "" && len(meta.Services) == 0 {
+		wd, _ := os.Getwd()
+		return runInitRuntimeOnly(
+			wd, templateDir, meta, params, supplied, secretPromptFnFor(initYes),
+		)
+	}
+
 	// Build the secret prompt function (nil if --yes for non-interactive)
 	var secretPromptFn tmpl.PromptFunc
 	if !initYes {

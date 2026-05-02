@@ -654,3 +654,115 @@ Install records stored in `.angee/components/{name}.yaml`.
 7. **Two dependencies** — Cobra + yaml.v3. Everything else is stdlib. OpenBao uses pure net/http.
 8. **Backend-agnostic** — RuntimeBackend interface means Docker Compose today, Kubernetes tomorrow. Same angee.yaml.
 9. **No magic** — the compiler output (docker-compose.yaml) is readable. You can always inspect what angee generated.
+
+---
+
+## 12. Project Mode
+
+The `angee` binary serves **two complementary modes**, distinguished by what's at the working directory root:
+
+| Mode | Marker | Purpose |
+|---|---|---|
+| **Compose** | `~/.angee/angee.yaml` (or any dir with one) | Operator state for an agent stack. Sections 1–11 above describe this exclusively. |
+| **Project** *(new)* | `<project>/.angee/project.yaml` | A consumer of an Angee runtime framework (e.g. `django-angee`). The Go binary acts as a thin polyglot dispatcher + dev orchestrator. |
+
+These modes are orthogonal — the same shell session can `angee dev` in a project tree and `angee up` against `~/.angee/`. Disambiguation is by manifest filename: `project.yaml` ⇒ project-mode; `angee.yaml` ⇒ compose-mode.
+
+### 12.1 Discovery (parent-walk)
+
+When the user runs `angee build`, `angee migrate`, `angee doctor`, `angee fixtures`, or `angee dev`, the binary walks parents from CWD looking for `.angee/project.yaml` (analogous to `git rev-parse --show-toplevel`).
+
+`cli/root.go:resolveRoot()` is tightened to skip CWD `.angee/` directories that contain `project.yaml` — those are project markers, not compose roots.
+
+### 12.2 `.angee/project.yaml` — Runtime Manifest
+
+```yaml
+version: 1
+runtime: django-angee                    # adapter selector — see §12.4
+django:
+  manage_py: src/manage.py               # consumer's runtime entry point
+  invoker:   uv                          # uv | python3 | poetry  (resolution order in §12.5)
+  uv:
+    project: .                           # uv --project <this>; default = project root
+  settings:  config.settings             # DJANGO_SETTINGS_MODULE
+```
+
+The Python framework remains unaware of `.angee/` — only the consumer's `settings.py` knows the convention. Path resolution in `settings.py` is hardcoded (`BASE_DIR.parent / ".angee" / "data"`); no env-var path overlay in v1.
+
+### 12.3 Dispatcher: `angee {build,migrate,doctor,fixtures}` → runtime
+
+These four are **forwarders**. The binary loads the runtime adapter by `runtime:` field, calls `Adapter.Dispatch(ctx, sub, args)` to build a `Process` (binary, argv, cwd, env), and `syscall.Exec`s it. For `runtime: django-angee` the typical exec is:
+
+```
+uv run --project <projectRoot> python <projectRoot>/src/manage.py angee build [args...]
+```
+
+`manage.py angee` itself adds **no new subcommands** — only a single new flag, `build --watch`, which the dev orchestrator depends on. The framework's "single entry point" contract from django-angee R-07 is preserved.
+
+### 12.4 Runtime Adapter Interface
+
+```go
+// internal/projmode/adapter.go (new top-level package — avoids
+// the existing internal/runtime/ which holds RuntimeBackend)
+type Adapter interface {
+    Name() string                                // "django-angee"
+    Dispatch(ctx Ctx, sub string, args []string) (*Process, error)
+    Watcher(ctx Ctx)    *Process                 // build --watch (long-running)
+    DevServer(ctx Ctx)  *Process                 // runserver (long-running)
+    Frontend(ctx Ctx)   *Process                 // pnpm dev (long-running, optional)
+    FirstCycleMarker() string                    // line orchestrator waits for
+}
+```
+
+One concrete impl ships in v1: `internal/projmode/django/`. Future Rust + Node adapters slot in by implementing the same interface — designed for, not built for. See [`RUNTIMES.md`](./RUNTIMES.md) for the adapter-author guide.
+
+### 12.5 Python Resolution
+
+Order of preference for the Django adapter:
+
+1. **`uv run --project <consumerRoot> python …`** — preferred when `uv` is on `PATH` (handles transitive sync).
+2. **`<consumerRoot>/.venv/bin/python …`** — fall-back when a venv exists.
+3. **`python3` from `PATH`** — last resort; warn the user that no venv was detected.
+
+### 12.6 `angee dev` — The Orchestrator
+
+`angee dev` spawns three long-running children + extras:
+
+| Slot | Source | Default for `django-angee` |
+|---|---|---|
+| `build` (watcher) | `Adapter.Watcher()` | `uv run python src/manage.py angee build --watch` |
+| `runtime` (dev server) | `Adapter.DevServer()` | `uv run python src/manage.py runserver 127.0.0.1:8100` |
+| `frontend` | `Adapter.Frontend()` | `pnpm dev` in `ui/react/web` (auto-detect) |
+| extras | `pyproject.toml` `[tool.angee.dev.processes.*]` | docker-compose for Postgres/Redis/agents in real consumers |
+
+**Start order:** Watcher → wait for `Adapter.FirstCycleMarker()` (locked: `angee build --watch: ready (cycle 1)`) → DevServer → Frontend → extras (lex order, deterministic). The Python side emits the marker on first successful build cycle so `runserver` never imports stale `runtime/`.
+
+**Output modes:**
+
+- **`--ui=lines`** (default) — line-prefixed, stable per-name colour, colour-only-on-TTY.
+- **`--ui=panes`** — full-screen TUI (`charmbracelet/{bubbletea,lipgloss,bubbles}`). One scrollable viewport per child + an "all" tab. Keys: `Tab`/`Shift-Tab` cycle, `q` quits (SIGINT), `r` restarts focused child.
+- **IDE auto-detect:** lines mode unless `--ui=panes` explicit, OR stdout is a TTY *and* `$TERM_PROGRAM` is unset / known-good (`tmux`, `screen`, `iTerm.app`, `Apple_Terminal`, `WezTerm`, `kitty`). VSCode/JetBrains embedded terminals get lines by default.
+
+**Process supervision** (`internal/dev/orchestrator.go`):
+- Each child in its own session (`Setsid: true` POSIX; `CREATE_NEW_PROCESS_GROUP` Windows).
+- SIGINT to orchestrator → SIGTERM to each child group → 10 s grace → SIGKILL stragglers.
+- Any non-zero child exit triggers orderly shutdown of remaining + non-zero overall exit.
+
+**Flags:** `--only=<csv>`, `--except=<csv>`, `--no-watch`, `--no-frontend`, `--runtime=<name>`, `--config=<path>`, `--ui=lines|panes`.
+
+### 12.7 `angee init --dev` runtime-only mode
+
+The existing `cli/init.go` flow gains a runtime-only branch: when the loaded `.angee-template.yaml` has `services: []` AND `runtime != ""`, skip docker-compose generation; render only the runtime manifest + gitignore + the `pyproject.toml` merge fragment; create `.angee/data/{staticfiles,mediafiles,logs,tmp}/`; after the existing dev-env flow, run the framework's `migrate` then `loaddata <fixtures>`.
+
+`tmpl.LoadMeta` is extended to parse two new top-level keys: `runtime`, `fixtures`. See [`TEMPLATES.md`](./TEMPLATES.md) for schema details.
+
+### 12.8 Dependencies added for project-mode
+
+- [`github.com/pelletier/go-toml/v2`](https://github.com/pelletier/go-toml/v2) — TOML parser for `pyproject.toml` `[tool.angee.dev.*]` blocks. Replaces the existing "two deps" rule's strict count, but stays minimal.
+- `github.com/charmbracelet/bubbletea`, `github.com/charmbracelet/lipgloss`, `github.com/charmbracelet/bubbles` — pane-mode TUI.
+
+### 12.9 Cross-references
+
+- Upstream framework decisions: django-angee `docs/DECISIONS.md` [R-15](../../django-angee/docs/DECISIONS.md#r-15) (project-mode contract), [R-16](../../django-angee/docs/DECISIONS.md#r-16) (polyglot CLI dispatch + orchestrator), [R-14](../../django-angee/docs/DECISIONS.md#r-14) (`angee dev` adapter shape).
+- Original orchestrator brief (superseded in part): django-angee `docs/handoff/angee-go-dev-subcommand.md`. See its §13 "Decisions taken" addendum.
+- Adapter-author guide: [`RUNTIMES.md`](./RUNTIMES.md).

@@ -1,0 +1,38 @@
+# Example consumer of django-angee.
+#
+# Mirrors how a real downstream repo (e.g. fyltr-django) consumes the
+# framework: a small src/ tree with manage.py + config/ + runtime/. The
+# example also bundles one tiny in-tree demo package (`packages/angee-demo/`)
+# so `manage.py angee build` has real model contributions to compose without
+# requiring the auth/drive/unibox/agents packages to exist yet.
+
+[project]
+name            = "angee-demo-example"
+version         = "0.0.0"
+description     = "Example consumer wiring django-angee + a tiny demo package."
+requires-python = ">=3.14"
+
+dependencies = [
+  "django-angee",
+  "django-angee-auth",
+  "django-zed-rebac",
+  "angee-demo",
+  "django>=6.0",
+  "strawberry-graphql-django>=0.62",
+]
+
+[tool.uv.sources]
+django-angee      = { path = "../../packages/django-angee", editable = true }
+django-angee-auth = { path = "../../packages/django-angee-auth", editable = true }
+django-zed-rebac  = { path = "../../../django-zed-rebac", editable = true }
+angee-demo        = { path = "./packages/angee-demo", editable = true }
+
+# `angee dev` orchestrator config. The Go CLI walks parents to find
+# .angee/project.yaml, then reads these blocks for the dev process map.
+[tool.angee.dev.runtime.django]
+manage = "src/manage.py"
+bind   = "127.0.0.1:8100"
+
+[tool.angee.dev.frontend]
+cwd = "ui/react/web"
+# command/args auto-detected (pnpm > npm > yarn)

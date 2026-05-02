@@ -24,6 +24,15 @@ angee up         # start everything
 angee admin      # talk to your platform admin agent
 ```
 
+## Two modes
+
+The `angee` binary serves **two complementary modes** (full detail in [`ARCHITECTURE.md` §12](./ARCHITECTURE.md#12-project-mode)):
+
+- **Compose mode** (the original) — operator state for an agent stack. `angee init`, `angee up`, `angee deploy`, `angee chat` all live here. Everything below in this doc describes compose mode unless noted otherwise.
+- **Project mode** *(new)* — drop-in for consumers of an Angee runtime framework (e.g. `django-angee`). The binary walks parents from CWD, finds `.angee/project.yaml`, and acts as a polyglot dispatcher (`angee build`/`migrate`/`doctor`/`fixtures` exec the framework) plus a dev orchestrator (`angee dev` spawns build watcher + dev server + frontend + extras with line-prefixed or pane-mode output).
+
+Both modes coexist in the same shell — `angee dev` in a project tree and `angee up` against `~/.angee/` are orthogonal. Disambiguation is by manifest filename: `.angee/project.yaml` ⇒ project-mode; `.angee/angee.yaml` ⇒ compose-mode. See [`RUNTIMES.md`](./RUNTIMES.md) for the adapter-author guide.
+
 ## What goes in `angee.yaml`
 
 ### Services

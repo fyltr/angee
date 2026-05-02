@@ -70,7 +70,28 @@ Requirements: Go 1.25+, Docker, git, golangci-lint (for linting)
 
 ## Dependencies
 
-Only two direct dependencies: `github.com/spf13/cobra` (CLI) and `gopkg.in/yaml.v3` (config parsing). Keep it minimal.
+Compose-mode dependencies (the original "two-deps" rule):
+
+- `github.com/spf13/cobra` — CLI framework.
+- `gopkg.in/yaml.v3` — config parsing for `angee.yaml` / `.angee-template.yaml` / `.angee/project.yaml`.
+
+Project-mode additions ([`docs/ARCHITECTURE.md` §12](./docs/ARCHITECTURE.md#12-project-mode)):
+
+- `github.com/pelletier/go-toml/v2` — parse `pyproject.toml` `[tool.angee.dev.*]` blocks (the dev orchestrator's process map source).
+- `github.com/charmbracelet/{bubbletea,lipgloss,bubbles}` — pane-mode TUI (`angee dev --ui=panes`). Not loaded for line-mode.
+
+Project-mode internal packages (compose-mode commands don't import these):
+
+- `internal/projmode/` — runtime adapter interface (`adapter.go`, `manifest.go`, `python.go`) + concrete `internal/projmode/django/`. **Distinct from `internal/runtime/`** which holds `RuntimeBackend` (compose vs k8s); name collision avoided by separate top-level package. See [`docs/RUNTIMES.md`](./docs/RUNTIMES.md) for the adapter-author guide.
+- `internal/dev/` — the `angee dev` orchestrator. Owns process supervision, signal handling, log prefixing, and the pane TUI.
+
+Project-mode entry-points in `cli/`:
+
+- `cli/project.go` — `findProjectRoot` (parent-walk for `.angee/project.yaml`), `loadProjectManifest`, `dispatchToRuntime`.
+- `cli/{build,migrate,doctor,fixtures}.go` — thin Cobra forwarder stubs that delegate to the dispatcher.
+- `cli/dev.go` — orchestrator entry point.
+
+`cli/init.go` gains a runtime-only branch (when `services: []` AND `runtime != ""`); `cli/root.go` installs a `PersistentPreRunE` for the dispatcher.
 
 ## Patterns
 

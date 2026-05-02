@@ -55,6 +55,23 @@ type TemplateMeta struct {
 	Version     string      `yaml:"version"`
 	Parameters  []ParamDef  `yaml:"parameters"`
 	Secrets     []SecretDef `yaml:"secrets"`
+
+	// Runtime selects the language framework adapter for project-mode
+	// init (django-angee R-15/R-16). Empty for compose-mode templates.
+	// When set AND Services is empty, `angee init --dev` skips
+	// docker-compose generation and runs the runtime-only branch
+	// (see cli/init.go).
+	Runtime string `yaml:"runtime,omitempty"`
+
+	// Services is informational in compose-mode and a sentinel in
+	// project-mode: an empty list together with Runtime != "" triggers
+	// runtime-only init.
+	Services []string `yaml:"services,omitempty"`
+
+	// Fixtures are loaded post-migrate by the runtime adapter
+	// (e.g. `manage.py loaddata` for Django). Paths are relative to the
+	// template root. Order matters — they're loaded in the listed order.
+	Fixtures []string `yaml:"fixtures,omitempty"`
 }
 
 // ParamDef describes a single template parameter.
