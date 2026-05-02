@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/operator
 
 # ─────────────────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.23
 
 # Runtime deps: git + docker CLI (for docker compose commands)
 RUN apk add --no-cache \
