@@ -90,7 +90,7 @@ _angee:
         ui_port:    "${ports.ui}"
       lifecycle:
         provision_on: agent.init
-        up_on:        agent.start
+        up_on:        { trigger: agent.start, mode: dev }   # has runtime: local services
         down_on:      agent.stop
         destroy_on:   agent.destroy
 

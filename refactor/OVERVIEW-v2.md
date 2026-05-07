@@ -188,14 +188,14 @@ agents:
 
 ## Template Chaining
 
-Template chaining is the answer to "an agent needs its own dev stack inside its worktree." There is no nested operator process and no nested operator state. The reconciliation invariant **one operator process serves one ANGEE_ROOT at runtime** is preserved.
+Template chaining is the answer to "an agent needs its own dev stack inside its worktree." There is no nested operator process and no nested operator state. The serving invariant — **one operator process serves HTTP/MCP for exactly one ANGEE_ROOT, and reconciliation against any single ANGEE_ROOT runs under a per-root lock** — is preserved.
 
 What chaining is, exactly:
 
 - A **second, sibling ANGEE_ROOT** is provisioned at a different path (e.g., inside the agent's worktree at `<worktree>/<app>/.angee/`).
 - The outer operator performs that provisioning by **calling its own `service.Platform.StackInit()` as a library**, with `ANGEE_ROOT` set to the chained path. This is one provisioning call into a different root, not a recursive operator process.
 - Once provisioned, the chained ANGEE_ROOT is a **normal, standalone angee project**. A developer can `cd` into the worktree and run `angee dev` from there if they want — that invocation runs its own in-process operator scoped to the chained root, the same way any `angee dev` in any directory does. There is no "parent" relationship at runtime; the runtime sees an independent ANGEE_ROOT.
-- During `angee dev` from the **outer** root, the outer operator drives the chained root's runtime via lifecycle triggers (it again calls `service.Platform.StackUp(<chained-root>)` etc. as library calls). The outer operator process is the only operator process; it just calls into multiple roots.
+- The outer operator drives the chained root's runtime via lifecycle triggers as **library calls**. Which call to make depends on the chained stack's shape: a stack with any `runtime: local` service must use `StackDev` (compose + process-compose); a fully-containerized stack can use `StackUp` (compose-only). Templates declare which mode the chained stack expects via `lifecycle.up_on.mode` (defaults to `dev` if any service is `runtime: local`).
 
 ```yaml
 # in agents/claude-angee-developer/template/agent.yaml.jinja
@@ -211,13 +211,21 @@ chain:
       django_port:  ${alloc.django}
       react_port:   ${alloc.react}
     lifecycle:
-      provision_on: agent.init        # → service.Platform.StackInit(root, template, inputs)
-      up_on:        agent.start       # → service.Platform.StackUp(root)
-      down_on:      agent.stop        # → service.Platform.StackDown(root)
-      destroy_on:   agent.destroy     # → service.Platform.StackDestroy(root)
+      provision_on: agent.init                       # → service.Platform.StackInit(root, template, inputs)
+      up_on:        { trigger: agent.start, mode: dev }
+                                                     # → service.Platform.StackDev(root)
+                                                     # angee-notes-dev has runtime: local services,
+                                                     # so the chained stack runs as `dev`, not `up`.
+                                                     # For all-container chained stacks, set mode: up.
+      down_on:      agent.stop                       # → service.Platform.StackDown(root)
+      destroy_on:   agent.destroy                    # → service.Platform.StackDestroy(root)
 ```
 
-This preserves the invariant: one operator process owns runtime reconciliation for one ANGEE_ROOT at a time. Multiple ANGEE_ROOTs (the outer and the chained) can be **provisioned and driven** by the same operator process via library calls. Two simultaneous **runtime** operators on the same root would still be illegal — and chaining never creates that situation, because the chained root only has runtime through library calls from its outer.
+This preserves the invariant precisely:
+
+- **HTTP/MCP serving:** the operator process serves HTTP/MCP for **exactly one** ANGEE_ROOT — the one identified by `--root` or the cwd at startup.
+- **Reconciliation:** the operator may call `service.Platform.Stack*(<other-root>)` library functions against multiple ANGEE_ROOTs (outer + any chained roots). Each such call takes a **per-root advisory lock** (a file lock at `<root>/run/operator.lock`) for the duration of the call. Concurrent calls to the same root from the same process serialize on this lock; calls to different roots run in parallel.
+- **Forbidden:** two operator processes serving HTTP/MCP for the same ANGEE_ROOT, or two processes running reconciliation against the same root simultaneously. The lock catches the latter; serving collisions are detected at startup (lockfile present + alive PID → operator refuses to start, points the user at the running PID).
 
 Worktree + chained stack = an agent that owns its own dev environment without needing a second operator process.
 
@@ -238,7 +246,7 @@ Compilation pipeline on every `up` / `dev` / `start`:
 
 1. Load `angee.yaml`.
 2. Resolve secrets through the configured backend (`.env` or OpenBao). Generate any `generated: true` secrets that don't exist yet. Import `env:VAR` references from the host environment and persist into the backend.
-3. Substitute `${secret.name}` and `${ports.name}` references.
+3. Resolve references. Non-secret refs (`${ports.x}`, `${alloc.x}`, `${service.x}`, `${operator.url}`, `${persist.x}`, `${inputs.x}`) become literals in the generated compose / process-compose files. `${secret.x}` refs are **rewritten as `${ENV_VAR}` env-var references** in the generated files; the resolved values land only in the gitignored `.env` (written `0600`) which compose / process-compose load at launch. Generated files never carry literal secret values.
 4. Split services by `runtime`:
    - `runtime: container` → emit `docker-compose.yaml`.
    - `runtime: local` → emit `process-compose.yaml`.
@@ -277,7 +285,7 @@ The compiler MUST NEVER write a resolved secret value into any file that the use
 - **Generated `docker-compose.yaml` / `process-compose.yaml`** — keep `${secret.x}` references as-is. Compose itself supports `${VAR}` interpolation against a secrets-loaded env, so the resolved file passed to `docker compose` / `process-compose` references env vars, never literals.
 - **Per-service `.env` files inside agent dirs** — these may contain resolved secrets and **must be gitignored**. The operator writes them with `0600` perms and refuses to write to a path inside a tracked directory unless that path is in `.gitignore`.
 - **`.copier-answers.yml`** — committed. Must never contain a resolved secret. If a Copier answer is sourced from a secret, the answer file stores the reference, not the value.
-- **Template-rendered files at `agents/<name>/CLAUDE.md`, `.mcp.json`, etc.** — these may be committed. They MUST contain `${secret.x}` references, not resolved values. Resolution happens at process-launch time via env-var interpolation by the consuming runtime (compose, process-compose, the agent process reading its own `.mcp.json`).
+- **Template-rendered files at `agents/<name>/CLAUDE.md`, `.mcp.json`, etc.** — these are committed. They MUST NOT contain resolved secret values. Each `${secret.<name>}` reference in the source template is rendered as a `${<ENV_VAR>}` reference (the env-var name comes from the secret declaration's `export_env`, defaulting to `SECRET_<NAME>` upper-snake-cased). The agent runtime / compose / process-compose interpolates these from the gitignored `.env` at launch.
 
 The operator's compile pipeline performs **two passes**:
 
@@ -322,7 +330,10 @@ What `agent init` does, in this order:
    - `kind: url|archive` → download + checksum verify + extract.
    - `kind: local` → bind or copy.
    - `kind: volume` → mount a declared volume at a subpath; `scope: agent` derives a per-agent volume.
-6. **Render agent files** with copier-go: `agents/<name>/agent.yaml`, `.env`, `CLAUDE.md`, `.mcp.json`, helper scripts. All `${secret.*}`, `${ports.*}`, `${persist.*}`, `${service.*}`, `${operator.*}` references are resolved at this point. Address-resolution rewrites the host portion per consumer.
+6. **Render agent files** with copier-go in two passes that respect the secret-handling rule:
+   - **Reference-pass (committable files):** `agents/<name>/agent.yaml`, `CLAUDE.md`, `.mcp.json`, helper scripts. Non-secret references (`${ports.*}`, `${alloc.*}`, `${persist.*}`, `${service.*}`, `${operator.url}`) are resolved to literals. Each `${secret.<name>}` reference is **rewritten to a `${<ENV_VAR>}` env-var reference** (the env-var name comes from the secret's `export_env`, defaulting to `SECRET_<NAME>` upper-snake-cased). The agent runtime / compose / process-compose interpolates these from the gitignored `.env` at launch — committed files never contain resolved secret values.
+   - **Resolved-pass (gitignored env file):** `agents/<name>/.env`, written `0600`. Contains the actual secret values, the operator URL, the operator token, model API keys, and addresses of the chained Django/React/Playwright. This is what the env-var refs from the reference-pass resolve against.
+   Address-resolution also happens in the reference pass — host portions of `${service.*}` and `${operator.url}` are baked into committed files because they're not secrets.
 7. **Create persistent dirs** declared in the template's `persist:` blocks (e.g., Playwright `browser-data`).
 8. **Start the per-agent Playwright MCP** as a local process on the allocated port. Wait for its health endpoint to come green. Register it with the operator's service registry so `${service.playwright}` resolves correctly for downstream consumers (the chained stack's tests, the agent process's `.mcp.json`).
 9. **Run the chained stack `init`** (`service.Platform.StackInit(<chained-root>, "stacks/angee-notes-dev", inputs)`): copier-render the chained `angee.yaml` into `<worktree>/<app>/.angee/` with the per-agent allocated Django/React ports baked in.
@@ -369,14 +380,18 @@ For the developer-agent (a `claude` CLI process), only the "always" set is avail
 
 ### Lifecycle
 
+An agent is a composite resource: bundled service + per-agent MCP servers (Playwright, etc.) + chained stack(s). Lifecycle commands act on **all** of these in the right order, not just the bundled service.
+
 | Command | Implementation |
 |---|---|
-| `agent init` | Composite provisioning above. |
-| `agent update` | `copier update` on agent template, re-materialize sources whose lock/ref changed, rewrite agent.yaml + service registration, optionally restart. |
-| `agent start/stop/restart` | Same as `service start/stop/restart` on the bundled service. |
-| `agent logs` | Same as `service logs`. |
-| `agent destroy` | Stop service, remove service from manifest. Worktree and persistent sources kept by default; `--purge` removes them. |
-| `agent list` | Join services tagged `agent` with their agent.yaml metadata. |
+| `agent init` | Composite provisioning above (steps 1–12). |
+| `agent update` | `copier update` on agent template, re-materialize sources whose lock/ref changed, rewrite agent.yaml + service registration, re-run chained stack `update` for any chained stack whose template/answers changed, optionally restart. |
+| `agent start` | Start per-agent MCP servers declared with `runtime.kind: local-process` (Playwright, etc.) → bring chained stacks up via the lifecycle trigger (`StackDev` or `StackUp` per `mode:`) → start the bundled service. Same order as `init`'s start phase. |
+| `agent stop`  | Reverse: stop bundled service → bring chained stacks down (`StackDown(<chained-root>)`) → stop per-agent MCP servers. Worktree, `.env`, persistent dirs, and chained stack manifests are preserved. |
+| `agent restart` | `stop` then `start`. |
+| `agent logs` | Tail the bundled service's logs (compose or process-compose, depending on `runtime`). Per-MCP and chained-stack logs are reachable via `service logs <name>`. |
+| `agent destroy` | Reverse of `init`: stop bundled service → chained stack `destroy` (removes the chained ANGEE_ROOT runtime, but keeps its directory and manifest unless `--purge`) → stop per-agent MCP servers → remove service entry from outer `angee.yaml`. Worktree and persistent dirs are kept by default; `--purge` removes them and the chained `.angee/`. |
+| `agent list` | Join services tagged `agent` with their `agent.yaml` metadata, including chained-stack roots and per-agent MCP server status. |
 
 ## Elegant shorthand: `_angee.inputs` and `instance_naming`
 
@@ -395,28 +410,33 @@ _angee:
     fallback: "${inputs.name}"
     max_length: 40
 
-  # Typed inputs. CLI flags and HTTP `inputs:` map through `maps_to`.
+  # Typed inputs. HTTP `inputs:` and CLI `--input k=v` both map through
+  # `maps_to.copier` (→ Copier answer) and `maps_to.angee` (→ optional path
+  # in the rendered angee.yaml fragment).
+  #
+  # `cli_flag:` is reserved syntax for a future "pretty flag" feature
+  # (see "CLI = operator-as-library" below). It is parsed and validated by
+  # the operator but NOT honored by the v1 CLI — v1 only accepts --input k=v.
   inputs:
     branch:
       type: str
       required: true
-      cli_flag: --branch
+      cli_flag: --branch                                # parsed; not used in v1
       maps_to:
-        copier: branch                                    # → Copier answer
+        copier: branch                                  # → Copier answer
         angee:  agents.${name}.workspace.sources.code.branch
     base_branch:
       type: str
       default: dev
-      cli_flag: --base-branch
+      cli_flag: --base-branch                           # parsed; not used in v1
       maps_to: { copier: base_branch }
 ```
 
-Two equivalent invocations:
+Two equivalent invocations (canonical v1 shape):
 
 ```sh
-# CLI shorthand — the operator pulls the template, reads _angee.inputs,
-# registers the declared flags on cobra, and computes the name via instance_naming.
-angee agent init claude-angee-dev --branch refactor-angee-notes
+# CLI: template positional + --input k=v. No per-template flags in v1.
+angee agent init agents/claude-angee-dev --input branch=refactor-angee-notes
 ```
 
 ```http
@@ -425,7 +445,7 @@ POST /agents
   "inputs": { "branch": "refactor-angee-notes" } }
 ```
 
-Both resolve to the same provisioning call: `name = "refactor-angee-notes"` (from the `instance_naming` pattern), `branch = refactor-angee-notes`, all other inputs at defaults. No hardcoding in the CLI; the template owns its surface.
+Both resolve to the same provisioning call: `name = "refactor-angee-notes"` (from `instance_naming.pattern`), `branch = refactor-angee-notes`, all other inputs at defaults. The template owns the input surface; the CLI passes `--input` strings through verbatim.
 
 For Django spinning up a personal assistant for one user:
 
@@ -607,8 +627,8 @@ This is the core Goal-2 integration story: a Django app needs to create a new ag
 ```
 Django                              angee-operator                       host
   │                                       │                                │
-  │ POST /agents { template, answers,     │                                │
-  │   sources, secrets, start: true }     │                                │
+  │ POST /agents { template, inputs,      │                                │
+  │                start: true }          │                                │
   ├──────────────────────────────────────►│                                │
   │ 202 { name, operation_id, status_url }│                                │
   │◄──────────────────────────────────────┤                                │
@@ -634,41 +654,43 @@ Django                              angee-operator                       host
 
 ### `POST /agents` request
 
+The canonical request shape uses `inputs` for everything declared in the template's `_angee.inputs` block (branch, base_branch, model, mcp_credentials, etc.). `name` is optional — it defaults to the value computed by `instance_naming.pattern`.
+
 ```json
 {
-  "name": "reviewer-123",
-  "template": "agents/angee-developer",
-  "answers": {
-    "branch": "feat/issue-123",
+  "template": "agents/claude-angee-developer",
+  "inputs": {
+    "branch":      "feat/issue-123",
     "base_branch": "main",
-    "model": "claude-sonnet-4-5"
+    "model":       "claude-sonnet-4-5"
   },
-  "sources": {
-    "code": { "repo": "https://github.com/fyltr/app", "ref": "main" }
-  },
-  "secrets": {
-    "anthropic-api-key": "env:ANTHROPIC_API_KEY"
-  },
-  "ports": {
-    "django":     "auto",
-    "react":      "auto",
-    "playwright": "auto"
-  },
-  "start": true,
-  "ttl": "24h"
+  "start":  true,
+  "ttl":    "24h"
 }
 ```
+
+Optional override fields, only when the caller needs to bypass declared inputs:
+
+| Field | Purpose | When to use |
+|---|---|---|
+| `name` | Override `instance_naming.pattern` | When the caller wants a stable name regardless of inputs |
+| `secrets` | Per-instance secret overrides (`{ "key": "env:VAR" }`) | When a secret can't be sourced from the stack-level backend |
+| `ports` | Per-instance port pin (`{ "django": 8247 }` or `"auto"`) | When the caller needs a specific port; defaults to operator-pool allocation |
+
+The optional fields are low-level overrides, not the primary interface. Most callers send only `template`, `inputs`, and `start`.
 
 Response (202 Accepted):
 
 ```json
 {
-  "name": "reviewer-123",
+  "name":         "feat-issue-123",
   "operation_id": "op_01J...",
-  "status_url": "/operations/op_01J...",
-  "agent_url": "/agents/reviewer-123"
+  "status_url":   "/operations/op_01J...",
+  "agent_url":    "/agents/feat-issue-123"
 }
 ```
+
+The returned `name` is the resolved instance name — either the caller's `name` override or the value computed from `instance_naming.pattern` (here, `slug("feat/issue-123")` → `"feat-issue-123"`). All subsequent calls use this name.
 
 Provisioning is async because it can take minutes (clone, copier render, image pull, container start, health gate). The client either polls `GET /operations/{id}` or subscribes to `GET /events` for SSE.
 
@@ -690,31 +712,6 @@ When a template asks for a port (`ports.django: auto`), the operator picks an un
 Two principles:
 1. **Concrete ports always end up in `angee.yaml`.** The operator never relies on dynamic Docker port assignment for agent-facing services — Django needs deterministic URLs.
 2. **The pool ranges are the operator's contract with the host.** Whoever provisions the operator host decides the pool size, which caps concurrent agents.
-
-### Addressability
-
-After provisioning, `GET /agents/reviewer-123` returns:
-
-```json
-{
-  "name": "reviewer-123",
-  "status": "healthy",
-  "template": "agents/angee-developer",
-  "service": "reviewer-123",
-  "url": "http://operator.example.com:8247",        // the agent's own HTTP
-  "mcp_url": "http://operator.example.com:8247/mcp",
-  "operator_proxy_url": "https://operator.example.com/agents/reviewer-123",
-  "ports": { "django": 8247, "react": 5374, "playwright": 9312 },
-  "worktree": {
-    "path": "/srv/angee/worktrees/reviewer-123",
-    "branch": "feat/issue-123",
-    "base": "main",
-    "commit": "ab12cd34..."
-  },
-  "created_at": "...",
-  "ttl_expires_at": "..."
-}
-```
 
 ### Minimum agent service contract
 
@@ -785,32 +782,43 @@ Django stores only the agent name and the operator URL. Everything else is looke
 
 ### MCP wiring across the boundary
 
-The agent's `.mcp.json` is **a Copier-rendered file**, not an output of a separate auth subsystem. It contains exactly the substitutions the agent needs:
+The agent's `.mcp.json` is a **committed, reference-only** file rendered by copier-go. Per the secret-handling rule, it never contains resolved secret values — only `${VAR}` references that the agent runtime (Claude Code, Codex, etc.) interpolates from its environment at launch:
 
-```jinja
+```jsonc
+// agents/<name>/.mcp.json — committed; reference-only.
 {
   "mcpServers": {
     "angee-operator": {
       "type": "http",
-      "url": "${operator.url}/mcp",
-      "headers": { "Authorization": "Bearer ${secret.agent-operator-token}" }
+      "url": "http://operator.example.com:9000/mcp",      // ← resolved (not a secret)
+      "headers": { "Authorization": "Bearer ${ANGEE_OPERATOR_TOKEN}" }
+                                                          // ↑ env-var ref; resolved at launch
     },
     "playwright": {
       "type": "http",
-      "url": "http://127.0.0.1:${ports.playwright}/mcp"
+      "url": "http://127.0.0.1:9312/mcp"                  // ← resolved (not a secret)
     }
   }
 }
 ```
 
-The per-agent operator token is just a `generated: true` secret declared in the agent's `agent.yaml`:
+The per-agent operator token is a `generated: true` secret declared in the agent's `agent.yaml`:
 
 ```yaml
 secrets:
   agent-operator-token: { generated: true, length: 32, scope: agent }
 ```
 
-The operator generates it on `agent init`, persists it in the backend, substitutes it into `.mcp.json` and into the agent's `.env`, and rotates it on `agent update`. There is no scope-grammar, no permission DSL — the operator just checks that an incoming bearer matches a known agent-scoped token and rejects access to anything outside that agent's namespace. Anything more elaborate is deferred until a real need surfaces.
+The operator generates it on `agent init`, persists it in the secrets backend, and writes it into the agent's gitignored `.env` as `ANGEE_OPERATOR_TOKEN=<value>`. The committed `.mcp.json` references `${ANGEE_OPERATOR_TOKEN}`; the agent runtime reads `.env` and interpolates at MCP-client construction. The token is rotated on `agent update` (a new value is written to `.env`; `.mcp.json` doesn't change). There is no scope-grammar, no permission DSL — the operator just checks that an incoming bearer matches a known agent-scoped token and rejects access to anything outside that agent's namespace. Anything more elaborate is deferred until a real need surfaces.
+
+The split, summarized:
+
+| File | Committed? | Contains | Resolved by |
+|---|---|---|---|
+| `agent.yaml` | Yes | `${secret.x}`, `${ports.x}`, etc. references | The operator's compile pipeline |
+| `.mcp.json` | Yes | Resolved non-secret literals + `${ENV_VAR}` for secrets | The agent runtime at launch (env interpolation) |
+| `CLAUDE.md` | Yes | Resolved non-secret literals only | n/a (no secrets in docs) |
+| `.env` | **No (gitignored, 0600)** | Resolved secret values, addresses, ports | Loaded by the agent runtime / compose / process-compose |
 
 ### PR flow
 
@@ -935,7 +943,7 @@ $ANGEE_ROOT/
 
 **Hard rule (also stated above):** the compiler MUST refuse to write a resolved secret into any path inside a tracked directory unless that path appears in `.gitignore`. This is enforced at write-time, not by convention.
 
-No `state/` directory. No `operator.yaml`. The manifest is the state.
+No `state/` directory. No `operator.yaml`. The manifest is the durable state. Ephemeral state — async operation records (`/operations/{id}`) and the event stream backing `/events` SSE — lives **in-memory** in the operator process and is lost on restart. Subscribers should treat operation IDs as session-scoped: re-poll `GET /agents/<name>` after a restart to discover post-crash state. Persisting operations across restarts is deferred until a real need surfaces.
 
 ## Out Of Scope For v1
 
@@ -953,7 +961,7 @@ Explicitly deferred so the v1 ships:
 
 ## Refactor Decisions
 
-1. `angee.yaml` is the source of truth. There is no `operator.yaml`, no separate state dir.
+1. `angee.yaml` is the durable source of truth. There is no `operator.yaml`, no separate persistent state directory. Async operation records and event-stream history live in-memory only and are lost on restart (v1).
 2. `service.Platform` is the only business logic layer.
 3. `angee up` is **compose-only** (containerized services). `angee dev` is **compose + process-compose** (containerized + host processes, plus the operator HTTP/MCP server in-process). `angee start/stop/restart/logs <name>` route by the service's `runtime:` field. No custom orchestration logic between user input and the underlying tools.
 4. `angee dev` compiles to `process-compose.yaml` and starts the process-compose binary; runtime control goes through its REST API. No custom local-process supervisor.
@@ -961,7 +969,7 @@ Explicitly deferred so the v1 ships:
 6. Templates are Copier templates with `_angee` metadata, rendered in-process by the `copier-go` library (no Python runtime). `copier update` powers `stack update` and `agent update`.
 7. The Agent provisioning primitive is the one feature Angee builds from scratch, because nothing else does worktree + workspace + MCP + secrets + addressable service in one command.
 8. Workspace is not a CLI noun. It only exists as part of an Agent.
-9. **One operator process owns runtime reconciliation for one `ANGEE_ROOT` at a time.** A single operator process can still *call into* multiple roots as library calls (this is how template chaining works — the outer operator drives the chained root's lifecycle via `service.Platform.StackUp(<chained-root>)` etc.). Run **separate operator processes** for environments that should be runtime-isolated (different machines, different trust boundaries, different staging deployments).
+9. **One operator process serves HTTP/MCP for exactly one `ANGEE_ROOT`. Reconciliation against any single root runs under a per-root advisory lock (`<root>/run/operator.lock`).** A single operator process may make scoped `service.Platform.Stack*(<other-root>)` library calls against multiple roots (template chaining works this way — the outer operator drives the chained root's lifecycle); each call takes the lock for the target root. Two processes serving the same root, or two processes reconciling the same root concurrently, are forbidden — the lockfile catches reconciliation collisions; serving collisions are detected at startup. Run **separate operator processes** for environments that should be served independently (different machines, different trust boundaries, different staging deployments).
 10. No backward-compatibility branches in active code. Old paths get deleted.
 
 ## Success Shape

@@ -48,7 +48,10 @@ chain:
       ui_port:    ${ports.ui}
     lifecycle:
       provision_on: agent.init
-      up_on:        agent.start
+      # angee-notes-dev contains runtime: local services (Django, Vite),
+      # so the chained stack runs as `dev` (compose + process-compose),
+      # not `up` (compose-only).
+      up_on:        { trigger: agent.start, mode: dev }
       down_on:      agent.stop
       destroy_on:   agent.destroy
 
