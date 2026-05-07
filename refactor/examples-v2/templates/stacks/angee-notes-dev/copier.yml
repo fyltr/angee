@@ -12,17 +12,7 @@ _angee:
     Local dev stack for django-angee/examples/angee-notes.
     Runs Django + Vite locally, postgres + redis as compose sidecars, plus an
     in-process angee-operator on a loopback port for the duration of `angee dev`.
-    Designed to be rendered standalone OR as the inner stack of an agent worktree.
-  default_agent_template: agents/claude-angee-developer
-  port_pools:
-    # When rendered inside an agent's worktree the parent operator overrides
-    # these with concrete allocations from its own pool. When rendered standalone,
-    # these defaults are used directly.
-    - { name: django,     range: "8100-8199", export_env: DJANGO_PORT }
-    - { name: ui,         range: "5173-5199", export_env: UI_PORT, aliases: [WORKSPACE_VITE_PORT] }
-    - { name: operator,   range: "9000-9099", export_env: ANGEE_OPERATOR_PORT }
-    - { name: postgres,   range: "5432-5499" }
-    - { name: redis,      range: "6379-6399" }
+    Designed to be rendered standalone or as the inner stack of a workspace.
   local_runtime:
     jobs:     [python-deps, react-deps, build, migrate, fixtures]
     services: [build-watch, web, ui]
@@ -52,7 +42,7 @@ django_settings:
 django_port:
   type: int
   default: 8100
-  help: Concrete host port for Django. The parent operator overrides this when the stack is rendered inside an agent worktree.
+  help: Concrete host port for Django. The parent operator overrides this when the stack is rendered inside a workspace chain.
 
 ui_port:
   type: int
@@ -70,7 +60,7 @@ redis_port:
   type: int
   default: 6379
 
-# Note: there is no "nested" mode. When this stack is provisioned as a chained
-# stack inside an agent's worktree, the parent operator just allocates ports
+# Note: there is no "nested" mode. When this stack is provisioned as a
+# chained stack inside a workspace, the parent operator just allocates ports
 # from its pool and passes them as Copier answers below. The rendered
 # angee.yaml is identical in shape to a standalone init.

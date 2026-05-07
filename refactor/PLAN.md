@@ -1,390 +1,687 @@
 # Angee v2 Rebuild Plan
 
 Status: proposed plan to execute the design in `refactor/OVERVIEW-v2.md`.
+The two documents are aligned — this plan is the execution sequence; the
+overview is the target shape.
 
-## Strategy
+## Scope recap
 
-We rebuild on a clean slate, but **inside the same repo** so cherry-picking from
-the old code is one `cp` away. The plan has three macro-phases:
+**Angee provisions workspaces, fetches sources, resolves secrets, runs git
+operations on worktree-backed sources, supervises services. It does not
+know what an "agent" is.**
 
-1. **Quarantine** — move everything that isn't the design or examples into
-   `.deprecated/`. Nothing buildable lives outside `.deprecated/` until we have
-   re-introduced it deliberately.
-2. **Skeleton** — set up the new package layout, `service.Platform`, the v2
-   manifest schema, the substitution resolver, and a passing `make build` with
-   a single `angee version` command.
-3. **Re-introduce features** in milestones that map to the two goals from the
-   overview. Each milestone is a vertical slice that ships a usable command end
-   to end (CLI → `service.Platform` → backend).
+Anything an agent needs (MCP wiring, model API keys, addressability, TTL
+sweeping, "talk to me over HTTP", PR creation) is the application layer's
+job. The
+application layer asks Angee for two things:
 
-Cherry-picking rule: code that lands in `.deprecated/` is **reference, not
-import**. We may copy a function or a test verbatim, but a milestone is not
-"done" until the new code lives in its new package and the old file is no
-longer referenced. The `.deprecated/` tree is read-only once Phase 1 lands.
+1. A **workspace** — a directory rendered from a chain of Copier templates
+   with sources mounted into it.
+2. A **service** — a runnable workload (container or local process) that
+   mounts that workspace, gets env vars, and is supervised.
 
-## Phase 1 — Quarantine the old code
+Everything else above that lives in the application (Django, etc.).
 
-Goal: leave a buildable repo with effectively empty Go packages + intact docs +
-intact templates. Everything else moves wholesale to `.deprecated/`.
+### Litmus test: an agent-free stack must work end-to-end
 
-### Move list
+A `angee.yaml` with only `services:` and `jobs:` (no `workspaces:`, no
+`sources:`, no template chain, no inner ANGEE_ROOT) must be fully
+supported. `angee dev` on such a manifest never touches a single line of
+workspace, source, or template-chain runtime code. Copier is still used by
+`stack init`; after init, workspaces and sources are **optional features
+layered on top** of the plain service-supervision substrate, not
+load-bearing for the dev loop.
 
-| From | To |
+Concretely: Phases 3–4 ship a complete, useful Angee — postgres + redis +
+Django + Vite under one command, secrets resolved, supervised by docker
+compose + process-compose. Phase 5 adds workspaces for callers that want
+them. A user who only wants a tidy compose-plus-host-processes dev loop
+never has to learn what a workspace is.
+
+## Concepts (six, not seven)
+
+| Concept | Meaning |
 |---|---|
-| `cli/` | `.deprecated/cli/` |
-| `cmd/angee/` | `.deprecated/cmd/angee/` |
-| `cmd/operator/` | `.deprecated/cmd/operator/` |
-| `internal/compiler/` | `.deprecated/internal/compiler/` |
-| `internal/config/` | `.deprecated/internal/config/` |
-| `internal/copier/` | `.deprecated/internal/copier/` |
-| `internal/dev/` | `.deprecated/internal/dev/` |
-| `internal/git/` | `.deprecated/internal/git/` |
-| `internal/operator/` | `.deprecated/internal/operator/` |
-| `internal/projmode/` | `.deprecated/internal/projmode/` |
-| `internal/provision/` | `.deprecated/internal/provision/` |
-| `internal/root/` | `.deprecated/internal/root/` |
-| `internal/runtime/` | `.deprecated/internal/runtime/` |
-| `internal/service/` | `.deprecated/internal/service/` |
-| `internal/state/` | `.deprecated/internal/state/` |
-| `internal/tmpl/` | `.deprecated/internal/tmpl/` |
-| `api/` | `.deprecated/api/` |
-| `templates/` | `.deprecated/templates/` (the **examples-v2** templates become the new seed; see Phase 2) |
-| `examples/` | `.deprecated/examples/` |
-| `deferred/` | leave in place — already a parking lot |
-| `dist/` | gitignored, leave |
+| Stack | The environment for one `ANGEE_ROOT`: sources, workspaces, services, jobs, secrets, ports, volumes. |
+| Source | A typed pool entry: `git`, `template`, `archive`, `url`, `local`, `volume`. Declared once at the stack and referenced by name from workspaces. The compose-`volumes:` analogue. |
+| Workspace | A materialized directory under `$ANGEE_ROOT/workspaces/<name>/`. Rendered from a chain of Copier templates with sources mounted at subpaths. Mountable into one or more services. |
+| Service | A runnable workload. `runtime: container` → docker compose. `runtime: local` → process-compose. Declares env, secrets, port pins, and mounts (workspaces, sources, volumes). |
+| Job | A one-shot or scheduled command. Same mounts/env semantics as a service. |
+| Operator | The reconciler. Renders workspaces, resolves secrets, compiles backend files, applies runtime changes, exposes HTTP + MCP. |
 
-### What stays at the top level
+Notably absent: **Agent**. There is no agent noun, no agent CLI command, no
+agent HTTP endpoint, no per-agent MCP wiring, no agent addressability. The
+old "Agent" composite is rebuilt at a higher layer by combining a workspace
+with a service.
 
-- `refactor/` — the design (`OVERVIEW-v2.md`, `PLAN.md`, `examples-v2/`).
-- `docs/` — keep `OVERVIEW.md` etc. for now; mark them stale at the top.
-  Replace incrementally as features land.
-- `Makefile` — strip down to `build`, `test`, `lint`, `fmt`, `vet`, `check`.
-  The new make targets only know about the new layout.
-- `Dockerfile.cli`, `Dockerfile.operator`, `scripts/` — stay; revisit when the
-  new binaries are ready to be packaged.
-- `go.mod` / `go.sum` — keep; add new deps as the plan progresses.
-- `CLAUDE.md`, `README.md`, `QUICKSTART.md` — keep; they get rewritten in
-  Phase 3+ as the new commands replace the old ones.
+## What Angee gives an "agent" (without naming it)
 
-### Build invariant after Phase 1
+When the application wants what OVERVIEW-v2 called an agent, it asks Angee
+for two things:
 
-`go build ./...` must succeed against an essentially empty tree. Concretely:
+1. `POST /workspaces` — provision a workspace from a template (or chain of
+   templates) with declared sources (e.g. `kind: git, mode: worktree`),
+   inputs, and any inner ANGEE_ROOT chained underneath.
+2. `POST /services` — start a service that mounts that workspace and
+   receives env vars (operator URL, secrets, ports, workspace path,
+   addresses of stack peers).
 
-- `cmd/angee/main.go` exists with a single `angee version` command wired to a
-  package-level constant. No imports beyond cobra and the new (empty)
-  `internal/version`.
-- `cmd/operator/main.go` exists and prints "operator v0; not implemented".
-- `internal/.../*` does not exist yet; packages are introduced in Phase 2 only
-  when we have something to put in them.
-- Tests under `.deprecated/` are excluded from `go test ./...` because the
-  package paths don't match `./...` against the new module root once we add a
-  `.deprecated/go.mod` shim (see below) **or** by giving the directory a name
-  Go's tooling already ignores. Implementation choice:
+Everything that distinguishes "an agent" from "a process with a directory
+and some env vars" — MCP server lifecycle, model selection, message routing,
+TTL semantics, name-derivation rules, addressability proxies — lives in the
+caller. Angee doesn't render `.mcp.json`, doesn't know what Playwright is,
+doesn't keep a service registry keyed by "agent type".
 
-  - **Preferred:** rename to `_deprecated/` (Go ignores directories starting
-    with `_` for `./...`, build, and test). This avoids a sub-module and keeps
-    `git mv` history clean. The README clarifies the leading-underscore name
-    is purely a build-toolchain convention.
-  - Fallback if `_deprecated/` is inconvenient: drop a `.deprecated/go.mod`
-    declaring `module github.com/fyltr/angee/deprecated` so `./...` from the
-    root no longer crawls it.
+If an MCP server needs to run alongside an agent, the caller declares it as
+a *separate service* (or a sidecar) in the same stack and lets Angee
+supervise it like any other service.
 
-  We pick `_deprecated/` to keep history readable. The plan refers to it as
-  `.deprecated/` for prose continuity; the on-disk name is `_deprecated/`.
+## Reuse stance (unchanged from OVERVIEW-v2)
 
-### Concrete steps (one PR)
+| Layer | Reused tool |
+|---|---|
+| Container runtime | `docker compose` (shell out) |
+| Local-process supervisor | `process-compose` binary + REST API |
+| Templating | `github.com/fyltr/copier-go` (in-tree at `../copier-go`) |
+| Secrets backends | `.env` and OpenBao native (Backend interface for the rest) |
+| Worktrees | `git worktree add` via `os/exec` |
 
-1. `git mv` each path above into `_deprecated/<old-path>`.
-2. Add `_deprecated/README.md` explaining the rule (read-only reference, copy
-   forward into the new tree, do not `import` from `_deprecated/`).
-3. Replace `cmd/angee/main.go` and `cmd/operator/main.go` with the minimal
-   stubs described above.
-4. Strip `Makefile` to its minimum surface.
-5. Verify `make build && make test && make lint` is green.
+Angee's only novel pieces are:
+- The `angee.yaml` schema (sources + workspaces + services + jobs + secrets + ports).
+- The `${ns.path | filter}` substitution resolver.
+- The two-pass compile rule (resolved secrets never in committed files).
+- The workspace materialization pipeline (template chain + source mounts +
+  optional inner ANGEE_ROOT).
 
-After Phase 1 the repo is small, the design lives in `refactor/`, and every
-old artifact is one `find _deprecated -name 'X'` away.
+## Architecture
 
-## Phase 2 — Skeleton
+```
+angee CLI (cobra)
+    │
+    ▼
+service.Platform   ◄── one business-logic layer; CLI/HTTP/MCP are thin adapters
+    │
+    ├─► docker compose                       (shell out — containerized services)
+    ├─► process-compose binary + REST API    (shell out + HTTP — local processes)
+    ├─► copier-go (library)                  (in-process — template render + update)
+    ├─► git CLI                              (shell out — clones, worktrees, fetches)
+    └─► secrets backend                      (in-process — .env | openbao)
+```
 
-Goal: stand up the package layout from the overview, the substitution
-resolver, and the v2 manifest types — but nothing that runs containers or
-processes yet. Tests cover compile-time behavior only.
+Same dispatch rule as OVERVIEW-v2: CLI default is in-process Platform;
+`--operator` / `ANGEE_OPERATOR_URL` switches to HTTP.
 
-### New package layout
+## Command surface
+
+```sh
+# Stack
+angee init --dev [path]                   # alias for: angee stack init dev [path]
+angee stack init <template> [path] [--input k=v ...]
+angee stack update
+angee stack destroy
+
+# Runtime power (literal compose / process-compose shims)
+angee build [service...] [--no-cache] [--pull]   # docker compose build pass-through
+angee up    [service...] [--build]               # compose-only; services only
+angee down                                       # both backends
+angee start   <service>...                       # service-only (workspaces use `workspace start`)
+angee stop    <service>...
+angee restart <service>...
+angee logs    [service...]
+angee status                                     # alias: ls, ps; shows services + workspaces + jobs
+angee dev   [--build]                            # compose + process-compose + in-process operator
+
+# Services
+angee service init <name> --runtime <container|local> [--image img|--command ...] [--mount URI ...] [--env K=V ...] [--port spec] [--start]
+angee service update <name> [--env K=V ...] [--mount URI ...] [--port spec]
+angee service destroy <name>
+angee service start|stop|restart|logs <name>
+angee service list
+
+# Jobs
+angee job run <name> [--input k=v ...]
+angee job list
+angee job logs <name>
+
+# Workspaces (the only novel provisioning primitive)
+angee workspace create <template> [--input k=v ...] [--name <name>] [--start]
+angee workspace update <name>
+angee workspace destroy <name> [--purge|--force]
+angee workspace start|stop|restart <name> # only meaningful when chain_root: is set
+angee workspace logs <name>
+angee workspace list
+angee workspace get <name>                # path, sources, mounted-by, status
+
+# Sources (declared in angee.yaml; CLI is read/refresh only here; git ops in Phase 5b)
+angee source list
+angee source fetch <name>                 # refresh a source's local cache
+
+# Operator
+angee operator [--bind 0.0.0.0] [--port 9000]
+```
+
+There is no `angee agent`. Anything that command would have done is
+expressible as `angee workspace create` followed by `angee service init`.
+
+## Manifest sketch
+
+```yaml
+version: 1
+kind: stack
+name: angee-notes
+
+operator:
+  url: http://127.0.0.1:9000
+  token_secret: operator-token
+  port_pool:
+    web:        { range: "8200-8299" }
+    custom:     { range: "10000-10999" }
+
+secrets_backend:
+  type: env-file
+  path: .env                           # relative to $ANGEE_ROOT
+
+secrets:
+  postgres-password: { generated: true, length: 32 }
+  operator-token:    { generated: true, length: 32 }
+  anthropic-api-key: { required: true, import: env:ANTHROPIC_API_KEY }
+
+ports:
+  django: { value: 8100, export_env: DJANGO_PORT }
+
+volumes:
+  app-data: { driver: local-fs, path: .angee/data }
+
+sources:
+  django-angee:
+    kind: git
+    repo: ../django-angee
+    default_ref: dev
+    cache_path: .angee/sources/django-angee
+  runner-skills:
+    kind: git
+    repo: https://github.com/fyltr/runner-skills
+    default_ref: main
+
+workspaces:
+  feat-issue-123:
+    template:
+      - workspaces/pr      # chain step 1: layout, scripts, .env scaffold
+      - stacks/angee-notes-dev           # chain step 2: emits an inner angee.yaml
+    inputs:
+      branch: feat/issue-123
+      base_branch: dev
+      app_subpath: examples/angee-notes
+    sources:
+      code:
+        source: django-angee
+        mode:   worktree
+        branch: feat/issue-123
+        subpath: code
+      skills:
+        source: runner-skills
+        subpath: skills
+    chain_root: code/examples/angee-notes/.angee  # inner ANGEE_ROOT lives at workspace/<this path>
+
+services:
+  postgres:
+    runtime: container
+    image: postgres:16
+    env: { POSTGRES_PASSWORD: "${secret.postgres-password}" }
+
+  agent-claude-feat-issue-123:           # caller chose the name
+    runtime: container
+    image: ghcr.io/example/claude-runner:latest
+    mounts:
+      - workspace://feat-issue-123:/workspace
+      - source://runner-skills:/skills:ro
+    env:
+      ANTHROPIC_API_KEY:   "${secret.anthropic-api-key}"
+      ANGEE_OPERATOR_URL:  "${operator.url}"
+      WORKSPACE_PATH:      "${workspace.feat-issue-123.path}"
+
+jobs:
+  migrate:
+    runtime: local
+    mounts: [workspace://feat-issue-123:/workspace]
+    command: ["uv", "run", "python", "manage.py", "migrate", "--noinput"]
+```
+
+The `agent-claude-feat-issue-123` service is just a service. The fact that
+it runs an agent process is invisible to Angee. The application layer (or a
+human) chose the name, declared the image, and wired the env vars.
+
+## Substitution grammar (trimmed)
+
+Same `${ns.path | filter}` shape, fewer namespaces. `connector` and any
+agent-scoped flavors are gone.
+
+| Form | Resolver |
+|---|---|
+| `${secret.name}` | Secrets backend (rewritten to `${ENV_VAR}` in committed files; resolved into gitignored `.env`). |
+| `${service.name}` / `.host` / `.port` | Service registry; host portion rewritten per consumer location. |
+| `${ports.name}` | Stack `ports:` block. |
+| `${alloc.pool}` | Operator port pool, allocated at workspace/service init. |
+| `${workspace.name.path}` | Absolute path of a named workspace on disk. |
+| `${source.name.path}` | Absolute path of a fetched source's local cache. |
+| `${operator.url}`, `${operator.domain}` | Operator URL; host portion rewritten per consumer. |
+| `${inputs.key}` | Provisioning-time inputs. |
+| `${name}` | Resolved instance name (workspace or service). |
+
+Filters: `slug`, `lower`, `upper`, `local_part`, `truncate(n)`, `default('x')`,
+`required('msg')`, `b64encode`, `replace(a,b)` (same set as
+`refactor/examples-v2/SUBSTITUTIONS.md`).
+
+The two-pass compile rule from OVERVIEW-v2 stands: resolved secrets never
+land in a committed file. Committed files use `${ENV_VAR}` placeholders;
+gitignored `.env` carries the resolved values at `0600`.
+
+## Workspace lifecycle (replaces agent provisioning)
+
+`workspace create` runs this sequence:
+
+1. **Resolve template chain.** Each entry is a Copier template. Walk left
+   to right; later templates can read answers persisted by earlier ones.
+2. **Compute the instance name.** From `--name` or from
+   `_angee.instance_naming.pattern` declared in the first template that
+   declares one.
+3. **Allocate ports** for any `${alloc.<pool>}` references encountered in
+   the chain or in the resulting `angee.yaml` fragment.
+4. **Resolve / generate secrets** in the configured backend.
+5. **Materialize sources** declared by the workspace into
+   `$ANGEE_ROOT/workspaces/<name>/<subpath>/`:
+   - `kind: git, mode: worktree` → `git worktree add` off the source's
+     shared `cache_path`.
+   - `kind: git, mode: clone` → shallow clone with locked commit.
+   - `kind: template` → `copier copy` into the subpath.
+   - `kind: url|archive` → download + checksum verify + extract.
+   - `kind: local` → bind or copy.
+   - `kind: volume` → mount a declared volume at the subpath.
+6. **Render the template chain** with `copier-go` in two passes (reference
+   pass + resolve-into-env pass).
+7. **Optionally provision the inner ANGEE_ROOT.** If `chain_root:` is set
+   and the template emitted an `angee.yaml` there, run the same stack
+   prepare/reconcile path against `<inner-root>` — same per-root advisory
+   lock as any other reconciliation. It does not start the inner stack
+   unless the request included `--start`.
+8. **Register the workspace in the outer `angee.yaml`** and write
+   addresses/ports/paths into the workspace's gitignored `.env` for
+   processes that read it.
+
+`workspace start` (only meaningful when `chain_root:` is set) brings the
+inner stack up via the matching lifecycle trigger (`StackUp` for
+all-container inner stacks, `StackDev` if the inner stack has any
+`runtime: local` services). `workspace stop` brings it down. `workspace
+destroy` reverses, optionally removing the worktree and persistent dirs
+with `--purge`.
+
+That's it. Eight steps, zero of which mention agents, MCP, or
+addressability. Each step is testable in isolation.
+
+## Service lifecycle (unchanged from compose semantics)
+
+`service init` is a manifest edit + first-time render:
+
+1. Validate that all referenced workspaces / sources / volumes / secrets /
+   ports exist.
+2. Resolve substitutions for the service entry.
+3. Append to `docker-compose.yaml` (container) or `process-compose.yaml`
+   (local).
+4. If `--start`, call the runtime backend's `Up(<service>)`.
+
+`service start/stop/restart/logs` route by `runtime:` to compose or
+process-compose. `service destroy` removes the entry from `angee.yaml` and
+calls the runtime backend's `Stop` + `Remove`.
+
+There is no special handling for "agent services" because there is no such
+category.
+
+## Mount syntax
+
+Service `mounts:` accept a tiny URI scheme:
+
+| URI | Resolves to |
+|---|---|
+| `workspace://<name>` | `${workspace.<name>.path}` (read-write). |
+| `workspace://<name>:/path` | bind workspace at `/path` in container. |
+| `workspace://<name>/<subpath>:/path:ro` | bind a subpath read-only. |
+| `source://<name>` | the source's local cache path. |
+| `source://<name>:/path:ro` | bind read-only. |
+| `volume://<name>:/path` | named volume mount (compose `volumes:` proxy). |
+| `bind:///abs/host/path:/path` | absolute host bind (compose-equivalent). |
+
+For `runtime: local` services, mounts collapse to env vars
+(`WORKSPACE_PATH=...`, `SOURCE_<NAME>=...`) plus a working-directory
+override; there is no Linux mount to perform.
+
+## Architecture invariants (kept from OVERVIEW-v2)
+
+- One operator process serves HTTP/MCP for exactly one `ANGEE_ROOT`.
+- Reconciliation against any single root takes a per-root advisory lock at
+  `<root>/run/operator.lock`. Inner-root reconciliation (when a workspace
+  has `chain_root:`) is library calls into `service.Platform.Stack*` against
+  the inner root, each call taking that inner root's lock.
+- `service.Platform` is the only business-logic layer. CLI, HTTP, MCP are
+  thin adapters.
+- `angee up` is compose-only. `angee dev` is compose + process-compose +
+  in-process operator.
+- Resolved secrets never enter committed files.
+- No backward-compatibility branches in active code. Old paths live in
+  `_deprecated/`.
+
+## Phase plan
+
+The phases compress because Goal 2 is now an order of magnitude smaller.
+
+### Phase 1 — Quarantine the old code
+
+Same as before. `git mv` everything from `cli/`, `cmd/`, `internal/`,
+`api/`, `templates/`, `examples/` into `_deprecated/`. Leading underscore
+so Go's tooling skips the tree for `./...`.
+
+`cmd/angee/main.go` and `cmd/operator/main.go` are minimal stubs (`angee
+version`; operator prints "not implemented"). `Makefile` strips down. `make
+build && make test && make lint` is green against an essentially empty
+tree.
+
+`_deprecated/README.md` documents the rule: read-only reference; copy
+forward into the new tree; never `import` from `_deprecated/`.
+
+### Phase 2 — Skeleton
 
 ```
 api/                              # request/response types shared by CLI/HTTP/MCP
 internal/
-  manifest/                       # v2 angee.yaml types + load/save (no validation yet)
-  substitute/                     # ${ns.path | filter} grammar — see SUBSTITUTIONS.md
-  secrets/                        # Backend interface + .env impl (OpenBao deferred)
-  ports/                          # in-memory port pool + lease persistence in angee.yaml
+  manifest/                       # v2 angee.yaml types: stack, source, workspace, service, job
+  substitute/                     # ${ns.path | filter} resolver
+  secrets/                        # Backend interface + .env impl
+  ports/                          # in-memory pool, leases persist in angee.yaml
   copierx/                        # thin wrapper around github.com/fyltr/copier-go
-  git/                            # `git worktree add` shim (stdlib os/exec)
-  fslock/                         # per-root advisory lockfile
+  git/                            # `git worktree add` + `git clone --depth 1` shims
+  fslock/                         # per-root advisory lock
   service/                        # service.Platform — the only business-logic layer
   runtime/
-    backend.go                    # Runtime interface (Up, Down, Start, Stop, Logs, ...)
-    compose/                      # docker compose adapter (Phase 4)
-    proccompose/                  # process-compose adapter (Phase 5)
-  operator/
-    server.go                     # HTTP + SSE server (Phase 6)
-    mcp.go                        # MCP JSON-RPC adapter (Phase 6)
+    backend.go                    # Runtime interface
+    compose/                      # docker compose adapter (Phase 3)
+    proccompose/                  # process-compose adapter (Phase 4)
+  operator/                       # HTTP + SSE + MCP (Phase 6)
   cli/                            # cobra commands; thin adapters on service.Platform
 cmd/
-  angee/                          # CLI binary
-  operator/                       # daemon binary
-templates/
-  stacks/                         # seeded from refactor/examples-v2/templates/stacks
-  agents/                         # seeded from refactor/examples-v2/templates/agents
+  angee/
+  operator/
+templates/                        # seeded from refactor/examples-v2 once Phase 5 is real
 ```
 
-Notes:
+`service.Platform` exposes one method per operator action (no agent methods):
+`StackInit`, `StackUpdate`, `StackPrepare`, `StackBuild`, `StackUp`,
+`StackDev`, `StackDown`, `StackDestroy`,
+`ServiceInit`, `ServiceUpdate`, `ServiceBuild`, `ServiceStart`,
+`ServiceStop`, `ServiceRestart`, `ServiceLogs`, `ServiceList`,
+`ServiceDestroy`,
+`JobRun`, `JobLogs`, `JobList`, `WorkspaceCreate`, `WorkspaceUpdate`,
+`WorkspaceStart`, `WorkspaceStop`, `WorkspaceDestroy`, `WorkspaceList`,
+`WorkspaceGet`, `SourceList`, `SourceFetch`.
 
-- `service.Platform` is one struct with one method per operator action
-  (`StackInit`, `StackUp`, `StackDev`, `StackDown`, `StackDestroy`,
-  `ServiceStart`, `ServiceStop`, `ServiceLogs`, `JobRun`, `AgentInit`,
-  `AgentUpdate`, `AgentStart`, `AgentStop`, `AgentDestroy`, `AgentList`,
-  `AgentGet`). The CLI, HTTP, and MCP layers are all thin shims over this.
-- `internal/cli/` (not the top-level `cli/`) keeps cobra commands as Go
-  helpers we can unit-test. The top-level `cli/` from v1 is gone.
-- `internal/copierx/` is a 30-line wrapper. The actual templating is the
-  sibling `github.com/fyltr/copier-go` library (already at `../copier-go`).
-- `internal/manifest/` owns `angee.yaml` types; `internal/runtime/compose/`
-  and `internal/runtime/proccompose/` own the **generated** types
-  (`docker-compose.yaml`, `process-compose.yaml`). The two never share types.
+`StackInit` vs `StackPrepare`: `StackInit(<template>, <root>, <inputs>)`
+renders a stack template into a *fresh* root and then prepares it
+(compiles backend files, resolves secrets, allocates ports).
+`StackPrepare(<root>)` operates on an *existing* `angee.yaml` under
+`<root>` — no template rendering. The workspace creation flow uses
+`StackPrepare` for the inner ANGEE_ROOT (the chain render in step 6
+already produced the manifest). The CLI's `angee init` / `angee stack
+init` use `StackInit`. This split avoids double-render when a workspace
+template chain emits an inner stack.
 
-### What lands in this phase
+`StackBuild` and `ServiceBuild` are compose-shims (`docker compose
+build`) and operate only on `runtime: container` services with a
+`build:` directive. `StackUp` and `StackDev` accept a `Build bool` field
+on their request struct so `angee up --build` and `angee dev --build`
+route through one code path.
 
-1. `internal/manifest/` — Go types matching `OVERVIEW-v2.md` §Manifest. Round-
-   trip test: load `refactor/examples-v2/templates/stacks/angee-notes-dev/...`
-   rendered output, marshal back, deep-equal.
-2. `internal/substitute/` — implements the grammar from
-   `refactor/examples-v2/SUBSTITUTIONS.md`. Resolves `${ns.path | filter}`.
-   Includes only the namespaces that are pure data: `inputs`, `name`,
-   `ports`, `workspace`, `operator` (URL only — host rewrite deferred until
-   Phase 4 has actual addresses). `secret`, `connector`, `service`,
-   `persist`, `alloc` are stubbed to return errors with TODO links until the
-   relevant phase wires them up.
-3. `internal/secrets/` — `Backend` interface + `EnvFileBackend`. `OpenBao`
-   stays a TODO until Phase 7.
-4. `internal/ports/` — pool allocator backed by `angee.yaml.operator.port_pool`.
-   Allocation persists into the manifest; release happens on agent destroy.
-5. `internal/fslock/` — `Lock(root)` using `flock` semantics; tests cover
-   contention and stale-PID cleanup.
-6. `internal/copierx/` — `Render(template, dst, answers)` and
-   `Update(dst, answers)` over the `copier-go` library. No template family
-   logic here; that's `service.Platform`'s job.
-7. `cmd/angee/main.go` — cobra root with `version` and an `internal stack
-   compile <root>` debug subcommand that prints the resolved compose +
-   process-compose YAML to stdout. This is enough to drive Phase 3 tests.
+Tests cover: manifest round-trip, substitution grammar (every namespace
+listed above), secrets backend (env-file), port pool, fslock contention.
+No subprocess is spawned yet. `angee internal stack compile` prints the
+resolved compose + process-compose YAML to stdout — enough to drive
+Phase 3 acceptance tests.
 
-### Build invariant after Phase 2
+### Phase 3 — Goal 1 container slice (`angee up` / `build` / `down` / `logs`)
 
-- `go test ./...` covers the four library packages above plus the manifest
-  round-trip.
-- `angee version` prints. `angee internal stack compile` prints YAML.
-- No subprocess is spawned yet. No HTTP listener exists yet.
+`internal/runtime/compose/`: emit `docker-compose.yaml` from a manifest
+with `runtime: container` services only, two-pass secret split, shell out
+to `docker compose`. CLI adds `init`, `stack init`, `build`, `up`,
+`down`, `logs`, `status`, `start`, `stop`, `restart`, `service list`.
+`build` is a literal `docker compose build` shim; `up --build` and
+`dev --build` pass through the same flag.
 
-## Phase 3 — Goal 1, container slice (`angee up` / `down` / `logs`)
+Acceptance test: postgres + redis stack comes up cleanly; a service with
+a `build:` directive (e.g., a tiny Dockerfile referencing the local
+context) builds via `angee build` and then runs via `angee up`; secrets
+land in gitignored `.env`, absent from any committed file; `down` cleans
+up.
 
-Goal: a stack with **only** `runtime: container` services works end to end.
-This is the smallest vertical slice that exercises secrets resolution,
-substitution, the manifest, and a real backend.
+### Phase 4 — Goal 1 local slice (`angee dev`)
 
-1. `internal/runtime/compose/` — adapter that translates a manifest +
-   resolved substitutions into `docker-compose.yaml`, then shells out to
-   `docker compose`. Implements `runtime.Backend` for container services
-   (Up, Down, Start, Stop, Restart, Logs, Status). `git mv` candidate from
-   `_deprecated/internal/runtime/compose/backend.go` — keep what fits, rewrite
-   the rest. The output schema is new (substitution grammar changed), so the
-   compose-emitter is mostly fresh code.
-2. `internal/secrets/` two-pass compile:
-   - Pass 1 ("reference pass"): rewrite `${secret.x}` → `${SECRET_X}` in the
-     emitted `docker-compose.yaml`. Strip resolved values from any committed
-     file.
-   - Pass 2 ("resolve-into-env pass"): write resolved values into a 0600
-     `.env` next to the compose file. Refuse to write a resolved value into
-     a path that isn't gitignored (hard rule from the overview).
-3. `service.Platform.StackInit / StackUp / StackDown / ServiceLogs / ServiceStart /
-   ServiceStop / ServiceRestart`.
-4. `internal/cli/` — `angee init`, `angee stack init`, `angee up`, `angee down`,
-   `angee logs <name>`, `angee status` (alias `ls`, `ps`), `angee start`,
-   `angee stop`, `angee restart`. All thin adapters.
-5. Acceptance test: `templates/stacks/angee-notes-dev/` (seeded from
-   `refactor/examples-v2/...`) without local services → `angee init && angee
-   up` gives a healthy postgres + redis. Logs work. Down works. Secrets are
-   present in `.env` and absent from any committed file.
+`internal/runtime/proccompose/`: emit `process-compose.yaml`, start the
+process-compose binary in daemon mode, drive lifecycle through its REST
+API. Address rewriting in `internal/substitute/` (the consumer's runtime
+location now matters). In-process operator HTTP+MCP listener, loopback
+only, bound for the lifetime of `angee dev`. Env injection
+(`ANGEE_OPERATOR_URL`, `ANGEE_OPERATOR_TOKEN`, port env vars) into every
+supervised process. Acceptance: a stack with both `runtime: container` and
+`runtime: local` services brings everything up under `angee dev`; `curl
+$ANGEE_OPERATOR_URL/healthz` works from the local process; Ctrl+C tears
+down cleanly; container sidecars persist across `dev` runs.
 
-The CLI flag surface in this phase is intentionally tiny — `--input k=v`
-repeatable, `--name`, `--yes`, `--operator`, `ANGEE_OPERATOR_URL`. No
-template-aware "pretty flags".
+### Phase 5 — Goal 2a: workspaces + sources (read path)
 
-## Phase 4 — Goal 1, local slice (`angee dev`)
+The novel primitive, much smaller than the previous agent provisioner.
+This phase ships everything needed to materialize a workspace and mount
+it into a service. Git **write** operations land in Phase 5b.
 
-Goal: `angee dev` runs container sidecars + local processes + the operator
-HTTP/MCP server in foreground, all together.
+1. `internal/manifest/` extends with `sources:`, `workspaces:`, mount URI
+   scheme, and `_angee.inputs` / `instance_naming` template metadata.
+2. `internal/git/` — read-side git operations: `clone`, `fetch`,
+   `worktree add`, `worktree list`, `status`. Per-source advisory lock so
+   concurrent worktree-adds against the same cache serialize.
+3. `service.Platform.WorkspaceCreate / WorkspaceUpdate / WorkspaceStart /
+   WorkspaceStop / WorkspaceDestroy / WorkspaceList / WorkspaceGet` —
+   the eight-step sequence above.
+4. `service.Platform.SourceList / SourceFetch / SourceStatus` — read &
+   refresh source caches; report branch + dirty state of every workspace
+   worktree off a source.
+5. Service-side mount resolution: `mounts:` URIs translate into compose
+   `volumes:` entries (container) or `WORKSPACE_<N>_PATH=...` env vars
+   (local). `workdir:` is an explicit field on services that resolves
+   against the same URI scheme.
+6. Template-chain rendering rules: the **entry-point template** the
+   user names declares the rest of the chain in its `_angee.chain`
+   metadata; the user/API never passes the chain explicitly. Each
+   entry's `_angee.kind` decides the destination (`workspace` →
+   workspace root; `stack` → `<workspace-root>/<chain_root>/`, where
+   `chain_root:` is also declared on the entry-point template). At
+   most one `kind: stack` entry per chain. Per-entry answers files at
+   `<destination>/.copier-answers.yml`. The resolved chain is
+   persisted under `workspaces.<n>.resolved.chain` for reproducibility.
+7. Inner-ANGEE_ROOT support: when the chain produced an inner manifest,
+   the workspace flow calls `service.Platform.StackPrepare(<inner-root>)`
+   (no template re-render). `StackPrepare` resolves secrets, allocates
+   inner ports, and compiles backend files. Lifecycle triggers route
+   to `Stack*(<inner-root>)` calls under the inner root's advisory
+   lock. Auto-detection picks `StackDev` if any inner service has
+   `runtime: local`, else `StackUp`. Override via `_angee.chain_lifecycle:
+   dev | up` on the entry-point template.
+8. TTL fields on workspace records (`ttl`, `ttl_expires_at`) accepted
+   on create/update. The sweep loop lands in Phase 6.
+9. Destroy safety guard: refuse `WorkspaceDestroy` when the resolved
+   manifest has any running service or job referencing the workspace
+   via `mounts:`, `workdir:`, or `${workspace.<n>...}` env values.
+   `--force` overrides; `--purge` implies `--force`.
+7. Acceptance test: a "developer workspace" template (seeded from
+   `refactor/examples-v2/templates/workspaces/pr/`) renders into
+   `$ANGEE_ROOT/workspaces/feat-x/`
+    with a git worktree at `code/`, an inner `angee-notes-dev` stack at
+    `code/examples/angee-notes/.angee/`, and the workspace shows up in
+    `angee workspace list`.
+   Then a separate `agent-claude-feat-x` service mounting that workspace
+   starts cleanly via `angee service init --start`.
 
-1. `internal/runtime/proccompose/` — emit `process-compose.yaml`, start the
-   `process-compose` binary in daemon mode, and drive lifecycle through its
-   REST API. Health gating via process-compose's readiness probes covers the
-   cross-boundary `depends_on` between containers and host processes.
-2. Address rewriting in `internal/substitute/`: now that we know whether each
-   service runs as host process or container, `${service.x}` and
-   `${operator.url}` resolve to different host strings per consumer location
-   (overview §Address resolution). Implementation: render context carries the
-   consumer's runtime; the resolver looks up the producer's runtime.
-3. In-process operator HTTP+MCP listener for the lifetime of `angee dev`.
-   Bound to loopback only; bearer from `${secret.operator-token}`. The same
-   server type is reused as a standalone binary in Phase 6.
-4. Env injection into every supervised process: `ANGEE_OPERATOR_URL`,
-   `ANGEE_OPERATOR_TOKEN`, resolved port env vars. This is what lets a Django
-   dev server under `angee dev` call the operator without configuration.
-5. `internal/cli/dev.go` — boots compose, then process-compose, then the
-   operator; tails everything; clean shutdown on Ctrl+C in reverse order.
-6. Acceptance test: a stack with both `runtime: container` (postgres) and
-   `runtime: local` (a Python `http.server` standing in for Django) → `angee
-   dev` brings everything up; `curl $ANGEE_OPERATOR_URL/healthz` works from
-   the local process; Ctrl+C tears down cleanly; container sidecars persist
-   across restarts.
+### Phase 5b — Goal 2b: git write path on sources
 
-## Phase 5 — Goal 2, agent provisioning (the novel primitive)
+Once worktrees exist, agents and humans commit into them. The operator
+needs to ship those commits without the application shelling onto the
+host. Deferrable past Phase 5 only if the deployment model is read-only
+sources or local-dev only — for any workflow that involves an agent
+opening a PR, this phase is mandatory.
 
-Goal: `angee agent init <template> --input branch=… --start --yes` produces
-a worktree, materializes a workspace, wires MCP servers, injects secrets,
-starts a compose/process-compose service, and registers an addressable name.
+1. `internal/git/` adds: `pull`, `push`, per-worktree branch tracking,
+   conflict detection (refuse fast-forward-only ops on conflict), credential
+   helper composition.
+2. Auth modes wired through the secrets backend:
+   - `auth.mode: ssh` → `GIT_SSH_COMMAND=ssh -i <key-from-secret> -o
+     IdentitiesOnly=yes`. The key material lives in the secrets backend
+     and is materialized to a 0600 tempfile under `<root>/run/` for the
+     duration of the git call.
+   - `auth.mode: https-token` → custom credential helper that reads the
+     token from the secrets backend.
+   - `auth.mode: host` → inherit `~/.ssh/` and `~/.gitconfig`. Documented
+     as local-dev-only; not safe in multi-tenant deployments.
+3. `service.Platform.SourcePull / SourcePush / WorkspacePush /
+   WorkspaceGitStatus`.
+4. CLI: `angee source pull|push|status`, `angee workspace push`.
+5. HTTP: `POST /sources/{n}/{pull|push}`, `GET /sources/{n}/status`,
+   `GET /workspaces/{n}/git`, `POST /workspaces/{n}/push`.
+6. Operator commit identity: `sources.<name>.git.user_name` /
+   `git.user_email` apply only to commits the operator itself makes (e.g.
+   automated `copier update` rebases). Agent-driven commits use whatever
+   identity the agent configures inside the worktree.
+7. Pre-flight checks on `push`: refuse if the worktree has unstaged
+   changes (the agent should commit first); refuse if the branch has no
+   upstream and no `--set-upstream` argument was provided.
+8. Acceptance test: a workspace with a worktree-backed source on a private
+   GitHub repo authenticated via `auth.mode: ssh` and an SSH key in the
+   secrets backend → a commit made inside the worktree by `git -C
+   workspace/<n>/code commit -am 'x'` is visible to `angee workspace
+   git <n>` and successfully ships via `angee workspace push <n>`.
 
-1. `internal/manifest/` — agents block, `_angee.inputs`, `instance_naming`,
-   `persist:`, `chain:`. Substitution adds `inputs`, `alloc`, `persist`,
-   `workspace.*` namespaces.
-2. `internal/git/` — `git worktree add`, shared cache_path semantics
-   (multiple agents off one fetch).
-3. `internal/copierx/` upgraded to support `_angee` metadata extraction so
-   `service.Platform.AgentInit` can read inputs/instance_naming **before**
-   rendering. (`copier-go` already exposes the answers/metadata API; thin
-   wrapper only.)
-4. `service.Platform.AgentInit` — runs the 12-step provisioning sequence
-   from the overview (resolve template → compute name → allocate ports →
-   resolve secrets → materialize sources → render agent files (two passes)
-   → create persist dirs → start per-agent MCP local processes → run chained
-   stack init/dev → register and start bundled service → write addressability
-   into agent `.env`).
-5. Template chaining: `service.Platform.StackInit/StackDev/StackDown/StackDestroy`
-   accept an explicit `root` argument. Each call takes the per-root advisory
-   lock (`internal/fslock/`) so concurrent reconciliation against the same
-   root serializes; calls against different roots run in parallel.
-6. `service.Platform.AgentUpdate / AgentStart / AgentStop / AgentDestroy /
-   AgentList / AgentGet`. Lifecycle order from overview §Lifecycle.
-7. Acceptance test: `agents/claude-angee-developer` template (seeded from
-   `refactor/examples-v2/...`) → `angee agent init agents/claude-angee-developer
-   --input branch=feat/issue-123 --start --yes` produces a worktree, brings up
-   the chained `angee-notes-dev` stack on per-agent ports, hot-adds the bundled
-   service, and `angee agent get feat-issue-123` returns the expected
-   addressability shape.
+PR creation stays out of scope. An agent that wants to open a PR runs
+`gh pr create` inside the worktree; the operator just makes sure the
+push succeeded and the branch is reachable.
 
-## Phase 6 — Operator standalone (HTTP + MCP) and external-runtime flow
+### Phase 6 — Operator standalone (HTTP + MCP)
 
-Goal: `cmd/operator/` is a real daemon. The HTTP + MCP API matches the
-overview, and an external runtime (Django) can drive agent provisioning over
-HTTP.
+`cmd/operator/` becomes a real daemon. Same server type as Phase 4's
+in-process listener, bound on a non-loopback address; bearer auth required.
+HTTP surface (no agent endpoints):
 
-1. `cmd/operator/` — same server type as Phase 4's in-process listener,
-   bound on a non-loopback address; bearer auth required.
-2. `internal/operator/server.go` — REST surface from overview §Operator HTTP
-   + MCP API. Handlers are 1:1 thin adapters over `service.Platform`.
-3. `internal/operator/mcp.go` — MCP JSON-RPC over `/mcp` exposing the same
-   operations as tools.
-4. `GET /events` SSE — backed by an in-memory event bus on `service.Platform`.
-   No persistence (overview §ANGEE_ROOT Layout: ephemeral state stays
-   in-memory in v1).
-5. Async `POST /agents`: returns 202 with `operation_id` and `status_url`.
-   Backed by an in-memory operations table; lost on restart, by design.
-6. Per-instance overrides: `name`, `secrets`, `ports`. Same code path as the
-   CLI input parser.
-7. Multi-tenancy: one operator process per ANGEE_ROOT. Refuse to start if
-   the lockfile is owned by an alive PID. Recommended deployment shape
-   documented in `docs/OPERATOR.md` (rewritten this phase).
-8. Acceptance test: docker-compose dev stack of operator + a tiny Django app
-   that `POST /agents` → SSE → addressability → `POST /agents/<n>/messages`
-   (only when the template declares `service.http_port`).
+```
+POST   /stack/{up|dev|down|destroy}     GET  /stack/status
+POST   /services                        POST /services/{n}/{start|stop|restart|destroy}
+GET    /services/{n}                    GET  /services/{n}/logs       GET /services
+POST   /jobs/{n}/run                    GET  /jobs                    GET /jobs/{n}/logs
+POST   /workspaces                      PATCH /workspaces/{n}
+POST   /workspaces/{n}/{update|start|stop|destroy}
+GET    /workspaces/{n}                  GET  /workspaces
+GET    /sources                         POST /sources/{n}/{fetch|pull|push}
+GET    /sources/{n}/status              GET  /workspaces/{n}/git
+POST   /workspaces/{n}/push
+GET    /operations/{id}                 GET  /events                  (SSE)
+GET    /mcp                             (MCP JSON-RPC; same operations as tools)
+```
 
-## Phase 7 — Secrets backend pluralism
+No `/agents/*`. Async provisioning works the same way (202 + `operation_id`
++ SSE) for `POST /workspaces`. Adds the **workspace TTL sweep**: a
+background goroutine started by the daemon iterates every minute over
+workspaces with `ttl_expires_at < now()` and calls `WorkspaceDestroy`
+on each (skipping any that hit the destroy safety guard, with a
+warning log). Acceptance: a tiny external app (could be Django, could
+be `curl`) provisions a workspace, then a service that mounts it,
+watches `/events` for readiness, and reaches the running service over
+its declared port — all without Angee knowing what an "agent" is.
 
-Goal: `OpenBao` backend lands. The Backend interface stays unchanged; the
-implementation is one struct.
+### Phase 7 — Secrets backend pluralism
 
-1. `internal/secrets/openbao/` — KV v2 over plain `net/http`. No new deps.
-   Cherry-pick from `_deprecated/internal/credentials/openbao/` if intact.
-2. Switch by `secrets_backend.type` in `angee.yaml`.
-3. Bootstrap rule from the overview: host env vs. backend, `import: env:VAR`
-   imports persist into the backend on first run.
-4. Acceptance test: same stack as Phase 3 with `type: openbao` instead of
-   `env-file` produces identical end-state behavior; resolved values land in
-   the OpenBao instance and the gitignored `.env` is empty.
+`internal/secrets/openbao/` lands. KV v2 over `net/http`, no new deps.
+Cherry-pick from `_deprecated/internal/credentials/openbao/` if intact.
+Switch via `secrets_backend.type` in `angee.yaml`. Acceptance: same Phase 3
+stack with `type: openbao` produces identical end-state behavior; gitignored
+`.env` is empty; resolved values land in OpenBao.
 
-## Phase 8 — TTLs, port leases, GC, polish
+### Phase 8 — Polish
 
-Goal: the operator is a steward. Things expire on schedule. Worktrees and
-ports don't leak.
+Workspace TTLs are *not* deferred to this phase — TTL declarations land
+in Phase 5 (`ttl_expires_at` on workspace records, accepted on
+`WorkspaceCreate` / `WorkspaceUpdate`) and the periodic sweep loop
+lands in Phase 6 (the standalone-operator daemon, which is the natural
+host for a background goroutine). Phase 8 is just polish on top.
 
-1. TTL sweep — periodic loop in the operator that calls `agent destroy` on
-   expired records. `POST /agents/{n}` with a new `ttl` extends.
-2. Port lease persistence in `angee.yaml.agents.<name>.ports` (already
-   plumbed in Phase 5 — this phase formalizes the schema and adds the
-   release on destroy).
-3. `--purge` semantics across `agent destroy` and `stack destroy` (worktrees,
-   persist dirs, chained `.angee/` only when explicit).
+1. Port lease persistence and release on workspace/service destroy
+   (the data structure landed earlier; this phase audits leak paths and
+   adds GC for stale leases).
+2. `--purge` semantics (worktrees, persistent dirs, inner `.angee/`).
+3. Optional `lifecycle.destroy_with: workspace://<n>` on services for
+   the "tear this down with the workspace" convenience link discussed
+   in Open Question 1.
 4. Documentation pass: rewrite `docs/USAGE.md`, `docs/OPERATOR.md`,
-   `docs/ARCHITECTURE.md`. Old `docs/REFACTOR.md` becomes obsolete and is
-   archived under `_deprecated/docs/`.
+   `docs/ARCHITECTURE.md`. Old `docs/REFACTOR.md` becomes obsolete and
+   is archived under `_deprecated/docs/`.
 
 ## Out of Phase 1–8 (deferred)
 
-- Kubernetes runtime backend.
-- Durable workflow engine.
-- ReBAC / SpiceDB authorization.
-- Per-template "pretty" CLI flags (overview leaves `cli_flag:` reserved).
-- Web UI.
-- Persistence of `/operations/{id}` across operator restarts.
-- Workspace as a top-level CLI noun.
-- Framework-specific dispatch (Django, Vite, pnpm, uv).
+Same as before, plus:
+- Anything agent-shaped (MCP wiring, agent addressability, `/messages`
+  proxy, agent TTL sweep, `_angee.kind: agent` template family) — handled
+  by the application layer.
+- Connector resolvers (`${connector.x.y}`) — handled by the application
+  layer if it wants per-user dynamic credentials.
+- Per-template "pretty" CLI flags.
 
 ## Cherry-picking guide (per package)
 
-These are the parts of `_deprecated/` likely worth copying forward, with the
-understanding that **schemas changed** (new substitution grammar, new
-manifest, two-pass secret handling), so most files need rewriting:
+Most of the v1 code that targeted agents is **deleted**, not ported.
+What's worth carrying forward:
 
 | Old path | Likely fate |
 |---|---|
-| `_deprecated/internal/config/angee.go` | Reference for field names; rewritten in `internal/manifest/` because the schema diverges (no `state/`, no `operator.yaml`, new `runtime:` discriminator on services, new `${ns.path}` grammar). |
-| `_deprecated/internal/compiler/compose.go` | Reference for the docker-compose mapping; rewritten in `internal/runtime/compose/` to emit `${ENV_VAR}` references in the compose file and to do the two-pass secret split. |
-| `_deprecated/internal/operator/server.go` + `handlers.go` | Reference for routing layout; rewritten in `internal/operator/` against the new API surface (overview §Operator HTTP + MCP API). |
-| `_deprecated/internal/runtime/compose/backend.go` | Useful as-is for the `docker compose` shell-out; the surrounding interface is new. |
-| `_deprecated/internal/copier/template.go` | Replaced. The new `internal/copierx/` is a thin wrapper over `github.com/fyltr/copier-go` (already at `../copier-go`). |
-| `_deprecated/internal/git/` | Likely usable as-is for the `git worktree add` shim. Audit for `os/exec` quoting. |
-| `_deprecated/internal/service/platform.go` + `provision.go` | Heavy reference for the orchestration order. Most of `provision.go`'s logic gets reborn inside `service.Platform.AgentInit`'s 12-step sequence, but the new code is structured around the v2 manifest, not v1's. |
-| `_deprecated/internal/service/local_runtime.go`, `_deprecated/internal/dev/` | Replaced. Local-process supervision goes through `process-compose`'s REST API in `internal/runtime/proccompose/`; we no longer maintain our own supervisor or TUI. |
-| `_deprecated/templates/components/` | Folded into stack templates. The `add` flow is gone — components are now declared by stack templates that the user picks at `stack init`. |
-| `_deprecated/templates/default/` | Replaced by `refactor/examples-v2/templates/stacks/angee-notes-dev/`. |
+| `_deprecated/internal/config/angee.go` | Reference for field names; rewritten in `internal/manifest/` (new schema: sources, workspaces, mount URIs, `runtime:` discriminator). |
+| `_deprecated/internal/compiler/compose.go` | Reference for the docker-compose mapping; rewritten in `internal/runtime/compose/` for the two-pass secret split + new substitution grammar. |
+| `_deprecated/internal/operator/server.go` + `handlers.go` | Reference for routing layout; rewritten in `internal/operator/` against the agent-free API surface. |
+| `_deprecated/internal/runtime/compose/backend.go` | Likely reusable for the `docker compose` shell-out; surrounding interface is new. |
+| `_deprecated/internal/copier/template.go` | Replaced. New `internal/copierx/` is a thin wrapper over `github.com/fyltr/copier-go`. |
+| `_deprecated/internal/git/` | Likely usable for the `git worktree add` shim. |
+| `_deprecated/internal/service/platform.go` + `provision.go` | Reference for orchestration order. The agent-specific 12-step flow is **dropped**; what survives lands in `WorkspaceCreate`'s 8 steps. |
+| `_deprecated/internal/service/local_runtime.go`, `_deprecated/internal/dev/` | Replaced. Local-process supervision goes through `process-compose`'s REST API. |
+| `_deprecated/templates/components/`, `_deprecated/templates/default/` | Replaced. Stack templates seeded from `refactor/examples-v2/templates/stacks/`; workspace templates seeded from `refactor/examples-v2/templates/workspaces/`. |
 
-## Decision log (commitments from OVERVIEW-v2)
+## Open questions
 
-The plan honors these design commitments without re-litigating them:
+### 1. Should a workspace template declare services in the *outer* `angee.yaml`?
 
-- One operator process per `ANGEE_ROOT` for HTTP/MCP serving.
-- Per-root advisory lock for reconciliation; chained-stack reconciliation
-  runs as library calls inside the same process, each taking the lock for
-  its target root.
-- Resolved secrets never enter committed files. The compiler refuses to
-  write a resolved value into a non-gitignored path.
-- `angee up` is compose-only. `angee dev` is compose + process-compose +
-  in-process operator.
-- `service.Platform` is the only business-logic layer; CLI/HTTP/MCP are
-  thin adapters.
-- Templates are Copier templates rendered in-process by `copier-go` (no
-  Python runtime).
-- Workspace is not a CLI noun.
-- No backward-compatibility branches in active code. Old paths live in
-  `_deprecated/` and are not imported.
+Two options:
+
+- **A.** A workspace template is purely about the directory contents. The
+  caller separately runs `angee service init` to add a service that mounts
+  the workspace. Cleaner separation; more steps for the caller.
+- **B.** A workspace template can emit an `angee.yaml.fragment.yaml` that
+  the operator merges into the outer manifest at workspace create (services,
+  jobs, port pins). Fewer caller steps; the workspace template now has
+  reach into the outer stack.
+
+Recommend **A** for the v1 cut. It keeps Angee strictly substrate-shaped.
+A `POST /workspaces?with_service=...` convenience endpoint can land in
+Phase 8 without changing the model.
+
+### 2. Should `auth.mode: host` be allowed in the standalone operator?
+
+`host` is the only mode that "just works" for a developer running `angee
+dev` locally with their normal SSH agent / `~/.gitconfig`. It's also the
+mode that breaks tenancy in any deployed operator. Two paths:
+
+- **Always allow it; document the risk.** Easiest. Wrong default for any
+  ops-shaped deployment.
+- **Allow only when `operator.bind` is loopback.** The standalone operator
+  binding to `0.0.0.0:9000` refuses to use `auth.mode: host`; only the
+  in-process operator under `angee dev` (loopback) accepts it.
+
+Recommend the second. It gives developers the convenient "uses my SSH key"
+behavior locally and refuses to surface the same hole on a hosted
+operator.

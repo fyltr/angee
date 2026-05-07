@@ -9,10 +9,9 @@ template:
 operator:
   url: http://127.0.0.1:{{ operator_port }}
   token_secret: operator-token
-  service_registration:
-    app: {{ project_name }}
-    environment: dev
-    mcp_url: http://127.0.0.1:{{ operator_port }}/mcp
+  port_pool:
+    web:    { range: "8200-8299" }
+    custom: { range: "10000-10999" }
 
 secrets_backend:
   type: env-file
@@ -23,7 +22,7 @@ secrets:
   postgres-password: { generated: true, length: 32 }
   operator-token:    { generated: true, length: 32 }
   anthropic-api-key:
-    description: API key used by any agents bundled into this stack.
+    description: Optional API key for external runner services that mount workspaces.
     required: false
     import: env:ANTHROPIC_API_KEY      # imported from host env at first up
 
@@ -35,34 +34,23 @@ ports:
   redis:    { value: {{ redis_port }} }
 
 sources:
-  app:
-    kind: local
-    path: {{ app_path }}
-    subpath: .
-
-  # Global git-source pool. Agents reference this by name and add per-agent
-  # overrides (branch, worktree_path) — same shape as docker-compose volumes.
+  # Global git-source pool. Workspaces reference these by name and add
+  # per-instance overrides (branch, subpath) — same shape as compose volumes.
   django-angee:
     kind: git
     repo: ../django-angee
-    default_ref: dev               # base ref for new agent worktrees
+    default_ref: dev
     cache_path: {{ ANGEE_ROOT }}/sources/django-angee   # shared clone
+  runner-skills:
+    kind: git
+    repo: https://github.com/fyltr/runner-skills
+    default_ref: main
+    cache_path: {{ ANGEE_ROOT }}/sources/runner-skills
 
 volumes:
   app-data: { driver: local-fs, path: {{ ANGEE_ROOT }}/data }
   postgres-data: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/postgres }
   redis-data:    { driver: local-fs, path: {{ ANGEE_ROOT }}/data/redis }
-
-env_artifacts:
-  local:
-    path: {{ ANGEE_ROOT }}/.env
-    gitignored: true
-
-runtime:
-  backend: compose
-  project_directory: {{ ANGEE_ROOT }}
-  compose_file: {{ ANGEE_ROOT }}/docker-compose.yaml
-  process_compose_file: {{ ANGEE_ROOT }}/process-compose.yaml
 
 # ---------- Container sidecars (docker compose) ----------
 services:
@@ -99,16 +87,14 @@ services:
 
   build-watch:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "run", "python", "manage.py", "angee", "build", "--watch"]
     env_file: {{ ANGEE_ROOT }}/.env
     after: [build, python-deps]
 
   web:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:${ports.django}"]
     env_file: {{ ANGEE_ROOT }}/.env
     env:
@@ -125,8 +111,7 @@ services:
 
   ui:
     runtime: local
-    source: app
-    workdir: ui/react/web
+    workdir: {{ app_path }}/ui/react/web
     command: ["pnpm", "dev", "--host", "127.0.0.1", "--port", "${ports.ui}", "--strictPort"]
     env_file: {{ ANGEE_ROOT }}/.env
     env:
@@ -142,44 +127,36 @@ jobs:
 
   python-deps:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "sync"]
-    run_on: [up, dev]
+    run_on: [dev]
 
   react-deps:
     runtime: local
-    source: app
-    workdir: ui/react/web
+    workdir: {{ app_path }}/ui/react/web
     command: ["pnpm", "install", "--silent"]
-    run_on: [up, dev]
+    run_on: [dev]
 
   build:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "run", "python", "manage.py", "angee", "build"]
     env_file: {{ ANGEE_ROOT }}/.env
     depends_on: [python-deps]
-    run_on: [up, dev]
+    run_on: [dev]
 
   migrate:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "run", "python", "manage.py", "angee", "migrate"]
     env_file: {{ ANGEE_ROOT }}/.env
     depends_on: [build, postgres]
-    run_on: [up, dev]
+    run_on: [dev]
 
   fixtures:
     runtime: local
-    source: app
-    workdir: .
+    workdir: {{ app_path }}
     command: ["uv", "run", "python", "manage.py", "angee", "fixtures", "load"]
     env_file: {{ ANGEE_ROOT }}/.env
     depends_on: [migrate]
-    run_on: [up, dev]
-
-agents:
-  default_template: agents/claude-angee-dev
+    run_on: [dev]

@@ -1,0 +1,19 @@
+# Workspace {{ workspace_name }}
+
+Branch: `{{ branch }}`
+Base branch: `{{ base_branch }}`
+Application path: `code/{{ app_subpath }}`
+
+This directory is an Angee workspace, not an agent. Services can mount it with:
+
+```yaml
+mounts:
+  - workspace://{{ workspace_name }}:/workspace
+```
+
+The `code/` directory is materialized by the operator from the stack-level
+`django-angee` source. If `chain_root` is enabled, the inner stack lives at:
+
+```text
+code/{{ app_subpath }}/.angee
+```

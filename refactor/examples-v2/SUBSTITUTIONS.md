@@ -34,14 +34,14 @@ Every reference begins with a namespace prefix that picks the resolver. This is 
 | Form | Resolver | Where used |
 |---|---|---|
 | `${secret.name}` | Secrets backend (`.env` or OpenBao) | Anywhere |
-| `${connector.provider.user}` | Externally-registered connector resolver (Django) | Per-user agent templates |
 | `${service.name}` | Stack service registry → `host:port`. **Host portion rewritten per consumer location** (host process / container / different network — see OVERVIEW "Address resolution") | Anywhere |
 | `${service.name.host}` / `${service.name.port}` | Just the host or just the port (host portion rewritten per consumer) | Anywhere |
 | `${ports.name}` | This manifest's `ports:` block | Anywhere |
-| `${alloc.pool}` | Operator port pool, allocated at provisioning | Agent templates only |
+| `${alloc.pool}` | Operator port pool, allocated at workspace/service provisioning | Workspace templates and dynamic services |
 | `${persist.<key>}` | Absolute path to a template-declared persistent dir (see template's `persist:` block) | Within the declaring template |
 | `${operator.url}`, `${operator.domain}` | Operator context. **Host portion rewritten per consumer** (same rule as `service.*`) | Anywhere |
-| `${workspace.root}`, `${workspace.name}`, `${workspace.code_path}` | Workspace context | Agent templates |
+| `${workspace.name.path}` | Absolute path of a named workspace on disk | Services and jobs after workspace creation |
+| `${source.name.path}` | Absolute path of a fetched source's local cache | Services and jobs after source materialization |
 | `${inputs.key}` | Provisioning-time inputs from CLI/HTTP | Templates with `_angee.inputs` |
 | `${name}` | The resolved instance name (no namespace prefix) | Anywhere a name is referenced |
 
@@ -67,8 +67,8 @@ The set is small on purpose. We add new filters when a real template needs one, 
 ## Pipeline composition
 
 ```yaml
-# Email-derived agent name capped at 40 chars
-agent_name: "${inputs.user | local_part | slug | truncate(40)}"
+# Branch-derived workspace name capped at 40 chars
+workspace_name: "${inputs.branch | slug | truncate(40)}"
 
 # Branch slugified, capped, with fallback when no branch given
 worktree_dir: "${inputs.branch | slug | truncate(40) | default('default')}"
@@ -106,25 +106,18 @@ services:
       - { port: "${ports.django}" }
 ```
 
-### Agent template fragment
+### Workspace-mounted service fragment
 ```yaml
-mcp_servers:
-  operator:
-    transport: streamable-http
-    url: "${operator.url}/mcp"
-    auth:
-      bearer: "${secret.agent-operator-token}"
-  inner-django:
-    transport: http
-    url: "http://${service.web}/mcp"
-
 services:
-  ${name}:
+  claude-runner:
+    runtime: container
+    image: ghcr.io/example/claude-runner:latest
+    mounts:
+      - workspace://${name}:/workspace
     env:
-      ANGEE_AGENT_NAME: "${name}"
-      ANGEE_AGENT_USER: "${inputs.user | local_part}"
       ANGEE_OPERATOR_URL: "${operator.url}"
-      ANGEE_OPERATOR_TOKEN: "${secret.agent-operator-token}"
+      WORKSPACE_PATH: "/workspace"
+      ANTHROPIC_API_KEY: "${secret.anthropic-api-key}"
 ```
 
 ## Anti-patterns we explicitly reject
