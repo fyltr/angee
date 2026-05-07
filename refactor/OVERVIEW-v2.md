@@ -61,7 +61,7 @@ existing tools and adds one provisioning primitive (the Workspace).
 | Container runtime | `docker compose` (shell out) | Already does up/down/start/stop/restart/logs/networks/volumes/build. Angee's commands are one-line shims. |
 | Local-process supervisor | `process-compose` (shell out + REST API) | Already does depends_on, health checks, readiness probes, env files, TUI, cron, REST API. Angee generates `process-compose.yaml`, starts the daemon, drives it via HTTP. |
 | Templating | `github.com/fyltr/copier-go` (in-process Go library, in-tree at `../copier-go`) | Native Go reimplementation of Copier including `copier update`. No Python runtime dependency. |
-| Secrets | Pluggable `Backend` interface; v1 implements `.env` and `openbao` natively | Angee owns `${secret.name}` resolution at compile time. The interface is shaped to fit a Teller-compatible adapter if needed later. |
+| Secrets | Pluggable `Backend` interface; v1 implements `.env` and `openbao` natively | Angee owns `${secret.name}` resolution at compile time. The interface is small and stable enough that adding a Doppler / Infisical / SSM backend later is a single struct. (Teller, the obvious adapter target, was archived in May 2025 — not a viable dependency.) |
 | Worktrees | `git` CLI via `os/exec` | No wrapper library is worth a dependency. |
 
 What stays Angee's:
@@ -862,6 +862,12 @@ Same `${ns.path | filter}` shape, fewer namespaces.
 Filters: `slug`, `lower`, `upper`, `local_part`, `truncate(n)`,
 `default('x')`, `required('msg')`, `b64encode`, `replace(a,b)`. Full
 grammar in `examples-v2/SUBSTITUTIONS.md`.
+
+Implementation note: filter evaluation rides on Go's stdlib `text/template`
+(every filter except `slug` is a one-line `strings`/`base64` helper). For
+`slug`, use `github.com/gosimple/slug` rather than hand-rolling Unicode
+normalization. The namespace router and address rewriter are project-
+specific and stay in-tree.
 
 `connector` is dropped — per-user dynamic credentials are the
 application's job. If the application wants to inject a per-user OAuth
