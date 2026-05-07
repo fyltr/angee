@@ -20,6 +20,7 @@ type agentInitOptions struct {
 	Overrides         []string
 	Secrets           []string
 	Ports             []string
+	Dev               bool
 	CreateBranches    bool
 	Start             bool
 	Yes               bool
@@ -51,35 +52,7 @@ var agentInitCmd = &cobra.Command{
 	Short: "Provision an agent-backed workspace",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateAgentName(args[0]); err != nil {
-			return err
-		}
-		overrides, err := parseKeyValueFlags(agentInitOpts.Overrides, "--override")
-		if err != nil {
-			return err
-		}
-		secrets, err := parseKeyValueFlags(agentInitOpts.Secrets, "--secret")
-		if err != nil {
-			return err
-		}
-		ports, err := parsePortFlags(agentInitOpts.Ports)
-		if err != nil {
-			return err
-		}
-		req := api.AgentInitRequest{
-			Name:              args[0],
-			Root:              resolveRoot(),
-			Template:          agentInitOpts.Template,
-			WorkspaceTemplate: agentInitOpts.WorkspaceTemplate,
-			Branch:            agentInitOpts.Branch,
-			Overrides:         overrides,
-			Secrets:           secrets,
-			Ports:             ports,
-			CreateBranches:    agentInitOpts.CreateBranches,
-			Start:             agentInitOpts.Start,
-			Yes:               agentInitOpts.Yes,
-		}
-		return postProvision("/agents/init", req)
+		return runAgentInit(args[0], agentInitOpts)
 	},
 }
 
@@ -187,15 +160,7 @@ var agentLogsCmd = &cobra.Command{
 }
 
 func init() {
-	agentInitCmd.Flags().StringVar(&agentInitOpts.Template, "template", "", "Agent template ref")
-	agentInitCmd.Flags().StringVar(&agentInitOpts.WorkspaceTemplate, "workspace-template", "", "Workspace template ref")
-	agentInitCmd.Flags().StringVar(&agentInitOpts.Branch, "branch", "", "Branch or ref for workspace sources")
-	agentInitCmd.Flags().StringArrayVar(&agentInitOpts.Overrides, "override", nil, "Override a source ref: --override source=ref")
-	agentInitCmd.Flags().StringArrayVar(&agentInitOpts.Secrets, "secret", nil, "Supply a secret: --secret name=value")
-	agentInitCmd.Flags().StringArrayVar(&agentInitOpts.Ports, "port", nil, "Override a port lease: --port name=8120")
-	agentInitCmd.Flags().BoolVar(&agentInitOpts.CreateBranches, "create-branches", false, "Create missing branches")
-	agentInitCmd.Flags().BoolVar(&agentInitOpts.Start, "start", false, "Start agent services after provisioning")
-	agentInitCmd.Flags().BoolVarP(&agentInitOpts.Yes, "yes", "y", false, "Accept defaults and run non-interactively")
+	addAgentInitFlags(agentInitCmd, &agentInitOpts)
 
 	agentUpdateCmd.Flags().StringVar(&agentUpdateOpts.Template, "template", "", "Agent template ref")
 	agentUpdateCmd.Flags().StringVar(&agentUpdateOpts.WorkspaceTemplate, "workspace-template", "", "Workspace template ref")
@@ -226,6 +191,54 @@ func validateAgentName(name string) error {
 		return fmt.Errorf("invalid agent name %q: must match %s", name, validAgentName.String())
 	}
 	return nil
+}
+
+func runAgentInit(name string, opts agentInitOptions) error {
+	if err := validateAgentName(name); err != nil {
+		return err
+	}
+	if opts.Dev && opts.Template == "" {
+		opts.Template = "agents/angee-dev"
+	}
+	overrides, err := parseKeyValueFlags(opts.Overrides, "--override")
+	if err != nil {
+		return err
+	}
+	secrets, err := parseKeyValueFlags(opts.Secrets, "--secret")
+	if err != nil {
+		return err
+	}
+	ports, err := parsePortFlags(opts.Ports)
+	if err != nil {
+		return err
+	}
+	req := api.AgentInitRequest{
+		Name:              name,
+		Root:              resolveRoot(),
+		Template:          opts.Template,
+		WorkspaceTemplate: opts.WorkspaceTemplate,
+		Branch:            opts.Branch,
+		Overrides:         overrides,
+		Secrets:           secrets,
+		Ports:             ports,
+		CreateBranches:    opts.CreateBranches,
+		Start:             opts.Start,
+		Yes:               opts.Yes,
+	}
+	return postProvision("/agents/init", req)
+}
+
+func addAgentInitFlags(cmd *cobra.Command, opts *agentInitOptions) {
+	cmd.Flags().StringVar(&opts.Template, "template", "", "Agent template ref")
+	cmd.Flags().StringVar(&opts.WorkspaceTemplate, "workspace-template", "", "Workspace template ref")
+	cmd.Flags().StringVar(&opts.Branch, "branch", "", "Branch or ref for workspace sources")
+	cmd.Flags().StringArrayVar(&opts.Overrides, "override", nil, "Override a source ref: --override source=ref")
+	cmd.Flags().StringArrayVar(&opts.Secrets, "secret", nil, "Supply a secret: --secret name=value")
+	cmd.Flags().StringArrayVar(&opts.Ports, "port", nil, "Override a port lease: --port name=8120")
+	cmd.Flags().BoolVar(&opts.Dev, "dev", false, "Use the default dev agent template")
+	cmd.Flags().BoolVar(&opts.CreateBranches, "create-branches", false, "Create missing branches")
+	cmd.Flags().BoolVar(&opts.Start, "start", false, "Start agent services after provisioning")
+	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept defaults and run non-interactively")
 }
 
 func runAgentList(cmd *cobra.Command, args []string) error {

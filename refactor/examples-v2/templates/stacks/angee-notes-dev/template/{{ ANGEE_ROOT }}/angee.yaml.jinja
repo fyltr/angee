@@ -1,0 +1,185 @@
+version: 1
+kind: stack
+name: {{ project_name }}
+
+template:
+  active: stacks/angee-notes-dev
+  answers_file: .copier-answers.yml
+
+operator:
+  url: http://127.0.0.1:{{ operator_port }}
+  token_secret: operator-token
+  service_registration:
+    app: {{ project_name }}
+    environment: dev
+    mcp_url: http://127.0.0.1:{{ operator_port }}/mcp
+
+secrets_backend:
+  type: env-file
+  path: {{ ANGEE_ROOT }}/.env
+
+secrets:
+  django-secret-key: { generated: true, length: 50 }
+  postgres-password: { generated: true, length: 32 }
+  operator-token:    { generated: true, length: 32 }
+  anthropic-api-key:
+    description: API key used by any agents bundled into this stack.
+    required: false
+    import: env:ANTHROPIC_API_KEY      # imported from host env at first up
+
+ports:
+  django:   { value: {{ django_port }},   export_env: DJANGO_PORT }
+  ui:       { value: {{ ui_port }},       export_env: UI_PORT, aliases: [WORKSPACE_VITE_PORT] }
+  operator: { value: {{ operator_port }}, export_env: ANGEE_OPERATOR_PORT }
+  postgres: { value: {{ postgres_port }} }
+  redis:    { value: {{ redis_port }} }
+
+sources:
+  app:
+    kind: local
+    path: {{ app_path }}
+    subpath: .
+
+  # Global git-source pool. Agents reference this by name and add per-agent
+  # overrides (branch, worktree_path) — same shape as docker-compose volumes.
+  django-angee:
+    kind: git
+    repo: ../django-angee
+    default_ref: dev               # base ref for new agent worktrees
+    cache_path: {{ ANGEE_ROOT }}/sources/django-angee   # shared clone
+
+volumes:
+  app-data: { driver: local-fs, path: {{ ANGEE_ROOT }}/data }
+  postgres-data: { driver: local-fs, path: {{ ANGEE_ROOT }}/data/postgres }
+  redis-data:    { driver: local-fs, path: {{ ANGEE_ROOT }}/data/redis }
+
+env_artifacts:
+  local:
+    path: {{ ANGEE_ROOT }}/.env
+    gitignored: true
+
+runtime:
+  backend: compose
+  project_directory: {{ ANGEE_ROOT }}
+  compose_file: {{ ANGEE_ROOT }}/docker-compose.yaml
+  process_compose_file: {{ ANGEE_ROOT }}/process-compose.yaml
+
+# ---------- Container sidecars (docker compose) ----------
+services:
+
+  postgres:
+    runtime: container
+    image: pgvector/pgvector:pg17
+    ports:
+      - "${ports.postgres}:5432"
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${secret.postgres-password}"
+      POSTGRES_DB: {{ project_name | replace('-', '_') }}
+    mounts:
+      - { type: volume, source: postgres-data, target: /var/lib/postgresql/data }
+
+  redis:
+    runtime: container
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${ports.redis}:6379"
+    mounts:
+      - { type: volume, source: redis-data, target: /data }
+
+  mailhog:
+    runtime: container
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+# ---------- Local processes (process-compose) ----------
+
+  build-watch:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "run", "python", "manage.py", "angee", "build", "--watch"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    after: [build, python-deps]
+
+  web:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:${ports.django}"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    env:
+      DJANGO_SETTINGS_MODULE: {{ django_settings }}
+      DJANGO_SECRET_KEY: "${secret.django-secret-key}"
+      DJANGO_DEBUG: "true"
+      ANGEE_DATA: {{ ANGEE_ROOT }}/data
+      DATABASE_URL: "postgres://postgres:${secret.postgres-password}@127.0.0.1:${ports.postgres}/{{ project_name | replace('-', '_') }}"
+      REDIS_URL: "redis://127.0.0.1:${ports.redis}/0"
+      WORKSPACE_CSRF_TRUSTED_ORIGINS: "http://127.0.0.1:${ports.ui},http://localhost:${ports.ui}"
+    ports:
+      - { name: django, host: 127.0.0.1, port: "${ports.django}" }
+    after: [migrate, fixtures, build-watch, postgres]
+
+  ui:
+    runtime: local
+    source: app
+    workdir: ui/react/web
+    command: ["pnpm", "dev", "--host", "127.0.0.1", "--port", "${ports.ui}", "--strictPort"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    env:
+      WORKSPACE_VITE_PORT: "${ports.ui}"
+      WORKSPACE_API_TARGET: "http://127.0.0.1:${ports.django}"
+      VITE_WS_TARGET: "ws://127.0.0.1:${ports.django}"
+    ports:
+      - { name: ui, host: 127.0.0.1, port: "${ports.ui}" }
+    after: [react-deps, web]
+
+# ---------- Jobs ----------
+jobs:
+
+  python-deps:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "sync"]
+    run_on: [up, dev]
+
+  react-deps:
+    runtime: local
+    source: app
+    workdir: ui/react/web
+    command: ["pnpm", "install", "--silent"]
+    run_on: [up, dev]
+
+  build:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "run", "python", "manage.py", "angee", "build"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    depends_on: [python-deps]
+    run_on: [up, dev]
+
+  migrate:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "run", "python", "manage.py", "angee", "migrate"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    depends_on: [build, postgres]
+    run_on: [up, dev]
+
+  fixtures:
+    runtime: local
+    source: app
+    workdir: .
+    command: ["uv", "run", "python", "manage.py", "angee", "fixtures", "load"]
+    env_file: {{ ANGEE_ROOT }}/.env
+    depends_on: [migrate]
+    run_on: [up, dev]
+
+agents:
+  default_template: agents/claude-angee-dev

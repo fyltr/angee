@@ -1,0 +1,92 @@
+_min_copier_version: "9.0"
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  schema: 1
+  kind: agent
+  name: personal-assistant
+  description: |
+    Long-lived personal assistant agent for one Django user. MCP servers are
+    wired with credentials scoped to the specific user (gmail, calendar, etc.).
+
+  # Derive the agent name from the user's email local part: alex@example.com -> alex
+  instance_naming:
+    pattern: "${inputs.user | local_part | slug}"
+    fallback: "${inputs.name}"
+    max_length: 40
+
+  inputs:
+    user:
+      type: str
+      required: true
+      cli_flag: --user
+      maps_to:
+        copier: user
+        angee:  agents.${name}.user
+
+    display_name:
+      type: str
+      default: ""
+      cli_flag: --display-name
+      maps_to:
+        copier: display_name
+
+    model:
+      type: str
+      default: claude-sonnet-4-5
+      cli_flag: --model
+      maps_to:
+        copier: model
+
+    # MCP credentials are passed as references (not values).
+    # The operator resolves `oauth:<provider>:<user>` against a registered resolver
+    # — typically the Django app exposing /api/connectors/{user}/{provider}/token.
+    mcp_credentials:
+      type: map
+      default: {}
+      cli_flag: --mcp-cred                 # --mcp-cred gmail=oauth:gmail:alex
+      maps_to:
+        copier: mcp_credentials
+        angee:  agents.${name}.mcp_credentials
+
+  resolves:
+    secrets:
+      - anthropic-api-key
+    volumes:
+      memory:
+        scope: agent                       # per-user persistent memory
+        driver: local-fs
+
+  mcp_servers:
+    - filesystem
+    - operator
+    - gmail                                # only wired if mcp_credentials.gmail set
+    - calendar                             # only wired if mcp_credentials.calendar set
+    - google-drive                         # only wired if mcp_credentials.google-drive set
+
+# ---------- Copier questions ----------
+agent_name:
+  type: str
+  default: assistant
+
+user:
+  type: str
+  default: ""
+
+display_name:
+  type: str
+  default: ""
+
+model:
+  type: str
+  default: claude-sonnet-4-5
+
+provider:
+  type: str
+  default: anthropic
+
+mcp_credentials:
+  type: yaml
+  default: {}

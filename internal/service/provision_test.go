@@ -761,6 +761,7 @@ func TestAgentInitRendersTemplateRegistersAndResolvesState(t *testing.T) {
 		Branch:    "devbot-branch",
 		Overrides: map[string]string{"app": "override-ref"},
 		Secrets:   map[string]string{"api-key": "agent-secret"},
+		Ports:     map[string]int{"backend": 12401},
 		Yes:       true,
 	})
 	if err != nil {
@@ -827,6 +828,9 @@ func TestAgentInitRendersTemplateRegistersAndResolvesState(t *testing.T) {
 	}
 	if !strings.Contains(string(agentEnv), "API_KEY=agent-secret") {
 		t.Fatalf("agent .env missing agent secret: %s", agentEnv)
+	}
+	if !strings.Contains(string(agentEnv), "BACKEND_PORT=12401") {
+		t.Fatalf("agent .env missing agent port: %s", agentEnv)
 	}
 }
 
@@ -1158,6 +1162,11 @@ secrets:
   token:
     generated: true
     length: 12
+port_leases:
+  backend:
+    default: 12402
+    band: django
+    export_env: BACKEND_PORT
 mcp_servers:
   files:
     transport: stdio

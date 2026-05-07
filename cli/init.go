@@ -2,7 +2,11 @@ package cli
 
 import "github.com/spf13/cobra"
 
-var topInitOpts stackInitOptions
+var (
+	topInitOpts      stackInitOptions
+	topInitAgentOpts agentInitOptions
+	topInitDev       bool
+)
 
 var initCmd = &cobra.Command{
 	Use:   "init [path]",
@@ -21,6 +25,18 @@ the operator provisioning path; it does not render templates directly.`,
 	},
 }
 
+var initAgentCmd = &cobra.Command{
+	Use:   "agent <agent>",
+	Short: "Provision an agent-backed workspace",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAgentInit(args[0], topInitAgentOpts)
+	},
+}
+
 func init() {
 	addStackInitFlags(initCmd, &topInitOpts)
+	initCmd.Flags().BoolVar(&topInitDev, "dev", false, "Use the dev stack template")
+	addAgentInitFlags(initAgentCmd, &topInitAgentOpts)
+	initCmd.AddCommand(initAgentCmd)
 }

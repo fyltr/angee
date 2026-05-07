@@ -1308,7 +1308,8 @@ func (p *Platform) writeAgentEnv(name string, agentCfg *config.AngeeConfig) erro
 	if err := os.MkdirAll(p.agentDir(name), 0755); err != nil {
 		return err
 	}
-	secrets, err := state.New(p.Root.Path).LoadSecrets()
+	store := state.New(p.Root.Path)
+	secrets, err := store.LoadSecrets()
 	if err != nil {
 		return err
 	}
@@ -1320,7 +1321,32 @@ func (p *Platform) writeAgentEnv(name string, agentCfg *config.AngeeConfig) erro
 		}
 		agentSecrets[secretName] = secret
 	}
-	return os.WriteFile(filepath.Join(p.agentDir(name), ".env"), []byte(formatEnv(agentSecrets)), 0600)
+	body := formatEnv(agentSecrets)
+	leases, err := store.LoadPortLeases()
+	if err != nil {
+		return err
+	}
+	for _, leaseName := range sortedPortLeaseNames(agentCfg.PortLeases) {
+		spec := agentCfg.PortLeases[leaseName]
+		if spec.ExportEnv == "" {
+			continue
+		}
+		lease := leases[leaseName]
+		if lease.Port <= 0 {
+			continue
+		}
+		body += spec.ExportEnv + "=" + fmt.Sprintf("%d", lease.Port) + "\n"
+	}
+	return os.WriteFile(filepath.Join(p.agentDir(name), ".env"), []byte(body), 0600)
+}
+
+func sortedPortLeaseNames(leases map[string]config.PortLeaseSpec) []string {
+	keys := make([]string, 0, len(leases))
+	for key := range leases {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func workspaceScope(name string) string {
