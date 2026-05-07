@@ -1,228 +1,110 @@
-# Angee — Quick Start
+# Angee Quick Start
+
+Status: target after template refactor
+
+Angee runs a stack from one manifest: `$ANGEE_ROOT/angee.yaml`.
+
+The CLI has the operator compiled in. Local commands start or reuse an embedded operator process, then call its HTTP API. The operator provisions templates, resolves sources, allocates ports, manages secrets, and reconciles services, jobs, workflows, workspaces, agents, and MCP servers.
 
 ## Install
 
 ```sh
-# macOS / Linux (one-liner)
 curl https://angee.ai/install.sh | sh
+```
 
-# Homebrew
+Or with Homebrew:
+
+```sh
 brew install angee
 ```
 
-## Start in 2 commands
+## Local Dev
+
+Bootstrap a project-local dev stack:
 
 ```sh
-angee init
+angee stack init dev --yes
+angee dev
 ```
-```
-  ✔ Created ANGEE_ROOT at ~/.angee
-  ✔ Created .gitignore
-  ✔ Created angee.yaml (default template)
-  ✔ Created operator.yaml (local runtime config)
-  ✔ Initial git commit: "angee: initialize project"
 
-  Next steps:
-  → angee up          Start the platform
-  → angee ls          View running agents and services
-  → angee admin       Chat with the admin agent
-```
+`angee init --yes` is shorthand for the default stack init. In a project with a `stacks/dev` template, it resolves to `angee stack init dev --yes`.
+
+`angee dev` starts or reuses the embedded local operator process and reconciles from `.angee/angee.yaml`.
+
+## Staging
+
+Create a Docker-backed staging stack:
 
 ```sh
+angee stack init staging-docker \
+  --set domain=staging.example.com \
+  --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
+  --yes
+
 angee up
 ```
-```
-  ✔ Compiled angee.yaml → docker-compose.yaml
-  → Starting stack...
-  ✔ Operator started (port 9000)
-  ✔ Services deployed
 
-  Platform ready:
-  → UI        →  http://localhost:3333
-  → API        →  http://localhost:8000/api
-  → Operator  →  http://localhost:9000
+## Workspaces
 
-  → angee ls          View agents and services
-  → angee admin       Chat with admin agent
-  → angee develop     Chat with developer agent
-```
-
----
-
-## What you get
+Create a feature workspace with its own sources, services, state, and port leases:
 
 ```sh
-angee ls
-```
-```
-SERVICES
-  NAME       STATUS          HEALTH    REPLICAS  DOMAINS
-  web        ● running       healthy   1/1       localhost
-  postgres   ● running       healthy   1/1
-  redis      ● running       healthy   1/1
-
-AGENTS
-  NAME       STATUS          HEALTH
-  admin      ● running       healthy
-  developer  ● running       healthy
+angee workspace init feat-refactor-2 --branch feat-refactor-2 --yes
+angee workspace dev feat-refactor-2
 ```
 
----
-
-## Talk to your agents
+Update it from its template:
 
 ```sh
-angee admin           # interactive chat
-angee develop         # shortcut for developer agent
-angee chat my-agent   # any agent by name
+angee workspace update feat-refactor-2
 ```
 
-```
-  Connected to admin agent
-  (type your message and press Enter — /exit to quit)
+## Agents
 
-you: scale web to 3 replicas
-
-admin: I'll scale the web service to 3 replicas.
-
-  Current replicas: 1
-  Updating angee.yaml → web.replicas: 3
-  Committing: "angee-agent: scale web to 3 replicas"
-  Deploying...
-
-  ✔ web scaled to 3/3 replicas.
-
-you: add a staging environment
-
-admin: I'll create a staging branch in ANGEE_ROOT...
-```
+Create an agent-backed workspace:
 
 ```sh
-# One-shot (no interactive session)
-angee ask "why did the last deploy fail?"
-angee ask "add GitHub MCP access to the developer agent"
-angee ask --agent developer "add a health check to the web service"
+angee agent init feat-refactor-2 \
+  --branch feat-refactor-2 \
+  --template agents/claude-code \
+  --workspace-template workspaces/feature-dev \
+  --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
+  --start \
+  --yes
 ```
 
----
-
-## Manage your deployment
+Interact with the agent:
 
 ```sh
-angee plan          # preview what deploy would change
-angee deploy        # apply angee.yaml to the runtime
-angee rollback HEAD~1    # roll back to the previous deploy
-angee logs web      # tail service logs
-angee logs admin --follow  # live agent logs
-angee status        # full platform status
+angee agent chat feat-refactor-2
+angee agent ask feat-refactor-2 "summarize the current branch"
+angee agent logs feat-refactor-2 --follow
 ```
 
----
+## Updates
 
-## Edit angee.yaml directly
-
-The `angee.yaml` is a regular file — you can edit it, or ask an agent to:
-
-```yaml
-# ~/.angee/angee.yaml
-name: my-project
-
-services:
-  web:
-    image: ghcr.io/org/myapp:latest
-    lifecycle: platform
-    domains:
-      - host: myapp.io
-    resources:
-      cpu: "1.0"
-      memory: "1Gi"
-
-  postgres:
-    image: pgvector/pgvector:pg17    # pgvector built-in
-    lifecycle: sidecar
-    volumes:
-      - name: pgdata
-        path: /var/lib/postgresql/data
-        persistent: true
-
-  redis:
-    image: redis:7-alpine
-    lifecycle: sidecar
-
-  celery:
-    build:
-      context: src/fyltr-django
-    command: celery -A config worker -l info
-    lifecycle: worker
-
-mcp_servers:
-  github:
-    transport: sse
-    url: https://api.githubcopilot.com/mcp/
-    credentials:
-      source: connect.account
-      account_type: github
-      run_as: requester
-
-agents:
-  admin:                              # always running, manages the platform
-    image: ghcr.io/fyltr/angee-admin-agent:latest
-    lifecycle: system
-    role: operator
-    mcp_servers: [angee-operator, angee-files]
-
-  developer:                          # always running, helps you build
-    image: ghcr.io/fyltr/angee-developer-agent:latest
-    lifecycle: system
-    mcp_servers: [github, angee-files]
-    workspace:
-      persistent: true
-```
-
-After editing: `angee deploy`
-
----
-
-## Next: link a source repo
+Update the current stack from its active template:
 
 ```sh
-angee ask "link my repo at https://github.com/org/myapp as the base source"
+angee stack update
 ```
 
-Or edit `angee.yaml` directly:
+The operator rerenders the template with Copier, preserves generated secrets and port leases unless explicitly changed, then reconciles actual state from `angee.yaml`.
 
-```yaml
-repositories:
-  base:
-    url: https://github.com/org/myapp
-    branch: main
-    role: base
-```
+## Common Commands
 
-Then `angee deploy` — your source is cloned into `~/.angee/src/fyltr-django/`.
-
----
-
-## Full CLI reference
-
-```
-angee init [--template url|path] [--repo url] [--dir path]
+```sh
+angee stack init <name> [path]
+angee stack update
+angee dev
 angee up
-angee down
-angee ls
+angee deploy
 angee status
-angee plan
-angee deploy [-m message]
-angee rollback <sha|HEAD~N>
-angee logs <service> [-f] [-n lines]
-angee chat [agent]
-angee admin
-angee develop
-angee ask <message> [--agent name]
-angee add <component>                Add a component (postgres, redis, etc.)
-angee remove <component>             Remove a component
+angee logs <service>
+angee workspace init <name>
+angee workspace update <name>
+angee agent init <name>
+angee agent update <name>
 ```
 
----
-
-**UI → http://localhost:3333 · Docs → https://angee.ai/docs**
+Full target usage reference: [`docs/USAGE.md`](./docs/USAGE.md).

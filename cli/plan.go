@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 
 	"github.com/fyltr/angee/api"
-	"github.com/fyltr/angee/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -36,8 +33,8 @@ Example:
 }
 
 func runPlan(cmd *cobra.Command, args []string) error {
-	if !isOperatorRunning() {
-		return fmt.Errorf("operator not running — start with 'angee up'")
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
+		return err
 	}
 
 	resp, err := doRequest("GET", resolveOperator()+"/plan", nil)
@@ -81,29 +78,15 @@ func runStatus(cmd *cobra.Command, args []string) error {
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
-	path := resolveRoot()
-
-	cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
-	if err != nil {
-		return fmt.Errorf("loading angee.yaml: %w", err)
-	}
-
-	projectName := cfg.Name
-	if projectName == "" {
-		projectName = "angee"
-	}
-
-	composePath := filepath.Join(path, "docker-compose.yaml")
-	if _, err := os.Stat(composePath); os.IsNotExist(err) {
-		return fmt.Errorf("no docker-compose.yaml found at %s — run 'angee up' first", path)
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
+		return err
 	}
 
 	fmt.Printf("\n\033[1mangee down\033[0m\n\n")
-
-	if err := runDockerCompose(composePath, path, projectName, "down"); err != nil {
-		return fmt.Errorf("docker compose down: %w", err)
+	var result api.DownResponse
+	if _, err := apiPost("/down", nil, &result); err != nil {
+		return fmt.Errorf("stopping stack: %w", err)
 	}
-
 	printSuccess("Stack stopped")
 	return nil
 }

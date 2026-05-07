@@ -11,8 +11,9 @@ template_path: examples/templates/stacks/dev
 init:
   command:
     - angee
+    - stack
     - init
-    - --dev
+    - dev
     - --template
     - examples/templates/stacks/dev
     - --root
@@ -30,4 +31,4 @@ dev:
 notes:
   - This target is documentation for the intended Angee workflow.
   - It does not modify ../django-angee until the future target runner executes it.
-  - The expected sugar is running `angee init --dev --yes` from the worktree itself.
+  - The expected sugar is running `angee init --yes` from the worktree itself.

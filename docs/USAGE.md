@@ -13,14 +13,14 @@ Bootstrap local dev from a project directory:
 
 ```sh
 cd ../django-angee/examples/angee-notes
-angee init --dev --yes
+angee stack init dev --yes
 angee dev
 ```
 
 Create a feature workspace with its own sources, services, and port leases:
 
 ```sh
-angee init --workspace feat-refactor-2 --branch feat-refactor-2 --yes
+angee workspace init feat-refactor-2 --branch feat-refactor-2 --yes
 cd .angee/workspaces/feat-refactor-2/code
 angee dev
 ```
@@ -28,7 +28,7 @@ angee dev
 Create an agent-backed workspace:
 
 ```sh
-angee agent add feat-refactor-2 \
+angee agent init feat-refactor-2 \
   --branch feat-refactor-2 \
   --template agents/claude-code \
   --workspace-template workspaces/feature-dev \
@@ -39,7 +39,7 @@ angee agent add feat-refactor-2 \
 Install a Docker-backed staging stack:
 
 ```sh
-angee init stack staging-docker \
+angee stack init staging-docker \
   --set domain=staging.example.com \
   --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
   --yes
@@ -49,7 +49,7 @@ angee up
 Update the current stack from its active template:
 
 ```sh
-angee update
+angee stack update
 ```
 
 ## Core Terms
@@ -189,7 +189,7 @@ Examples:
 ```sh
 angee --root .angee status
 ANGEE_ROOT=/srv/angee/notes angee deploy
-angee init stack dev --root /tmp/notes-angee --yes
+angee stack init dev --root /tmp/notes-angee --yes
 ```
 
 `--root` and `ANGEE_ROOT` point at the ANGEE_ROOT directory itself, not the parent directory.
@@ -214,7 +214,7 @@ angee init stack dev --root /tmp/notes-angee --yes
 | `$ANGEE_ROOT/.env` | no | Stack-local secret values. |
 | `$ANGEE_ROOT/state/` | no | Port leases, source state, service/job/workflow state, locks, and logs. |
 | `$ANGEE_ROOT/data/` | no | Template-declared runtime data and volumes. |
-| `$ANGEE_ROOT/workspaces/` | no | Managed workspaces created by `angee init workspace` or `angee init --workspace`. |
+| `$ANGEE_ROOT/workspaces/` | no | Managed workspaces created by `angee workspace init`. |
 | `$ANGEE_ROOT/agents/` | no | Agent-backed workspaces and agent state. |
 | `$ANGEE_ROOT/templates/` | optional | Stack-local template library. |
 | `$ANGEE_ROOT/docker-compose.yaml`, `$ANGEE_ROOT/k8s/`, or other backend files | template-dependent | Generated deployment backend files when a stack uses Compose, Kubernetes, or another backend. |
@@ -249,20 +249,19 @@ Template kinds:
 
 | Kind | Logical path | Typical command |
 |---|---|---|
-| Stack | `stacks/<name>` | `angee init stack <name>` |
-| Workspace | `workspaces/<name>` | `angee init workspace <workspace> --template workspaces/<name>` |
-| Agent | `agents/<name>` | `angee agent add <agent> --template agents/<name>` |
+| Stack | `stacks/<name>` | `angee stack init <name>` |
+| Workspace | `workspaces/<name>` | `angee workspace init <workspace> --template workspaces/<name>` |
+| Agent | `agents/<name>` | `angee agent init <agent> --template agents/<name>` |
 
 When `--template` is omitted, Angee chooses a logical ref from the command:
 
 | Command | Default template ref |
 |---|---|
-| `angee init --dev` | `stacks/dev` |
-| `angee init stack <name>` | `stacks/<name>` |
+| `angee init` | Shorthand for `angee stack init dev` when `stacks/dev` exists, otherwise `angee stack init default`. |
+| `angee stack init <name>` | `stacks/<name>` |
 | `angee stack switch <name>` | `stacks/<name>` |
-| `angee init workspace <workspace>` | `workspaces.default_template` from `$ANGEE_ROOT/angee.yaml` |
-| `angee init --workspace <workspace>` | `workspaces.default_template` from `$ANGEE_ROOT/angee.yaml` |
-| `angee agent add <agent>` | `agents.default_template` from `$ANGEE_ROOT/angee.yaml`, or require `--template` if no default is declared |
+| `angee workspace init <workspace>` | `workspaces.default_template` from `$ANGEE_ROOT/angee.yaml` |
+| `angee agent init <agent>` | `agents.default_template` from `$ANGEE_ROOT/angee.yaml`, or require `--template` if no default is declared |
 
 For a logical ref such as `stacks/dev`, Angee looks in this order:
 
@@ -295,6 +294,7 @@ Operator responsibilities:
 | Responsibility | Meaning |
 |---|---|
 | Load manifest | Read `$ANGEE_ROOT/angee.yaml` or an explicit `--file PATH`. |
+| Provision | Run the same template/source/secret/port pipeline for stack init, workspace init, agent init, service provisioning, and MCP server provisioning. |
 | Reconcile | Compare desired sources, volumes, services, jobs, workflows, secrets, and port leases to actual state. |
 | Compile | Produce deployment backend files such as `docker-compose.yaml` or Kubernetes manifests when needed. |
 | Apply | Materialize sources, mount volumes, and start, stop, update, or remove services and jobs through the selected backend. |
@@ -311,7 +311,9 @@ angee operator --file ./angee.yaml --root /tmp/angee
 
 `--file` points at the YAML manifest. `--root` points at the state directory used for secrets, logs, leases, generated files, and runtime state.
 
-Most users do not run `angee operator` directly. Commands such as `angee dev`, `angee up`, and `angee deploy` start, reuse, or contact an operator as needed.
+Most users do not run `angee operator` directly. Commands such as `angee init`, `angee stack init`, `angee workspace init`, `angee agent init`, `angee dev`, `angee up`, and `angee deploy` start, reuse, or contact an operator as needed.
+
+There is one provisioning path. The CLI does not have a separate implementation for stack, workspace, or agent initialization. It has the operator compiled in, starts or reuses a local operator process when needed, submits the request over HTTP, and the operator reuses the same provisioning code that HTTP, MCP, and a Django control plane can call.
 
 ### Control Plane And State Sources
 
@@ -319,7 +321,7 @@ The operator has separate desired-state and observed-state inputs. State sources
 
 | Axis | Local mode | Server-side mode |
 |---|---|---|
-| Control plane | CLI starts or contacts the operator. | Django backend controls the operator through API calls, queued workflows, or direct deployment integration. |
+| Control plane | CLI starts/reuses the embedded local operator and calls its API. | Django backend controls the operator through API calls, queued workflows, or direct deployment integration. |
 | Desired state | `$ANGEE_ROOT/angee.yaml` or `--file PATH`. | Django DB rows can be the desired state, or Django can render/export YAML for the operator. |
 | State sources | Usually files under `$ANGEE_ROOT/state/`. | Any combination of Django API, Django database, file cache, and Temporal persistence for durable workflows. |
 
@@ -400,21 +402,24 @@ services:
 
 Users override the named lease with `--port web=8120`. Templates and services refer to `web`, not to a separate answer such as `web_port`.
 
-## `angee init`
+## Init Commands
 
-Initialize or update a stack or workspace.
+Initialization is noun-first. Use `stack init`, `workspace init`, or `agent init` depending on what you are provisioning.
+
+`angee init` is a convenience shortcut for the default stack init. It is not a separate mode.
 
 ```sh
 angee init [path] [options]
-angee init stack <name> [path] [options]
-angee init workspace <workspace> [options]
-angee init --workspace <workspace> [options]
-angee init --dev [path] [options]
+angee stack init <name> [path] [options]
+angee workspace init <workspace> [options]
+angee agent init <agent> [options]
 ```
 
-`path` is the rendered worktree path when the template renders files outside ANGEE_ROOT. `--root` still controls ANGEE_ROOT.
+`path` is the rendered stack worktree path when the template renders files outside ANGEE_ROOT. `--root` still controls ANGEE_ROOT.
 
-### Default Init
+All init commands go through the operator provisioning path. If no operator is running, the CLI starts its embedded local operator for the request.
+
+### `angee init`
 
 ```sh
 angee init --yes
@@ -423,9 +428,9 @@ angee init --yes
 Behavior:
 
 1. Resolve or create ANGEE_ROOT.
-2. If `$ANGEE_ROOT/angee.yaml` exists, run `angee update` against the active template.
-3. If `templates/stacks/dev/` exists in the current worktree, initialize `stacks/dev`.
-4. If `templates/stacks/default/` exists, initialize `stacks/default`.
+2. If `$ANGEE_ROOT/angee.yaml` exists, run `angee stack update` against the active template.
+3. If `templates/stacks/dev/` exists in the current worktree, run `angee stack init dev`.
+4. If `templates/stacks/default/` exists, run `angee stack init default`.
 5. Otherwise use the first-party default stack template or ask for `--template`.
 
 Examples:
@@ -436,66 +441,46 @@ angee init --root /srv/angee/notes --template stacks/dev --yes
 angee init --set project_name=notes --secret provider-api-key=env:PROVIDER_API_KEY --yes
 ```
 
-### Dev Init
+### `angee stack init`
 
 ```sh
-angee init --dev --yes
+angee stack init <name> [path] [options]
 ```
 
-Equivalent to:
-
-```sh
-angee init stack dev --yes
-```
-
-Use this inside a project directory when you want a complete local dev environment from the `stacks/dev` template.
+Use `dev` inside a project directory when you want a complete local dev environment from the `stacks/dev` template.
 
 Examples:
 
 ```sh
-angee init --dev --yes
-angee init --dev --port web=8120 --port ui=5190 --yes
-angee init --dev --root /tmp/notes-angee --yes
-```
-
-### Stack Init
-
-```sh
-angee init stack <name> [path] [options]
-```
-
-Examples:
-
-```sh
-angee init stack dev --yes
-angee init stack staging-docker --set domain=staging.example.com --yes
-angee init stack production --template gh:org/templates#templates/stacks/production --ref v1.4.0
+angee stack init dev --yes
+angee stack init dev --port web=8120 --port ui=5190 --yes
+angee stack init staging-docker --set domain=staging.example.com --yes
+angee stack init production --template gh:org/templates#templates/stacks/production --ref v1.4.0
 ```
 
 Behavior:
 
 1. Resolve template ref `stacks/<name>` unless `--template` overrides it.
-2. Render the template with Copier.
+2. Ask the operator to render the template with Copier.
 3. Generate, derive, or load declared secrets.
 4. Allocate declared port leases.
-5. Materialize declared sources, volumes, services, jobs, and workflows.
+5. Materialize declared sources, volumes, services, jobs, workflows, MCP servers, and agents.
 6. Write `$ANGEE_ROOT/angee.yaml`.
 7. Compile backend files if the template declares a backend such as Docker Compose.
 8. Run the template-declared post-init workflow unless skipped.
 
-### Workspace Init
+### `angee workspace init`
 
 ```sh
-angee init workspace <workspace> [options]
-angee init --workspace <workspace> [options]
+angee workspace init <workspace> [options]
 ```
 
 Examples:
 
 ```sh
-angee init --workspace feat-refactor-2 --branch feat-refactor-2 --yes
-angee init workspace feat-refactor-2 --template workspaces/feature-dev --branch feat-refactor-2 --yes
-angee init workspace docs-pass --template workspaces/docs --yes
+angee workspace init feat-refactor-2 --branch feat-refactor-2 --yes
+angee workspace init feat-refactor-2 --template workspaces/feature-dev --branch feat-refactor-2 --yes
+angee workspace init docs-pass --template workspaces/docs --yes
 ```
 
 Workspace options:
@@ -526,20 +511,43 @@ Default output with an agent template:
 $ANGEE_ROOT/agents/<workspace>/
 ```
 
-## `angee update`
+### `angee agent init`
+
+```sh
+angee agent init <agent> [options]
+```
+
+Agent init provisions an agent-backed workspace. It may also provision a workspace template first, then render the agent template into that workspace.
+
+Examples:
+
+```sh
+angee agent init feat-refactor-2 \
+  --template agents/claude-code \
+  --workspace-template workspaces/feature-dev \
+  --branch feat-refactor-2 \
+  --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
+  --yes
+```
+
+## Update Commands
 
 Refresh the current stack, workspace, or agent workspace from its recorded template.
 
 ```sh
-angee update [path] [options]
+angee stack update [options]
+angee workspace update <workspace> [options]
+angee agent update <agent> [options]
 ```
 
 Examples:
 
 ```sh
-angee update
-angee update --ref v4
-angee update --set domain=staging.example.com
+angee stack update
+angee stack update --ref v4
+angee stack update --set domain=staging.example.com
+angee workspace update feat-refactor-2 --ref v4
+angee agent update feat-refactor-2 --ref v4
 ```
 
 Options:
@@ -585,8 +593,8 @@ Commands:
 | `stack show` | Print the resolved stack manifest. |
 | `stack validate` | Validate the manifest, template state, secrets, port leases, services, jobs, and workflows. |
 | `stack templates` | List templates visible to the resolver. |
-| `stack switch <name>` | Set the active template to `stacks/<name>` and run `angee update`. |
-| `stack set-template <ref>` | Set the active template to an explicit ref and run `angee update`. |
+| `stack switch <name>` | Set the active template to `stacks/<name>` and run `angee stack update`. |
+| `stack set-template <ref>` | Set the active template to an explicit ref and run `angee stack update`. |
 
 Examples:
 
@@ -601,7 +609,7 @@ angee stack set-template gh:org/templates#templates/stacks/prod --ref v2.0.0
 
 Run the current stack's local dev services, prerequisite jobs, and optional dev workflow.
 
-`angee dev` starts or reuses an ad-hoc local `angee operator` for the selected ANGEE_ROOT. The CLI is the terminal UI and log client; the operator is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, server-side Django control, and future Kubernetes/Temporal execution.
+`angee dev` starts or reuses the embedded local operator process for the selected ANGEE_ROOT. The CLI is the terminal UI and log client; the operator is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, server-side Django control, and future Kubernetes/Temporal execution.
 
 ```sh
 angee dev [options]
@@ -849,7 +857,7 @@ angee workspace destroy feat-refactor-2 --force
 Manage agent-backed workspaces.
 
 ```sh
-angee agent add <agent> [options]
+angee agent init <agent> [options]
 angee agent list
 angee agent show <agent>
 angee agent start <agent>
@@ -862,7 +870,7 @@ angee agent update <agent> [options]
 angee agent destroy <agent> [--force]
 ```
 
-`agent add` options:
+`agent init` options:
 
 | Option | Meaning |
 |---|---|
@@ -880,7 +888,7 @@ angee agent destroy <agent> [--force]
 Examples:
 
 ```sh
-angee agent add feat-refactor-2 \
+angee agent init feat-refactor-2 \
   --template agents/claude-code \
   --workspace-template workspaces/feature-dev \
   --branch feat-refactor-2 \
@@ -920,28 +928,28 @@ Use `--force` only in scripts or when confirmation is impossible.
 ### Local Dev
 
 ```sh
-angee init --dev --yes
+angee stack init dev --yes
 angee dev
 ```
 
 ### Local Dev With Explicit Root
 
 ```sh
-angee init --dev --root .angee --yes
+angee stack init dev --root .angee --yes
 angee dev --root .angee
 ```
 
 ### Local Dev With Explicit Ports
 
 ```sh
-angee init --dev --port web=8120 --port ui=5190 --yes
+angee stack init dev --port web=8120 --port ui=5190 --yes
 angee dev
 ```
 
 ### Feature Workspace
 
 ```sh
-angee init --workspace feat-x --branch feat-x --yes
+angee workspace init feat-x --branch feat-x --yes
 cd .angee/workspaces/feat-x/code
 angee dev
 ```
@@ -949,7 +957,7 @@ angee dev
 ### Agent On A Feature Branch
 
 ```sh
-angee agent add feat-x \
+angee agent init feat-x \
   --template agents/claude-code \
   --workspace-template workspaces/feature-dev \
   --branch feat-x \
@@ -961,7 +969,7 @@ angee agent add feat-x \
 ### Staging Stack
 
 ```sh
-angee init stack staging-docker \
+angee stack init staging-docker \
   --set domain=staging.example.com \
   --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
   --yes
@@ -971,7 +979,7 @@ angee up
 ### Template Update
 
 ```sh
-angee update
+angee stack update
 ```
 
 ### Switch Stack Target

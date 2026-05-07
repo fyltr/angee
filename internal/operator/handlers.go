@@ -39,6 +39,211 @@ func (s *Server) handleConfigSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// ── Provisioning ────────────────────────────────────────────────────────────
+
+func (s *Server) handleStackInit(w http.ResponseWriter, r *http.Request) {
+	var req api.StackInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.StackInit(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleStackUpdate(w http.ResponseWriter, r *http.Request) {
+	var req api.StackUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.StackUpdate(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
+	var req api.WorkspaceInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.WorkspaceInit(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleWorkspaceUpdate(w http.ResponseWriter, r *http.Request) {
+	var req api.WorkspaceUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.WorkspaceUpdate(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
+	var req api.WorkspaceListRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.WorkspaceList(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleWorkspaceDev(w http.ResponseWriter, r *http.Request) {
+	var req api.WorkspaceDevRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.WorkspaceDev(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentInit(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.AgentInit(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentUpdate(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.AgentUpdate(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentRestart(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.AgentRestart(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentDestroy(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.AgentDestroy(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.AgentChat(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentAsk(w http.ResponseWriter, r *http.Request) {
+	var req api.AgentAskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = r.PathValue("name")
+	}
+	result, err := s.Platform.AgentAsk(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	var req api.ReconcileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.Platform.Reconcile(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	var req api.DeployRequest
 	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
@@ -57,6 +262,15 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.Platform.Rollback(r.Context(), req.SHA)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handlePull(w http.ResponseWriter, r *http.Request) {
+	result, err := s.Platform.Pull(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return

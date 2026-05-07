@@ -2,7 +2,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,12 +37,11 @@ var rootCmd = &cobra.Command{
 	Long: `angee — self-managed agent containerisation and orchestration engine.
 
 Get started:
-  angee init         Initialize ANGEE_ROOT
-  angee up           Start the platform
-  angee ls           List running agents and services
-  angee admin        Chat with the admin agent
-  angee develop      Chat with the developer agent
-  angee chat <name>  Connect to any agent`,
+  angee init                       Initialize the default dev stack
+  angee stack init dev             Initialize a named stack
+  angee dev                        Reconcile local dev services
+  angee workspace init <name>      Provision a workspace
+  angee agent init <name>          Provision an agent-backed workspace`,
 }
 
 // Execute runs the root command.
@@ -55,14 +53,19 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&angeeRoot, "root", "", "ANGEE_ROOT path (default: ~/.angee)")
+	rootCmd.PersistentFlags().StringVar(&angeeRoot, "root", "", "ANGEE_ROOT path (default: discovered .angee)")
 	rootCmd.PersistentFlags().StringVar(&operatorURL, "operator", "", "Operator URL (default: http://localhost:9000)")
 	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", "", "API key for operator authentication")
 
 	// Register all subcommands
 	rootCmd.AddCommand(
+		operatorCmd,
 		initCmd,
+		stackCmd,
+		workspaceCmd,
+		agentCmd,
+		devCmd,
 		upCmd,
 		downCmd,
 		destroyCmd,
@@ -71,64 +74,45 @@ func init() {
 		rollbackCmd,
 		logsCmd,
 		planCmd,
-		chatCmd,
-		adminCmd,
-		developCmd,
 		statusCmd,
-		askCmd,
 		pullCmd,
 		restartCmd,
-		updateCmd,
-		// Project-mode forwarders (see cli/project.go + internal/projmode/).
-		// These exec the runtime framework via syscall.Exec when invoked
-		// inside a tree containing .angee/project.yaml.
-		buildCmd,
-		migrateCmd,
-		doctorCmd,
-		fixturesCmd,
-		// Project-mode orchestrator (see cli/dev.go + internal/dev/).
-		devCmd,
 	)
 }
 
-// resolveRoot returns the ANGEE_ROOT path from flag, env, or by detecting
-// the current directory structure. Detection order:
+// resolveRoot returns the ANGEE_ROOT path from flag, env, or by walking parent
+// directories for the target manifest. Detection order:
 //  1. --root flag
 //  2. ANGEE_ROOT env var
-//  3. angee.yaml in cwd → we're inside ANGEE_ROOT, use cwd
-//  4. .angee/ in cwd → use it
-//  5. fallback: ~/.angee
+//  3. angee.yaml in cwd or a parent → that directory is ANGEE_ROOT
+//  4. .angee/angee.yaml in cwd or a parent → that .angee is ANGEE_ROOT
+//  5. fallback: ./.angee
 func resolveRoot() string {
 	if angeeRoot != "" {
-		return angeeRoot
+		return expandPath(angeeRoot)
 	}
 	if v := os.Getenv("ANGEE_ROOT"); v != "" {
-		return v
+		return expandPath(v)
 	}
 
-	// Check current directory: are we inside ANGEE_ROOT?
-	if _, err := os.Stat("angee.yaml"); err == nil {
-		if wd, err := os.Getwd(); err == nil {
-			return wd
-		}
-	}
-	// Check for .angee/ in current directory. Skip when it's a project-mode
-	// marker (contains project.yaml) — those are NOT compose-mode roots
-	// and would mislead init / up / etc. into operating on the wrong tree.
-	// See docs/ARCHITECTURE.md §12, django-angee R-15.
-	if info, err := os.Stat(".angee"); err == nil && info.IsDir() {
-		if _, isProj := os.Stat(filepath.Join(".angee", "project.yaml")); isProj != nil {
-			if wd, err := os.Getwd(); err == nil {
-				return filepath.Join(wd, ".angee")
-			}
-		}
-	}
-
-	home, err := os.UserHomeDir()
+	wd, err := os.Getwd()
 	if err != nil {
 		return ".angee"
 	}
-	return home + "/.angee"
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
+			return dir
+		}
+		candidate := filepath.Join(dir, ".angee")
+		if _, err := os.Stat(filepath.Join(candidate, "angee.yaml")); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	return filepath.Join(wd, ".angee")
 }
 
 // resolveOperator returns the operator base URL.
@@ -183,21 +167,4 @@ func printSuccess(msg string) {
 
 func printInfo(msg string) {
 	fmt.Printf("  \033[36m→\033[0m %s\n", msg)
-}
-
-// isOperatorRunning checks if the operator HTTP health endpoint responds.
-func isOperatorRunning() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := newRequest("GET", resolveOperator()+"/health", nil)
-	if err != nil {
-		return false
-	}
-	req = req.WithContext(ctx)
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == 200
 }

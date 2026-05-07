@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/fyltr/angee/api"
@@ -43,6 +44,9 @@ type Platform struct {
 
 // NewPlatform creates a Platform for the given ANGEE_ROOT path.
 func NewPlatform(angeeRoot string, logger *slog.Logger) (*Platform, error) {
+	if err := os.MkdirAll(angeeRoot, 0755); err != nil {
+		return nil, fmt.Errorf("creating ANGEE_ROOT: %w", err)
+	}
 	r, err := root.Open(angeeRoot)
 	if err != nil {
 		return nil, err
@@ -70,13 +74,17 @@ func NewPlatform(angeeRoot string, logger *slog.Logger) (*Platform, error) {
 
 	comp.APIKey = p.resolveAPIKey()
 
+	projectName := filepath.Base(filepath.Dir(angeeRoot))
+	if projectName == "." || projectName == string(filepath.Separator) || projectName == "" {
+		projectName = "angee"
+	}
 	angeeCfg, err := r.LoadAngeeConfig()
 	if err != nil {
-		return nil, fmt.Errorf("loading angee.yaml: %w", err)
-	}
-	projectName := angeeCfg.Name
-	if projectName == "" {
-		projectName = "angee"
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("loading angee.yaml: %w", err)
+		}
+	} else if angeeCfg.Name != "" {
+		projectName = angeeCfg.Name
 	}
 
 	switch cfg.Runtime {
@@ -217,6 +225,14 @@ func (p *Platform) Down(ctx context.Context) error {
 	return p.Backend.Down(ctx)
 }
 
+// Pull pulls images through the selected backend.
+func (p *Platform) Pull(ctx context.Context) (*api.ProvisionResponse, error) {
+	if err := p.Backend.Pull(ctx); err != nil {
+		return nil, err
+	}
+	return &api.ProvisionResponse{Status: "ok", Message: "Pulled images", Root: p.Root.Path}, nil
+}
+
 // ── Private helpers ─────────────────────────────────────────────────────────
 
 func (p *Platform) loadConfig() (*config.AngeeConfig, error) {
@@ -224,14 +240,16 @@ func (p *Platform) loadConfig() (*config.AngeeConfig, error) {
 }
 
 func (p *Platform) prepareAndCompile(cfg *config.AngeeConfig) error {
-	for agentName := range cfg.Agents {
-		if err := p.Root.EnsureAgentDir(agentName); err != nil {
-			return fmt.Errorf("agent dir for %s: %w", agentName, err)
+	if cfg.Agents != nil {
+		for agentName := range cfg.Agents.Items {
+			if err := p.Root.EnsureAgentDir(agentName); err != nil {
+				return fmt.Errorf("agent dir for %s: %w", agentName, err)
+			}
 		}
-	}
-	for agentName, agent := range cfg.Agents {
-		if err := compiler.RenderAgentFiles(p.Root.Path, p.Root.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
-			return fmt.Errorf("agent files for %s: %w", agentName, err)
+		for agentName, agent := range cfg.Agents.Items {
+			if err := compiler.RenderAgentFiles(p.Root.Path, p.Root.AgentDir(agentName), agent, cfg.MCPServers); err != nil {
+				return fmt.Errorf("agent files for %s: %w", agentName, err)
+			}
 		}
 	}
 	return p.compileAndWrite(cfg)

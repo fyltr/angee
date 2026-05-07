@@ -25,7 +25,7 @@ examples/templates/
 Target workflow for `django-angee/examples/angee-notes`:
 
 ```sh
-angee init stack dev ../django-angee/examples/angee-notes \
+angee stack init dev ../django-angee/examples/angee-notes \
   --template ./examples/templates/stacks/dev \
   --root ../django-angee/examples/angee-notes/.angee \
   --yes
@@ -38,11 +38,11 @@ Equivalent planned sugar:
 
 ```sh
 cd ../django-angee/examples/angee-notes
-angee init --dev --template ../../../../angee-go/examples/templates/stacks/dev --yes
+angee init --template ../../../../angee-go/examples/templates/stacks/dev --yes
 angee dev
 ```
 
-`angee dev` should start or reuse a local ad-hoc `angee operator` that reconciles from `.angee/angee.yaml`.
+`angee dev` should start or reuse the embedded local operator process that reconciles from `.angee/angee.yaml`.
 
 The same target is captured as data in:
 
@@ -53,7 +53,7 @@ examples/templates/targets/angee-notes-dev.yaml
 ## Docker Staging Target
 
 ```sh
-angee init stack staging-docker ./staging-root \
+angee stack init staging-docker ./staging-root \
   --template ./examples/templates/stacks/staging-docker \
   --set domain=staging.example.com \
   --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
@@ -62,4 +62,4 @@ angee init stack staging-docker ./staging-root \
 angee up --root ./staging-root/.angee
 ```
 
-The staging template is based on the shape of `~/Work/fyltr/fyltr-django/docker-compose.dev.yaml`, `docker-compose.yaml.staging`, and `.angee-template/`.
+The staging template is based on the shape of the current local and staging Docker Compose workflows, expressed through the target `angee.yaml` model.

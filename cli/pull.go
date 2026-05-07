@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
 )
 
@@ -19,20 +20,17 @@ Usage:
 }
 
 func runPull(cmd *cobra.Command, args []string) error {
-	path := resolveRoot()
-	fmt.Printf("\n\033[1mangee pull\033[0m\n\n")
-
-	composePath, projectName, err := localCompile(path)
-	if err != nil {
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
 		return err
 	}
+	fmt.Printf("\n\033[1mangee pull\033[0m\n\n")
 
 	printInfo("Pulling latest images...")
-	if err := runDockerCompose(composePath, path, projectName, "pull"); err != nil {
-		fmt.Printf("  \033[33m!\033[0m  Some images failed to pull (this is normal for locally-built images)\n")
-	} else {
-		printSuccess("Pulled latest images")
+	var result api.ProvisionResponse
+	if _, err := apiPost("/pull", nil, &result); err != nil {
+		return fmt.Errorf("pulling images: %w", err)
 	}
+	printSuccess("Pulled latest images")
 
 	fmt.Println()
 	printInfo("Run 'angee restart' to apply updated images")

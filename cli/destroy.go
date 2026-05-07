@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fyltr/angee/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -36,21 +35,13 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("\n\033[1mangee destroy\033[0m\n\n")
 
-	// Try to bring down the stack first
-	composePath := filepath.Join(path, "docker-compose.yaml")
-	if _, err := os.Stat(composePath); err == nil {
-		cfg, err := config.Load(filepath.Join(path, "angee.yaml"))
-		projectName := "angee"
-		if err == nil && cfg.Name != "" {
-			projectName = cfg.Name
-		}
-
-		printInfo("Stopping stack...")
-		if err := runDockerCompose(composePath, path, projectName, "down", "--volumes", "--remove-orphans"); err != nil {
-			fmt.Printf("  \033[33m!\033[0m  Could not stop stack (it may not be running)\n")
-		} else {
-			printSuccess("Stack stopped and volumes removed")
-		}
+	printInfo("Stopping stack...")
+	if err := ensureLocalOperator(path); err != nil {
+		fmt.Printf("  \033[33m!\033[0m  Could not contact operator: %s\n", err)
+	} else if _, err := apiPost("/down", nil, nil); err != nil {
+		fmt.Printf("  \033[33m!\033[0m  Could not stop stack (it may not be running): %s\n", err)
+	} else {
+		printSuccess("Stack stopped")
 	}
 
 	if !destroyForce {

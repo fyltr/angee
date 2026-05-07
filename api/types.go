@@ -13,6 +13,123 @@ type HealthResponse struct {
 	Runtime string `json:"runtime"`
 }
 
+// ProvisionResponse is returned by stack, workspace, agent, and reconcile
+// provisioning endpoints.
+type ProvisionResponse struct {
+	Status   string   `json:"status"`
+	Message  string   `json:"message,omitempty"`
+	Root     string   `json:"root,omitempty"`
+	Manifest string   `json:"manifest,omitempty"`
+	Changed  []string `json:"changed,omitempty"`
+}
+
+// ── Provisioning ────────────────────────────────────────────────────────────
+
+type StackInitRequest struct {
+	Name     string            `json:"name"`
+	Path     string            `json:"path,omitempty"`
+	Root     string            `json:"root,omitempty"`
+	Template string            `json:"template,omitempty"`
+	Set      map[string]string `json:"set,omitempty"`
+	Secrets  map[string]string `json:"secrets,omitempty"`
+	Ports    map[string]int    `json:"ports,omitempty"`
+	Force    bool              `json:"force,omitempty"`
+	Yes      bool              `json:"yes,omitempty"`
+}
+
+type StackUpdateRequest struct {
+	Root    string            `json:"root,omitempty"`
+	Set     map[string]string `json:"set,omitempty"`
+	Secrets map[string]string `json:"secrets,omitempty"`
+	Ports   map[string]int    `json:"ports,omitempty"`
+	Yes     bool              `json:"yes,omitempty"`
+}
+
+type WorkspaceInitRequest struct {
+	Name           string            `json:"name"`
+	Root           string            `json:"root,omitempty"`
+	Template       string            `json:"template,omitempty"`
+	Branch         string            `json:"branch,omitempty"`
+	Overrides      map[string]string `json:"overrides,omitempty"`
+	Secrets        map[string]string `json:"secrets,omitempty"`
+	Ports          map[string]int    `json:"ports,omitempty"`
+	CreateBranches bool              `json:"create_branches,omitempty"`
+	Start          bool              `json:"start,omitempty"`
+	Yes            bool              `json:"yes,omitempty"`
+}
+
+type WorkspaceUpdateRequest struct {
+	Name      string            `json:"name"`
+	Root      string            `json:"root,omitempty"`
+	Ref       string            `json:"ref,omitempty"`
+	Overrides map[string]string `json:"overrides,omitempty"`
+	Secrets   map[string]string `json:"secrets,omitempty"`
+	Ports     map[string]int    `json:"ports,omitempty"`
+	Sync      bool              `json:"sync,omitempty"`
+	Restart   bool              `json:"restart,omitempty"`
+	Yes       bool              `json:"yes,omitempty"`
+}
+
+type WorkspaceListRequest struct {
+	Root string `json:"root,omitempty"`
+}
+
+type WorkspaceDevRequest struct {
+	Root string `json:"root,omitempty"`
+	Name string `json:"name"`
+}
+
+type AgentInitRequest struct {
+	Name              string            `json:"name"`
+	Root              string            `json:"root,omitempty"`
+	Template          string            `json:"template,omitempty"`
+	WorkspaceTemplate string            `json:"workspace_template,omitempty"`
+	Branch            string            `json:"branch,omitempty"`
+	Overrides         map[string]string `json:"overrides,omitempty"`
+	Secrets           map[string]string `json:"secrets,omitempty"`
+	Ports             map[string]int    `json:"ports,omitempty"`
+	CreateBranches    bool              `json:"create_branches,omitempty"`
+	Start             bool              `json:"start,omitempty"`
+	Yes               bool              `json:"yes,omitempty"`
+}
+
+type AgentUpdateRequest struct {
+	Name              string            `json:"name"`
+	Root              string            `json:"root,omitempty"`
+	Template          string            `json:"template,omitempty"`
+	WorkspaceTemplate string            `json:"workspace_template,omitempty"`
+	Ref               string            `json:"ref,omitempty"`
+	Overrides         map[string]string `json:"overrides,omitempty"`
+	Secrets           map[string]string `json:"secrets,omitempty"`
+	Ports             map[string]int    `json:"ports,omitempty"`
+	Restart           bool              `json:"restart,omitempty"`
+	Yes               bool              `json:"yes,omitempty"`
+}
+
+type AgentActionRequest struct {
+	Root string `json:"root,omitempty"`
+	Name string `json:"name"`
+}
+
+type AgentChatRequest struct {
+	Root string `json:"root,omitempty"`
+	Name string `json:"name"`
+}
+
+type AgentAskRequest struct {
+	Root    string `json:"root,omitempty"`
+	Name    string `json:"name"`
+	Message string `json:"message"`
+}
+
+type ReconcileRequest struct {
+	Root   string   `json:"root,omitempty"`
+	Mode   string   `json:"mode,omitempty"`
+	Only   []string `json:"only,omitempty"`
+	Except []string `json:"except,omitempty"`
+	Follow bool     `json:"follow,omitempty"`
+}
+
 // ── Deploy ──────────────────────────────────────────────────────────────────
 
 // DeployRequest is sent to POST /deploy.

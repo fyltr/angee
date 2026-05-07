@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 
@@ -37,7 +36,7 @@ type ComposeFile struct {
 type ComposeService struct {
 	Image       string              `yaml:"image,omitempty"`
 	Build       *ComposeBuild       `yaml:"build,omitempty"`
-	Command     string              `yaml:"command,omitempty"`
+	Command     any                 `yaml:"command,omitempty"`
 	Restart     string              `yaml:"restart,omitempty"`
 	StdinOpen   bool                `yaml:"stdin_open,omitempty"`
 	Tty         bool                `yaml:"tty,omitempty"`
@@ -128,22 +127,29 @@ func (c *Compiler) Compile(cfg *config.AngeeConfig) (*ComposeFile, error) {
 		}
 		out.Services[name] = cs
 
-		// Register named volumes
 		for _, v := range svc.Volumes {
-			if v.Persistent || v.Name != "" {
+			if v.Name != "" {
 				out.Volumes[v.Name] = ComposeVolume{}
 			}
 		}
 	}
-
-	// Compile agents (sorted for deterministic output)
-	for _, name := range sortedKeys(cfg.Agents) {
-		agent := cfg.Agents[name]
-		cs, err := c.compileAgent(name, agent, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("agent %q: %w", name, err)
+	for name, volume := range cfg.Volumes {
+		cv := ComposeVolume{}
+		if volume.Driver != "" && volume.Driver != "local-fs" {
+			cv.Driver = volume.Driver
 		}
-		out.Services[AgentServicePrefix+name] = cs
+		out.Volumes[name] = cv
+	}
+
+	if cfg.Agents != nil {
+		for _, name := range sortedKeys(cfg.Agents.Items) {
+			agent := cfg.Agents.Items[name]
+			cs, err := c.compileAgent(name, agent, cfg)
+			if err != nil {
+				return nil, fmt.Errorf("agent %q: %w", name, err)
+			}
+			out.Services[AgentServicePrefix+name] = cs
+		}
 	}
 
 	return out, nil
@@ -164,7 +170,7 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 		}
 	}
 
-	if svc.Command != "" {
+	if len(svc.Command) > 0 {
 		cs.Command = svc.Command
 	}
 
@@ -197,16 +203,36 @@ func (c *Compiler) compileService(name string, svc config.ServiceSpec) (ComposeS
 	}
 
 	// Ports
-	cs.Ports = svc.Ports
+	for _, p := range svc.Ports {
+		if p.Host != "" && p.Target != "" {
+			cs.Ports = append(cs.Ports, p.Host+":"+p.Target)
+		} else if p.Target != "" {
+			cs.Ports = append(cs.Ports, p.Target)
+		}
+	}
 
 	// Volumes
 	for _, v := range svc.Volumes {
 		if v.Name != "" {
-			cs.Volumes = append(cs.Volumes, v.Name+":"+v.Path)
+			target := v.Target
+			if target == "" {
+				target = v.Path
+			}
+			if target != "" {
+				mount := v.Name + ":" + target
+				if v.ReadOnly {
+					mount += ":ro"
+				}
+				cs.Volumes = append(cs.Volumes, mount)
+			}
+		} else if v.Source != "" && v.Target != "" {
+			mount := ensureBindMountPrefix(v.Source) + ":" + v.Target
+			if v.ReadOnly {
+				mount += ":ro"
+			}
+			cs.Volumes = append(cs.Volumes, mount)
 		}
 	}
-	cs.Volumes = append(cs.Volumes, svc.RawVolumes...)
-
 	// Health checks are performed by the operator (Kubernetes-style HTTP
 	// probes from outside the container), so we do not generate Docker
 	// HEALTHCHECK directives. This avoids requiring curl/wget inside the
@@ -267,16 +293,8 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 	cs.EnvFile = []string{agentEnvFile}
 
 	// Workspace volume mount
-	if agent.Workspace.Path != "" {
-		// Explicit path (e.g. ANGEE_ROOT itself for the admin agent)
-		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(agent.Workspace.Path)+":/workspace")
-	} else if agent.Workspace.Repository != "" {
-		// Mount the repository directory as workspace
-		repoPath := fmt.Sprintf("src/%s", agent.Workspace.Repository)
-		if spec, ok := cfg.Repositories[agent.Workspace.Repository]; ok && spec.Path != "" {
-			repoPath = spec.Path
-		}
-		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(repoPath)+":/workspace")
+	if agent.Workspace != "" {
+		cs.Volumes = append(cs.Volumes, ensureBindMountPrefix(agent.Workspace)+":/workspace")
 	} else {
 		// Per-agent workspace directory
 		workspacePath := fmt.Sprintf("./agents/%s/workspace", name)
@@ -301,28 +319,7 @@ func (c *Compiler) compileAgent(name string, agent config.AgentSpec, cfg *config
 		cs.Environment = append(cs.Environment, "ANGEE_OPERATOR_API_KEY="+c.APIKey)
 	}
 
-	// Resolve skills: merge skill MCP servers and system prompts
 	resolvedMCPServers := agent.MCPServers
-	if len(agent.Skills) > 0 && cfg.Skills != nil {
-		for _, skillName := range agent.Skills {
-			skill, ok := cfg.Skills[skillName]
-			if !ok {
-				continue
-			}
-			for _, srv := range skill.MCPServers {
-				if !contains(resolvedMCPServers, srv) {
-					resolvedMCPServers = append(resolvedMCPServers, srv)
-				}
-			}
-			if skill.SystemPrompt != "" {
-				if cs.Environment == nil {
-					cs.Environment = []string{}
-				}
-				// Append skill system prompt to agent's system prompt
-				cs.Environment = append(cs.Environment, "ANGEE_SKILL_PROMPT_"+strings.ToUpper(strings.ReplaceAll(skillName, "-", "_"))+"="+skill.SystemPrompt)
-			}
-		}
-	}
 
 	// MCP server environment vars
 	var mcpList []string
@@ -418,11 +415,6 @@ func restartPolicy(lifecycle string) string {
 	default:
 		return "unless-stopped"
 	}
-}
-
-// contains returns true if s is in the slice.
-func contains(slice []string, s string) bool {
-	return slices.Contains(slice, s)
 }
 
 // resolveSecretRefs translates ${secret:name} references into ${ENV_NAME}

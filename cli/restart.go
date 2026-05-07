@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/fyltr/angee/api"
 	"github.com/spf13/cobra"
 )
 
@@ -20,28 +21,24 @@ Usage:
 }
 
 func runRestart(cmd *cobra.Command, args []string) error {
-	path := resolveRoot()
-	fmt.Printf("\n\033[1mangee restart\033[0m\n\n")
-
-	composePath, projectName, err := localCompile(path)
-	if err != nil {
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
 		return err
 	}
-	printSuccess("Compiled docker-compose.yaml")
+	fmt.Printf("\n\033[1mangee restart\033[0m\n\n")
 
 	printInfo("Stopping stack...")
-	if err := runDockerCompose(composePath, path, projectName, "down"); err != nil {
-		fmt.Printf("  \033[33m!\033[0m  Stop encountered issues (continuing with restart)\n")
-	} else {
-		printSuccess("Stack stopped")
+	var down api.DownResponse
+	if _, err := apiPost("/down", nil, &down); err != nil {
+		return fmt.Errorf("stopping stack: %w", err)
 	}
+	printSuccess("Stack stopped")
 
 	printInfo("Starting stack...")
-	if err := runDockerCompose(composePath, path, projectName, "up", "-d", "--remove-orphans"); err != nil {
-		fmt.Printf("  \033[33m!\033[0m  Some containers failed to start (run 'angee logs' to investigate)\n")
-	} else {
-		printSuccess("Stack restarted")
+	var deploy api.ApplyResult
+	if _, err := apiPost("/deploy", api.DeployRequest{}, &deploy); err != nil {
+		return fmt.Errorf("starting stack: %w", err)
 	}
+	printSuccess("Stack restarted")
 
 	fmt.Println()
 	return nil

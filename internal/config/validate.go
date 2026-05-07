@@ -5,15 +5,34 @@ import (
 	"strings"
 )
 
-// validLifecycles is the set of recognised lifecycle values.
 var validLifecycles = map[string]bool{
-	"":                true, // empty is allowed (defaults applied later)
+	"":                true,
 	LifecyclePlatform: true,
 	LifecycleSidecar:  true,
 	LifecycleWorker:   true,
 	LifecycleSystem:   true,
 	LifecycleAgent:    true,
 	LifecycleJob:      true,
+}
+
+var validSourceKinds = map[string]bool{
+	"git":          true,
+	"github":       true,
+	"local":        true,
+	"archive":      true,
+	"template":     true,
+	"volume":       true,
+	"url":          true,
+	"s3":           true,
+	"gcs":          true,
+	"azure-blob":   true,
+	"google-drive": true,
+}
+
+var validMCPTransports = map[string]bool{
+	"stdio":           true,
+	"sse":             true,
+	"streamable-http": true,
 }
 
 // Validate checks an AngeeConfig for structural errors. It collects all
@@ -24,97 +43,17 @@ func (c *AngeeConfig) Validate() error {
 	if c.Name == "" {
 		errs = append(errs, "name is required")
 	}
-
-	// Service lifecycles
-	for name, svc := range c.Services {
-		if !validLifecycles[svc.Lifecycle] {
-			errs = append(errs, fmt.Sprintf("service %q: invalid lifecycle %q", name, svc.Lifecycle))
-		}
+	if c.Kind != "" && c.Kind != "stack" && c.Kind != "workspace" && c.Kind != "agent" {
+		errs = append(errs, fmt.Sprintf("kind %q is invalid", c.Kind))
 	}
 
-	// Agent lifecycles + MCP server references + skill references + file mounts
-	for name, agent := range c.Agents {
-		if !validLifecycles[agent.Lifecycle] {
-			errs = append(errs, fmt.Sprintf("agent %q: invalid lifecycle %q", name, agent.Lifecycle))
-		}
-		for _, ref := range agent.MCPServers {
-			if _, ok := c.MCPServers[ref]; !ok {
-				errs = append(errs, fmt.Sprintf("agent %q: mcp_server %q is not defined in mcp_servers", name, ref))
-			}
-		}
-		for _, ref := range agent.Skills {
-			if c.Skills == nil {
-				errs = append(errs, fmt.Sprintf("agent %q: skill %q is not defined in skills", name, ref))
-				continue
-			}
-			skill, ok := c.Skills[ref]
-			if !ok {
-				errs = append(errs, fmt.Sprintf("agent %q: skill %q is not defined in skills", name, ref))
-				continue
-			}
-			// Validate skill's MCP server references
-			for _, srv := range skill.MCPServers {
-				if _, ok := c.MCPServers[srv]; !ok {
-					errs = append(errs, fmt.Sprintf("skill %q: mcp_server %q is not defined in mcp_servers", ref, srv))
-				}
-			}
-		}
-		for i, f := range agent.Files {
-			hasTemplate := f.Template != ""
-			hasSource := f.Source != ""
-			if hasTemplate == hasSource {
-				errs = append(errs, fmt.Sprintf("agent %q: files[%d] must have exactly one of template or source", name, i))
-			}
-			if f.Mount == "" {
-				errs = append(errs, fmt.Sprintf("agent %q: files[%d] mount is required", name, i))
-			}
-		}
-	}
-
-	// MCP server validation: stdio servers must have a command
-	for name, mcp := range c.MCPServers {
-		if mcp.Transport == "stdio" && len(mcp.Command) == 0 && mcp.Image == "" {
-			errs = append(errs, fmt.Sprintf("mcp_server %q: stdio transport requires command or image", name))
-		}
-	}
-
-	// Domain conflicts: same host across services
-	type domainKey struct {
-		host string
-		port int
-	}
-	domains := make(map[domainKey]string)
-	for name, svc := range c.Services {
-		for _, d := range svc.Domains {
-			port := d.Port
-			if port == 0 {
-				port = 8000
-			}
-			key := domainKey{host: d.Host, port: port}
-			if other, exists := domains[key]; exists {
-				errs = append(errs, fmt.Sprintf("domain conflict: %s:%d claimed by both %q and %q", d.Host, port, other, name))
-			} else {
-				domains[key] = name
-			}
-		}
-	}
-
-	// Host port conflicts: same host port on two services
-	hostPorts := make(map[string]string)
-	for name, svc := range c.Services {
-		for _, p := range svc.Ports {
-			// Port format is "host:container" or just "container"
-			hostPort := portHostPart(p)
-			if hostPort == "" {
-				continue
-			}
-			if other, exists := hostPorts[hostPort]; exists {
-				errs = append(errs, fmt.Sprintf("port conflict: host port %s used by both %q and %q", hostPort, other, name))
-			} else {
-				hostPorts[hostPort] = name
-			}
-		}
-	}
+	validateSources(c, &errs)
+	validatePortLeases(c, &errs)
+	validateServices(c, &errs)
+	validateJobs(c, &errs)
+	validateWorkflows(c, &errs)
+	validateAgents(c, &errs)
+	validateMCPServers(c, &errs)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("validation errors:\n  - %s", strings.Join(errs, "\n  - "))
@@ -122,18 +61,163 @@ func (c *AngeeConfig) Validate() error {
 	return nil
 }
 
-// portHostPart extracts the host port from a docker port mapping string.
-// "8080:80" → "8080", "80" → "" (no host port), "0.0.0.0:8080:80" → "0.0.0.0:8080".
-func portHostPart(mapping string) string {
-	parts := strings.Split(mapping, ":")
-	switch len(parts) {
-	case 1:
-		return "" // container-only, no host port
-	case 2:
-		return parts[0]
-	case 3:
-		return parts[0] + ":" + parts[1]
-	default:
-		return ""
+func validateSources(c *AngeeConfig, errs *[]string) {
+	for name, source := range c.Sources {
+		if source.Kind == "" {
+			*errs = append(*errs, fmt.Sprintf("source %q: kind is required", name))
+		} else if !validSourceKinds[source.Kind] {
+			*errs = append(*errs, fmt.Sprintf("source %q: invalid kind %q", name, source.Kind))
+		}
+		if source.Target == "" {
+			*errs = append(*errs, fmt.Sprintf("source %q: target is required", name))
+		}
+		if (source.Kind == "git" || source.Kind == "github") && source.Repo == "" && source.URL == "" {
+			*errs = append(*errs, fmt.Sprintf("source %q: git/github source requires repo or url", name))
+		}
+	}
+}
+
+func validatePortLeases(c *AngeeConfig, errs *[]string) {
+	usedDefaults := map[int]string{}
+	for name, lease := range c.PortLeases {
+		if lease.Default < 0 || lease.Default > 65535 {
+			*errs = append(*errs, fmt.Sprintf("port_lease %q: default port must be between 1 and 65535", name))
+		}
+		if lease.Default == 0 {
+			continue
+		}
+		if other, ok := usedDefaults[lease.Default]; ok {
+			*errs = append(*errs, fmt.Sprintf("port_lease conflict: default port %d used by both %q and %q", lease.Default, other, name))
+		} else {
+			usedDefaults[lease.Default] = name
+		}
+	}
+}
+
+func validateServices(c *AngeeConfig, errs *[]string) {
+	domains := map[string]string{}
+	for name, svc := range c.Services {
+		if !validLifecycles[svc.Lifecycle] {
+			*errs = append(*errs, fmt.Sprintf("service %q: invalid lifecycle %q", name, svc.Lifecycle))
+		}
+		if svc.Source != "" {
+			if _, ok := c.Sources[svc.Source]; !ok {
+				*errs = append(*errs, fmt.Sprintf("service %q: source %q is not defined in sources", name, svc.Source))
+			}
+		}
+		for _, port := range svc.Ports {
+			if port.Name != "" {
+				if _, ok := c.PortLeases[port.Name]; !ok {
+					*errs = append(*errs, fmt.Sprintf("service %q: port lease %q is not defined in port_leases", name, port.Name))
+				}
+			}
+		}
+		for _, after := range svc.After {
+			if _, ok := c.Services[after]; ok {
+				continue
+			}
+			if _, ok := c.Jobs[after]; ok {
+				continue
+			}
+			*errs = append(*errs, fmt.Sprintf("service %q: after dependency %q is not defined", name, after))
+		}
+		for _, d := range svc.Domains {
+			port := d.Port
+			if port == 0 {
+				port = 8000
+			}
+			key := fmt.Sprintf("%s:%d", d.Host, port)
+			if other, exists := domains[key]; exists {
+				*errs = append(*errs, fmt.Sprintf("domain conflict: %s claimed by both %q and %q", key, other, name))
+			} else {
+				domains[key] = name
+			}
+		}
+	}
+}
+
+func validateJobs(c *AngeeConfig, errs *[]string) {
+	for name, job := range c.Jobs {
+		if job.Source != "" {
+			if _, ok := c.Sources[job.Source]; !ok {
+				*errs = append(*errs, fmt.Sprintf("job %q: source %q is not defined in sources", name, job.Source))
+			}
+		}
+		for _, after := range job.After {
+			if _, ok := c.Jobs[after]; ok {
+				continue
+			}
+			if _, ok := c.Services[after]; ok {
+				continue
+			}
+			*errs = append(*errs, fmt.Sprintf("job %q: after dependency %q is not defined", name, after))
+		}
+	}
+}
+
+func validateWorkflows(c *AngeeConfig, errs *[]string) {
+	for name, workflow := range c.Workflows {
+		for i, activity := range workflow.Activities {
+			if activity.Run == "" {
+				*errs = append(*errs, fmt.Sprintf("workflow %q: activities[%d].run is required", name, i))
+			}
+			if activity.Source != "" {
+				if _, ok := c.Sources[activity.Source]; !ok {
+					*errs = append(*errs, fmt.Sprintf("workflow %q: source %q is not defined in sources", name, activity.Source))
+				}
+			}
+			if activity.Service != "" {
+				if _, ok := c.Services[activity.Service]; !ok {
+					*errs = append(*errs, fmt.Sprintf("workflow %q: service %q is not defined in services", name, activity.Service))
+				}
+			}
+		}
+	}
+}
+
+func validateAgents(c *AngeeConfig, errs *[]string) {
+	if c.Agents == nil {
+		return
+	}
+	for name, agent := range c.Agents.Items {
+		if agent.Workspace != "" && c.Workspaces != nil {
+			if _, ok := c.Workspaces.Items[agent.Workspace]; !ok {
+				*errs = append(*errs, fmt.Sprintf("agent %q: workspace %q is not defined in workspaces.items", name, agent.Workspace))
+			}
+		}
+		if agent.Service != "" {
+			if _, ok := c.Services[agent.Service]; !ok {
+				*errs = append(*errs, fmt.Sprintf("agent %q: service %q is not defined in services", name, agent.Service))
+			}
+		}
+		for _, ref := range agent.MCPServers {
+			if _, ok := c.MCPServers[ref]; !ok {
+				*errs = append(*errs, fmt.Sprintf("agent %q: mcp_server %q is not defined in mcp_servers", name, ref))
+			}
+		}
+		for i, f := range agent.Files {
+			hasTemplate := f.Template != ""
+			hasSource := f.Source != ""
+			if hasTemplate == hasSource {
+				*errs = append(*errs, fmt.Sprintf("agent %q: files[%d] must have exactly one of template or source", name, i))
+			}
+			if f.Mount == "" {
+				*errs = append(*errs, fmt.Sprintf("agent %q: files[%d] mount is required", name, i))
+			}
+		}
+	}
+}
+
+func validateMCPServers(c *AngeeConfig, errs *[]string) {
+	for name, mcp := range c.MCPServers {
+		if !validMCPTransports[mcp.Transport] {
+			*errs = append(*errs, fmt.Sprintf("mcp_server %q: invalid transport %q", name, mcp.Transport))
+		}
+		if mcp.Transport == "stdio" && len(mcp.Command) == 0 && mcp.Image == "" {
+			*errs = append(*errs, fmt.Sprintf("mcp_server %q: stdio transport requires command or image", name))
+		}
+		if (mcp.Transport == "sse" || mcp.Transport == "streamable-http") && mcp.URL == "" {
+			*errs = append(*errs, fmt.Sprintf("mcp_server %q: %s transport requires url", name, mcp.Transport))
+		}
 	}
 }

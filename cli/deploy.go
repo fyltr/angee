@@ -24,8 +24,8 @@ func init() {
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	if !isOperatorRunning() {
-		return fmt.Errorf("operator not running — start with 'angee up'")
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
+		return err
 	}
 
 	var result api.ApplyResult

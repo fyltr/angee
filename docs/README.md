@@ -8,14 +8,14 @@ It is like Docker Compose with first-class agents, workspaces, sources, secrets,
 
 | Piece | What it does |
 |---|---|
-| `angee` CLI | Initializes stacks from templates, starts local dev, talks to the operator, and gives users commands such as `init`, `dev`, `up`, `deploy`, `logs`, and `agent add`. |
-| `angee-operator` | Reconciles desired state from `angee.yaml`. It materializes sources, manages secrets and port leases, starts/stops services, runs jobs/workflows, provisions workspaces and agents, and exposes HTTP/MCP APIs. |
+| `angee` CLI | User interface for Angee. It has the operator compiled in, starts or reuses a local operator process when needed, and gives users commands such as `init`, `stack init`, `workspace init`, `agent init`, `dev`, `up`, `deploy`, and `logs`. |
+| operator | The shared reconciler and provisioner, available as an embedded local process or a long-running service. It reconciles desired state from `angee.yaml`, materializes sources, manages secrets and port leases, starts/stops services, runs jobs/workflows, provisions workspaces and agents, and exposes HTTP/MCP APIs. |
 | `angee.yaml` | The source-of-truth manifest under `$ANGEE_ROOT`. It describes sources, volumes, services, jobs, workflows, agents, MCP servers, secrets, and deployment backend settings. |
 | Copier template | A reusable scaffold that creates or updates `angee.yaml` plus any project files needed for a stack, workspace, or agent. |
 
 ## How Init Works
 
-`angee init` starts from a template.
+`angee stack init` starts from a stack template. `angee init` is only a shorthand for the default stack init.
 
 The template can be local, bundled, or fetched from a Git URL. Angee renders it with Copier, then performs Angee-specific setup:
 
@@ -28,6 +28,8 @@ The template can be local, bundled, or fetched from a Git URL. Angee renders it 
 7. Create state directories, volumes, workspaces, or agent folders declared by the manifest.
 
 The template does not keep running the stack. Once `angee.yaml` exists, the operator works from that manifest.
+
+The provisioning path belongs to the operator, not to a separate CLI implementation. The CLI starts or reuses its embedded operator process and calls the same HTTP API that a long-running operator, MCP client, or Django backend can call for stacks, workspaces, agents, services, and MCP servers.
 
 ## How The Operator Works
 
@@ -51,13 +53,15 @@ The operator can run locally for development or as a long-running service in sta
 For local development, the normal flow is:
 
 ```sh
-angee init --dev --yes
+angee stack init dev --yes
 angee dev
 ```
 
-`angee init --dev` renders a dev stack template and writes `.angee/angee.yaml`.
+`angee init --yes` is shorthand for the default stack init. In a project with a `stacks/dev` template, that means `angee stack init dev --yes`.
 
-`angee dev` starts or reuses an ad-hoc local `angee-operator`. The CLI is the terminal UI and log client; the operator is what reconciles the stack.
+`angee stack init dev` renders a dev stack template and writes `.angee/angee.yaml`.
+
+`angee dev` starts or reuses the embedded local operator process. The CLI is the terminal UI and log client; the operator is what reconciles the stack.
 
 In dev, services can run as local processes, Docker containers, or a mix. Example services are a web server, UI dev server, database, Redis, MCP server, or agent runtime.
 
@@ -66,7 +70,7 @@ In dev, services can run as local processes, Docker containers, or a mix. Exampl
 For staging or production, the flow is usually:
 
 ```sh
-angee init stack staging-docker --set domain=staging.example.com --yes
+angee stack init staging-docker --set domain=staging.example.com --yes
 angee up
 ```
 
@@ -85,11 +89,11 @@ An agent is a durable actor attached to a workspace. Agent templates can render 
 Examples:
 
 ```sh
-angee init --workspace feat-x --branch feat-x --yes
-angee agent add feat-x --template agents/angee-developer --branch feat-x --yes
+angee workspace init feat-x --branch feat-x --yes
+angee agent init feat-x --template agents/angee-developer --branch feat-x --yes
 ```
 
-The operator provisions the workspace or agent from `angee.yaml` plus the selected templates.
+The CLI submits the request. The operator provisions the workspace or agent from `angee.yaml` plus the selected templates. The same path is available to HTTP, MCP, and a future Django control plane.
 
 ## Scaling Later
 

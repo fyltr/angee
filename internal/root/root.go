@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	AngeeYAML    = "angee.yaml"
-	OperatorYAML = "operator.yaml"
-	ComposeFile  = "docker-compose.yaml"
-	Gitignore    = ".gitignore"
-	AgentsDir    = "agents"
-	SrcDir       = "src"
-	TemplatesDir = "templates"
+	AngeeYAML     = "angee.yaml"
+	OperatorYAML  = "operator.yaml"
+	ComposeFile   = "docker-compose.yaml"
+	Gitignore     = ".gitignore"
+	AgentsDir     = "agents"
+	WorkspacesDir = "workspaces"
+	StateDir      = "state"
 )
 
 // Root represents an initialized ANGEE_ROOT directory.
@@ -56,8 +56,10 @@ func Initialize(path string) (*Root, error) {
 	// Create directory structure
 	dirs := []string{
 		filepath.Join(path, AgentsDir),
-		filepath.Join(path, SrcDir),
-		filepath.Join(path, TemplatesDir),
+		filepath.Join(path, WorkspacesDir),
+		filepath.Join(path, StateDir),
+		filepath.Join(path, StateDir, "locks"),
+		filepath.Join(path, StateDir, "runs"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -77,12 +79,16 @@ func (r *Root) WriteGitignore() error {
 operator.yaml
 .angee-local
 
+# File-backed observed state
+state/
+
 # Agent credentials (written at deploy time)
 agents/**/.env
 agents/**/workspace/
 
-# Template caches
-templates/*/
+# Workspace runtime material
+workspaces/**/state/
+workspaces/**/.env
 
 # Editor
 .DS_Store

@@ -19,7 +19,10 @@ func (p *Platform) AgentList(ctx context.Context) ([]api.AgentInfo, error) {
 	statusMap := p.buildStatusMap(ctx)
 
 	var agents []api.AgentInfo
-	for name, agent := range cfg.Agents {
+	if cfg.Agents == nil {
+		return agents, nil
+	}
+	for name, agent := range cfg.Agents.Items {
 		svcName := agentServiceName(name)
 		status := "stopped"
 		health := "unknown"
@@ -47,7 +50,10 @@ func (p *Platform) AgentStart(ctx context.Context, name string) (*api.ApplyResul
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := cfg.Agents[name]; !ok {
+	if cfg.Agents == nil {
+		return nil, NotFound(fmt.Sprintf("agent %q not found in angee.yaml", name))
+	}
+	if _, ok := cfg.Agents.Items[name]; !ok {
 		return nil, NotFound(fmt.Sprintf("agent %q not found in angee.yaml", name))
 	}
 

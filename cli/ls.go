@@ -19,6 +19,9 @@ var lsCmd = &cobra.Command{
 }
 
 func runLs(cmd *cobra.Command, args []string) error {
+	if err := ensureLocalOperator(resolveRoot()); err != nil {
+		return err
+	}
 	resp, err := doRequest("GET", resolveOperator()+"/status", nil)
 	if err != nil {
 		return fmt.Errorf("cannot reach operator at %s — is angee running? (angee up)", resolveOperator())

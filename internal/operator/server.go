@@ -58,9 +58,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /config", s.handleConfigGet)
 	mux.HandleFunc("POST /config", s.handleConfigSet)
 
+	// Provisioning
+	mux.HandleFunc("POST /stacks/init", s.handleStackInit)
+	mux.HandleFunc("POST /stacks/update", s.handleStackUpdate)
+	mux.HandleFunc("POST /workspaces/init", s.handleWorkspaceInit)
+	mux.HandleFunc("POST /workspaces/list", s.handleWorkspaceList)
+	mux.HandleFunc("POST /workspaces/{name}/update", s.handleWorkspaceUpdate)
+	mux.HandleFunc("POST /workspaces/{name}/dev", s.handleWorkspaceDev)
+	mux.HandleFunc("POST /agents/init", s.handleAgentInit)
+	mux.HandleFunc("POST /agents/{name}/update", s.handleAgentUpdate)
+	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
+	mux.HandleFunc("POST /agents/{name}/destroy", s.handleAgentDestroy)
+	mux.HandleFunc("POST /agents/{name}/chat", s.handleAgentChat)
+	mux.HandleFunc("POST /agents/{name}/ask", s.handleAgentAsk)
+	mux.HandleFunc("POST /reconcile", s.handleReconcile)
+
 	// Deployment lifecycle
 	mux.HandleFunc("POST /deploy", s.handleDeploy)
 	mux.HandleFunc("POST /rollback", s.handleRollback)
+	mux.HandleFunc("POST /pull", s.handlePull)
 	mux.HandleFunc("GET /plan", s.handlePlan)
 
 	// Runtime status

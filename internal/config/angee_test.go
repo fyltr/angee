@@ -6,24 +6,51 @@ import (
 	"testing"
 )
 
-func TestLoadValidYAML(t *testing.T) {
+func TestLoadTargetYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "angee.yaml")
 	content := `
+version: "1"
+kind: stack
 name: test-project
-version: "1.0"
+template:
+  active: stacks/dev
+  source: examples/templates/stacks/dev
+operator:
+  mode: adhoc
+  state_sources:
+    - kind: file
+      path: .angee/state
+sources:
+  app:
+    kind: local
+    ref: current
+    tree: .
+    target: .
+secrets:
+  app-secret:
+    generated: true
+    length: 32
+port_leases:
+  web:
+    default: 8100
+    band: app
 services:
   web:
+    runtime: docker
+    source: app
     image: nginx
     lifecycle: platform
-    domains:
-      - host: example.com
-        port: 80
+    command: ["nginx", "-g", "daemon off;"]
+    ports:
+      - name: web
+        target: "80"
+workspaces:
+  default_template: workspaces/feature-dev
+  prefix: workspaces
 agents:
-  admin:
-    image: ghcr.io/fyltr/angee-agent:latest
-    lifecycle: system
-    role: operator
+  default_template: agents/angee-developer
+  prefix: agents
 mcp_servers:
   filesystem:
     transport: stdio
@@ -39,32 +66,28 @@ mcp_servers:
 	}
 
 	if cfg.Name != "test-project" {
-		t.Errorf("Name = %q, want %q", cfg.Name, "test-project")
+		t.Errorf("Name = %q, want test-project", cfg.Name)
 	}
-	if cfg.Version != "1.0" {
-		t.Errorf("Version = %q, want %q", cfg.Version, "1.0")
+	if cfg.Kind != "stack" {
+		t.Errorf("Kind = %q, want stack", cfg.Kind)
 	}
-	if len(cfg.Services) != 1 {
-		t.Errorf("Services count = %d, want 1", len(cfg.Services))
+	if cfg.Template.Active != "stacks/dev" {
+		t.Errorf("Template.Active = %q", cfg.Template.Active)
 	}
-	if len(cfg.Agents) != 1 {
-		t.Errorf("Agents count = %d, want 1", len(cfg.Agents))
+	if cfg.Sources["app"].Kind != "local" {
+		t.Errorf("source app kind = %q", cfg.Sources["app"].Kind)
 	}
-	if len(cfg.MCPServers) != 1 {
-		t.Errorf("MCPServers count = %d, want 1", len(cfg.MCPServers))
+	if cfg.PortLeases["web"].Default != 8100 {
+		t.Errorf("web port default = %d", cfg.PortLeases["web"].Default)
 	}
-
-	web := cfg.Services["web"]
-	if web.Image != "nginx" {
-		t.Errorf("web.Image = %q, want %q", web.Image, "nginx")
+	if got := cfg.Services["web"].Command; len(got) != 3 || got[0] != "nginx" {
+		t.Errorf("web command = %v", got)
 	}
-	if web.Lifecycle != LifecyclePlatform {
-		t.Errorf("web.Lifecycle = %q, want %q", web.Lifecycle, LifecyclePlatform)
+	if cfg.Workspaces.DefaultTemplate != "workspaces/feature-dev" {
+		t.Errorf("workspace template = %q", cfg.Workspaces.DefaultTemplate)
 	}
-
-	admin := cfg.Agents["admin"]
-	if admin.Role != "operator" {
-		t.Errorf("admin.Role = %q, want %q", admin.Role, "operator")
+	if cfg.Agents.DefaultTemplate != "agents/angee-developer" {
+		t.Errorf("agent template = %q", cfg.Agents.DefaultTemplate)
 	}
 }
 
@@ -81,7 +104,6 @@ func TestLoadInvalidYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte(":::bad yaml{{{\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML")
@@ -91,78 +113,29 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestWriteAndRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "angee.yaml")
-
 	original := &AngeeConfig{
+		Version: "1",
+		Kind:    "stack",
 		Name:    "roundtrip",
-		Version: "2.0",
-		Services: map[string]ServiceSpec{
-			"api": {Image: "my-api:latest", Lifecycle: LifecyclePlatform},
+		Sources: map[string]SourceSpec{
+			"app": {Kind: "local", Ref: "current", Target: "."},
 		},
-		Agents: map[string]AgentSpec{
-			"bot": {Image: "bot:v1", Role: "user"},
+		Services: map[string]ServiceSpec{
+			"api": {Runtime: "docker", Source: "app", Image: "my-api:latest"},
 		},
 	}
 
 	if err := Write(original, path); err != nil {
 		t.Fatalf("Write() error: %v", err)
 	}
-
 	loaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-
 	if loaded.Name != original.Name {
 		t.Errorf("Name = %q, want %q", loaded.Name, original.Name)
 	}
-	if loaded.Version != original.Version {
-		t.Errorf("Version = %q, want %q", loaded.Version, original.Version)
-	}
-	if len(loaded.Services) != 1 {
-		t.Errorf("Services count = %d, want 1", len(loaded.Services))
-	}
 	if loaded.Services["api"].Image != "my-api:latest" {
-		t.Errorf("api.Image = %q, want %q", loaded.Services["api"].Image, "my-api:latest")
-	}
-}
-
-func TestServicesWithAllLifecycles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "angee.yaml")
-
-	lifecycles := []string{
-		LifecyclePlatform, LifecycleSidecar, LifecycleWorker,
-		LifecycleSystem, LifecycleAgent, LifecycleJob,
-	}
-
-	cfg := &AngeeConfig{
-		Name:     "lifecycle-test",
-		Services: make(map[string]ServiceSpec),
-	}
-	for _, lc := range lifecycles {
-		cfg.Services["svc-"+lc] = ServiceSpec{
-			Image:     "test:latest",
-			Lifecycle: lc,
-		}
-	}
-
-	if err := Write(cfg, path); err != nil {
-		t.Fatalf("Write() error: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error: %v", err)
-	}
-
-	for _, lc := range lifecycles {
-		svc, ok := loaded.Services["svc-"+lc]
-		if !ok {
-			t.Errorf("service svc-%s not found", lc)
-			continue
-		}
-		if svc.Lifecycle != lc {
-			t.Errorf("svc-%s.Lifecycle = %q, want %q", lc, svc.Lifecycle, lc)
-		}
+		t.Errorf("api.Image = %q", loaded.Services["api"].Image)
 	}
 }
