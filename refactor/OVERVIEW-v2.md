@@ -479,19 +479,81 @@ Without TTLs, ephemeral PR-review agents accumulate worktrees and ports forever.
 
 ## `angee dev`
 
-Ephemeral in-process operator runtime. Generates `process-compose.yaml` from the local services + jobs, generates `docker-compose.yaml` from the container services, then:
+`angee dev` is the integrated dev loop. One command brings up three things and keeps them running together for the lifetime of the session:
+
+1. **The operator HTTP + MCP server** on loopback (port from `angee.yaml`'s `operator.url`, bearer from the `operator-token` secret).
+2. **Container sidecars** via `docker compose up -d` (postgres, redis, openbao, anything `runtime: container`).
+3. **Local processes** via `process-compose up` (anything `runtime: local`: Django, Vite, build watchers, etc.).
 
 ```
-docker compose up -d <container-services>      # sidecars (postgres, redis, openbao, etc.)
-process-compose up --config process-compose.yaml \
-  --port <auto>                                # daemon mode; we control via its REST API
+       ┌─────────────────────────────────┐
+       │       angee dev (foreground)    │
+       └────────────┬────────────────────┘
+                    │
+        ┌───────────┼─────────────────────────────────┐
+        ▼           ▼                                  ▼
+   operator     docker compose up -d            process-compose up
+   :9000        (sidecars)                      (local processes)
+   /mcp                                          ▲
+        ▲                                         │
+        │      injected env: ANGEE_OPERATOR_URL,  │
+        └──────  ANGEE_OPERATOR_TOKEN, ports ─────┘
 ```
 
-`process-compose` already provides: depends_on with health gating, readiness probes, log fanout, TUI, REST API for control, env files, cron-like scheduling. Angee adds nothing to its supervisor loop.
+Startup order:
 
-For control beyond start/stop, Angee uses process-compose's REST API (or the `src/client` Go client wrapping it) — `GET /processes` for status, `POST /process/start/{name}`, `POST /process/stop/{name}`, `GET /process/logs/{name}`. The `angee` CLI commands `start`/`stop`/`restart`/`logs` route to either docker compose or the process-compose REST endpoint depending on which backend owns the named service.
+1. Resolve secrets, allocate/confirm ports, compile `docker-compose.yaml` and `process-compose.yaml`.
+2. Start the operator HTTP+MCP listener in-process. It binds to the configured loopback port and serves the same API surface as the standalone operator.
+3. Start container sidecars via `docker compose up -d`.
+4. Start `process-compose up` in daemon mode. Every local process gets `ANGEE_OPERATOR_URL`, `ANGEE_OPERATOR_TOKEN`, and resolved port env vars injected automatically — so a Django dev server running under `angee dev` can call the operator out of the box.
+5. Tail logs from all three sources into a unified TUI (process-compose's TUI for local processes; compose log stream for containers; operator events on a status pane).
 
-On Ctrl+C: process-compose handles graceful shutdown of local processes; container sidecars stay up unless template policy says otherwise.
+Shutdown on Ctrl+C is the reverse: stop process-compose (graceful per-process shutdown), stop the operator, leave container sidecars up unless template policy says otherwise (so postgres data and warm caches survive across `dev` runs).
+
+### Provisioning agents during dev
+
+Because the operator is live throughout the session, the developer (or any local process) can spin up agents into the running `.angee/` without leaving the dev loop:
+
+```sh
+# from another terminal, while `angee dev` is running:
+angee agent init reviewer \
+  --template agents/angee-developer \
+  --source app=https://github.com/fyltr/app#feature-x \
+  --start --yes
+```
+
+Or equivalently, a Django process running under `angee dev` calls the operator over HTTP:
+
+```python
+# Django code, env already populated by angee dev
+import os, requests
+requests.post(
+    f"{os.environ['ANGEE_OPERATOR_URL']}/agents",
+    headers={"Authorization": f"Bearer {os.environ['ANGEE_OPERATOR_TOKEN']}"},
+    json={"name": "reviewer", "template": "agents/angee-developer", "start": True, ...},
+)
+```
+
+Either path goes through the same `service.Platform`. The operator:
+
+1. Renders the agent template via `copier-go`.
+2. Allocates ports from the pool, materializes worktree + sources.
+3. Registers the new service in the in-memory + on-disk `angee.yaml`.
+4. **Hot-applies** the change: regenerates `docker-compose.yaml` / `process-compose.yaml`, then either `docker compose up -d <new-service>` or calls process-compose's REST API to add the new process. No `angee dev` restart required.
+5. Streams provisioning events on the operator's `/events` SSE stream — the dev TUI can pick those up and show "agent reviewer provisioning…" → "healthy at http://127.0.0.1:8247".
+
+### Why the operator runs during dev (not just on staging)
+
+This is a deliberate design call. Two reasons:
+
+- **Develop against the real API.** Django code that calls `POST /agents` in prod also calls it in dev. No mock, no env-specific branch.
+- **Use agents in your own dev loop.** Spin up a `reviewer` agent inside `angee dev`, point it at the worktree of the feature you're working on, talk to it via MCP, then `angee agent destroy reviewer` when done. The agent shares the dev stack's postgres, redis, etc. — it's a peer of the services you're developing.
+
+### Process-compose control
+
+`process-compose` already provides depends_on with health gating, readiness probes, log fanout, TUI, REST API, env files, and cron-like scheduling. Angee adds nothing to its supervisor loop.
+
+For runtime control during the dev session, Angee uses process-compose's REST API (or the `src/client` Go client) — `GET /processes` for status, `POST /process/start/{name}`, `POST /process/stop/{name}`, `GET /process/logs/{name}`. The `angee` CLI commands `start`/`stop`/`restart`/`logs` route to either docker compose or the process-compose REST endpoint depending on which backend owns the named service.
 
 ## ANGEE_ROOT Layout
 
@@ -539,29 +601,43 @@ Explicitly deferred so the v1 ships:
 ## Success Shape
 
 ```sh
-# Goal 1
+# Goal 1 — dev loop with everything running together
 angee init --dev --yes
-angee dev                              # compose sidecars + process-compose locals, healthy and tailing
-angee down
+angee dev
+# → operator HTTP+MCP on 127.0.0.1:9000
+# → postgres, redis, openbao container sidecars
+# → Django, Vite, build-watch as supervised local processes
+# → ANGEE_OPERATOR_URL/TOKEN injected into every local process
 
 # Goal 1, staging
 angee stack init staging-docker --yes --set domain=staging.example.com
 angee up
 angee logs web --follow
 
-# Goal 2
+# Goal 2 — provision an agent into the live dev session, no restart
+# (in a second terminal, while `angee dev` is running)
 angee agent init reviewer \
   --template agents/angee-developer \
   --source app=https://github.com/fyltr/app#feature-x \
   --start --yes
-# → worktree at ../app.workspaces/feat-reviewer, MCPs wired, reachable at $OPERATOR_URL/agents/reviewer
+# → worktree at ../app.workspaces/feat-reviewer
+# → MCPs wired (filesystem + operator + playwright)
+# → ports leased from the operator pool, written to angee.yaml
+# → bundled service hot-added to docker compose / process-compose
+# → reachable at $ANGEE_OPERATOR_URL/agents/reviewer
 
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST $OPERATOR_URL/agents/reviewer/messages \
-  -d '{"text": "open a PR with the schema migration"}'
+# Or from a Django process running inside `angee dev`:
+curl -H "Authorization: Bearer $ANGEE_OPERATOR_TOKEN" \
+  -X POST $ANGEE_OPERATOR_URL/agents \
+  -d '{"name":"reviewer","template":"agents/angee-developer", "start":true, ...}'
+
+# Talk to the agent
+curl -H "Authorization: Bearer $ANGEE_OPERATOR_TOKEN" \
+  -X POST $ANGEE_OPERATOR_URL/agents/reviewer/messages \
+  -d '{"text":"open a PR with the schema migration"}'
 
 angee agent logs reviewer --follow
-angee agent destroy reviewer           # service removed; worktree kept unless --purge
+angee agent destroy reviewer    # service hot-removed; worktree kept unless --purge
 ```
 
-If those flows are boring, v1 is done.
+If those flows are boring — and the dev loop, the staging deploy, and the on-the-fly agent provisioning all use the same operator surface — v1 is done.
