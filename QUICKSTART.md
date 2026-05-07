@@ -2,9 +2,21 @@
 
 Status: target shape per [`refactor/OVERVIEW-v2.md`](./refactor/OVERVIEW-v2.md).
 
-Two flows. One spins up a local dev stack from a template. The other
-provisions a workspace on a worktree so an agent (or a human) can build a
-PR against an isolated branch.
+**Angee is the stack manager for angee.ai.** It compiles one
+`angee.yaml` into a running environment and exposes a stable HTTP+MCP
+control surface so the runtime above it can mutate the stack
+programmatically. Two consumers drive Angee:
+
+- **Humans, via the CLI** — what this quickstart walks through.
+- **Angee runtimes (e.g. `django-angee`), via the operator HTTP+MCP
+  API** — the runtime runs inside a stack Angee manages and calls the
+  operator to self-manage that stack and self-update its sources. The
+  HTTP examples below double as a sketch of what those calls look like.
+
+Two flows below. One spins up a local dev stack from a template. The
+other provisions a workspace on a worktree so an agent (or a human) can
+build a PR against an isolated branch — done from the CLI here, but
+identical when issued by a runtime over HTTP.
 
 ## Install
 
@@ -124,6 +136,28 @@ angee down                                           # stop the dev stack
 `workspace destroy` refuses if a running service still mounts the
 workspace; the error names the offending services. `--force` overrides
 for the "I really mean it" case.
+
+## Self-managing runtimes (the operator API path)
+
+Everything above can also be issued by a runtime *inside* the stack
+over HTTP — same operations, same `service.Platform`, no human at a
+terminal. The runtime is born with `ANGEE_OPERATOR_URL` and
+`ANGEE_OPERATOR_TOKEN` already in its env, so the calls are one-liners.
+
+`django-angee` self-managing its stack typically looks like:
+
+```http
+POST  ${ANGEE_OPERATOR_URL}/workspaces           # provision a session workspace
+POST  ${ANGEE_OPERATOR_URL}/sources/django-angee/pull   # self-update code
+POST  ${ANGEE_OPERATOR_URL}/services             # spin up a sidecar / agent runner
+PATCH ${ANGEE_OPERATOR_URL}/workspaces/{n}       # extend a TTL
+GET   ${ANGEE_OPERATOR_URL}/events  (SSE)        # react to lifecycle changes
+```
+
+The same operations are exposed as MCP tools at `${ANGEE_OPERATOR_URL}/mcp`,
+so a model client running inside a service can drive the stack without
+any HTTP-client glue. Full surface in
+[`refactor/OVERVIEW-v2.md`](./refactor/OVERVIEW-v2.md).
 
 ## Where templates live
 

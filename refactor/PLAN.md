@@ -6,23 +6,37 @@ overview is the target shape.
 
 ## Scope recap
 
-**Angee provisions workspaces, fetches sources, resolves secrets, runs git
-operations on worktree-backed sources, supervises services. It does not
-know what an "agent" is.**
+**Angee is the stack manager for angee.ai.** It provisions workspaces,
+fetches sources, resolves secrets, runs git operations on worktree-
+backed sources, supervises services, and exposes one stable HTTP+MCP
+control surface. It does not know what an "agent" is.
+
+Two consumers drive Angee, and the architecture flows from that:
+
+1. **Humans, via the CLI** — `angee init`, `angee dev`, `angee
+   workspace create`, etc. Terminal-driven setup, dev loop, ops.
+2. **Angee runtimes, via the operator HTTP+MCP API** — e.g.
+   `django-angee` runs inside a stack Angee manages and uses the
+   operator API to **self-manage that stack and self-update its
+   sources** (provision workspaces on demand, pull fresh code into
+   worktrees, scale services, rotate secrets). No human in the loop.
+
+Both paths go through one business-logic layer (`service.Platform`);
+the CLI and the HTTP/MCP server are thin adapters. Anything a human can
+do from a terminal, a runtime can do over HTTP, and vice versa.
 
 Anything an agent needs (MCP wiring, model API keys, addressability,
 agent-specific TTL semantics, "talk to me over HTTP", PR creation) is
-the application layer's job. (Workspace TTLs *are* core v1 — Angee
-sweeps expired workspaces; the carve-out is on agent-shaped state, not
-on TTL semantics in general.) The
-application layer asks Angee for two things:
+the runtime layer's job. (Workspace TTLs *are* core v1 — Angee sweeps
+expired workspaces; the carve-out is on agent-shaped state, not on TTL
+semantics in general.) The runtime layer asks Angee for two things:
 
 1. A **workspace** — a directory rendered from a chain of Copier templates
    with sources mounted into it.
 2. A **service** — a runnable workload (container or local process) that
    mounts that workspace, gets env vars, and is supervised.
 
-Everything else above that lives in the application (Django, etc.).
+Everything else above that lives in the runtime (django-angee, etc.).
 
 ### Litmus test: an agent-free stack must work end-to-end
 

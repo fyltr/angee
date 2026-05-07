@@ -16,6 +16,52 @@ agent` template family, no per-agent MCP server lifecycle. What that
 surface used to do is now expressed as `angee workspace create` followed
 by `angee service init` — two boring steps a higher layer composes.
 
+## What Angee Is
+
+**Angee is the stack manager for angee.ai.** It is the substrate an
+angee.ai runtime — `django-angee`, future first-party runtimes, or any
+third-party runtime that targets the operator API — runs on top of.
+Angee's job is to compile one `angee.yaml` manifest into a running
+environment (secrets resolved, services supervised, workspaces
+provisioned) and to expose that environment over a stable HTTP+MCP
+control surface so the runtime above it can mutate the stack without a
+human at a terminal.
+
+### The two consumers
+
+Angee has exactly two callers, and the architecture flows from that:
+
+1. **Humans, via the CLI** — `angee init`, `angee dev`, `angee up`,
+   `angee workspace create`, etc. Terminal-driven setup, dev loop, and
+   day-to-day operations. The CLI is what a developer types to bring a
+   stack up, debug it, ship a branch.
+
+2. **Angee runtimes, via the operator HTTP+MCP API** — e.g.
+   `django-angee` runs *inside* a stack Angee is managing, and uses the
+   operator API (`POST /workspaces`, `POST /services`,
+   `POST /sources/{n}/{fetch,pull,push}`, etc.) to **self-manage the
+   stack and self-update its sources**. Spinning up a new workspace for
+   a session, pulling fresh code into an existing worktree, rotating a
+   secret, scaling out a worker — all of these happen as HTTP calls
+   from the runtime to its own operator, with no human in the loop.
+   The same operations are available as MCP tools at `/mcp`, so a model
+   client running inside a service can drive the stack the same way.
+
+Both paths share one business-logic layer (`service.Platform`). The CLI
+and the HTTP/MCP server are thin adapters over the same operations —
+there is no "CLI-only" capability and no "API-only" capability. If a
+human can do it from a terminal, the runtime can do it over HTTP, and
+vice versa. This symmetry is load-bearing: it is what makes a runtime
+like `django-angee` capable of self-managing the very stack it lives
+in.
+
+The operator therefore runs **continuously alongside the runtime**, not
+just at provisioning time. `angee dev` starts an in-process operator on
+loopback for the lifetime of the dev session; production deployments
+run the standalone `angee operator` daemon as a long-lived service in
+the same stack as the runtime application. Either way, the runtime
+always has an operator to call.
+
 ## The Two Goals
 
 Angee exists to make these two flows boring and reproducible:
@@ -1073,10 +1119,16 @@ GET    /mcp                                   (MCP JSON-RPC; same operations as 
 Bearer auth required for non-loopback binds. One operator serves
 exactly one `ANGEE_ROOT`.
 
-## Operator-as-Service: external-runtime composition
+## Operator-as-Service: angee runtimes drive their own stack
 
-When the application layer (Django, etc.) wants what an "agent" would
-have meant, it composes two Angee operations.
+The canonical example: `django-angee` runs as a service inside a stack
+Angee manages. When a user (or another part of the runtime) asks
+django-angee for something that needs a fresh worktree + a sidecar
+service — e.g. "spin up a session for this branch" — django-angee
+composes two operator calls and gets back a running, addressable
+service it can hand off to. **The runtime is self-managing its own
+stack**; Angee is the control surface that makes that safe and
+reproducible.
 
 ```
 Django                              angee-operator                       host
@@ -1299,14 +1351,20 @@ the backend files, brings up the new resource, streams events on
 
 ### Why the operator runs during dev (not just on staging)
 
-- **Develop against the real API.** Django code that calls `POST
-  /workspaces` and `POST /services` in prod also calls them in dev. No
-  mock, no env-specific branch.
-- **Use the provisioning surface in your own dev loop.** Spin up a
+The operator is **always present** wherever the runtime runs. In
+production it's the standalone `angee operator` daemon; in dev it's an
+in-process listener on loopback started by `angee dev`. Either way, the
+runtime above it sees the same API at the same URL.
+
+- **Self-managing runtimes work identically in dev and prod.** Code in
+  `django-angee` that calls `POST /workspaces` and
+  `POST /sources/django-angee/pull` in prod calls them the same way in
+  dev. No mock, no env-specific branch, no "is the operator alive?"
+  guard.
+- **Use the provisioning surface from your own dev loop.** Spin up a
   workspace + service inside `angee dev`, talk to it on its declared
-  port, destroy when done. No special "agent mode" — it's the same
-  surface whether the service is a Django instance or a containerized
-  agent runner.
+  port, destroy when done. The CLI and the runtime are doing the same
+  thing through different doors.
 
 ## ANGEE_ROOT Layout
 
