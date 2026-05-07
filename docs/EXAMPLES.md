@@ -13,18 +13,18 @@ Templates declare those details. The Go CLI only understands generic concepts:
 - Port leases: named by templates, allocated by Angee.
 - Sources: git worktrees, clones, archives, storage mounts, templates.
 - Services, jobs, and workflows: named declarations with cwd, env, dependencies, readiness checks, and activities.
-- Runtime outputs: rendered files, `.angee/angee.yaml`, `.angee/state/*`, `docker-compose.yaml`.
+- Runtime outputs: rendered files, `$ANGEE_ROOT/angee.yaml`, `$ANGEE_ROOT/state/*`, backend files such as `docker-compose.yaml`.
 
 ## Design Rules
 
 1. Init commands are noun-first: `angee stack init`, `angee workspace init`, and `angee agent init`.
 2. `angee init` is shorthand for the default stack init, normally `angee stack init dev` in a project with `templates/stacks/dev`.
-3. `.angee/angee.yaml` is the only committed Angee marker. There is no separate `.angee/project.yaml`.
+3. `$ANGEE_ROOT/angee.yaml` is the only Angee manifest. There is no separate `.angee/project.yaml`.
 4. Runtime-specific commands live in templates or runtime template fragments, not in Go code.
 5. Reasonable defaults live in templates. The CLI can auto-detect and allocate, but must not know what `web`, `ui`, or `worker` mean.
-6. Generated and derived secrets never go into `.copier-answers.yml`, `.angee/angee.yaml`, or `docker-compose.yaml`.
+6. Generated and derived secrets never go into `.copier-answers.yml`, `$ANGEE_ROOT/angee.yaml`, or backend files such as `docker-compose.yaml`.
 7. Named ports are stable within a template, but their numeric values are allocated per stack/workspace/agent to avoid collisions.
-8. A workspace without an agent renders under `.angee/workspaces/<name>/`; a workspace with an agent template renders under `.angee/agents/<name>/`.
+8. A workspace without an agent renders under `$ANGEE_ROOT/workspaces/<name>/`; a workspace with an agent template renders under `$ANGEE_ROOT/agents/<name>/`.
 
 ## Secret Flag Forms
 

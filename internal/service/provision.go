@@ -106,7 +106,7 @@ func (p *Platform) StackInit(ctx context.Context, req api.StackInitRequest) (*ap
 	}
 
 	if err := r.InitialCommit(); err != nil {
-		p.Log.Warn("initial commit skipped", "err", err)
+		return nil, fmt.Errorf("initial config commit: %w", err)
 	}
 
 	return &api.ProvisionResponse{
@@ -629,14 +629,6 @@ func (p *Platform) AgentDestroy(ctx context.Context, req api.AgentActionRequest)
 		Manifest: p.Root.AngeeYAMLPath(),
 		Changed:  []string{p.Root.AngeeYAMLPath(), agentDir},
 	}, nil
-}
-
-func (p *Platform) AgentChat(ctx context.Context, req api.AgentChatRequest) (*api.ProvisionResponse, error) {
-	return nil, NotImplemented("agent chat is not implemented yet")
-}
-
-func (p *Platform) AgentAsk(ctx context.Context, req api.AgentAskRequest) (*api.ProvisionResponse, error) {
-	return nil, NotImplemented("agent ask is not implemented yet")
 }
 
 func (p *Platform) Reconcile(ctx context.Context, req api.ReconcileRequest) (*api.ProvisionResponse, error) {

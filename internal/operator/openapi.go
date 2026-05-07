@@ -162,10 +162,8 @@ func openapiSchemas() map[string]any {
 			},
 		},
 		"DeployRequest": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"message": map[string]any{"type": "string"},
-			},
+			"type":       "object",
+			"properties": map[string]any{},
 		},
 		"JSONRPCRequest": map[string]any{
 			"type":     "object",

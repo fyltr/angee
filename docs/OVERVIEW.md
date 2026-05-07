@@ -49,7 +49,7 @@ The operator owns the provisioning and reconciliation path:
 7. Compile deployment backend files such as `docker-compose.yaml` or Kubernetes manifests.
 8. Reconcile actual state.
 
-The same operator path is used by the CLI, HTTP API, MCP API, explicit operator services, and a future Django control plane.
+The same operator path is used by the CLI, HTTP API, MCP API, explicit operator services, and application control planes.
 
 ## Deployment Backends
 

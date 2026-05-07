@@ -124,7 +124,7 @@ func (p *Platform) HealthCheck() *api.HealthResponse {
 // Deploy holds writeMu for the duration so concurrent requests serialize on
 // the on-disk angee.yaml/docker-compose.yaml pair. Compose itself serializes
 // per-project, but the in-process compile step is racy.
-func (p *Platform) Deploy(ctx context.Context, message string) (*api.ApplyResult, error) {
+func (p *Platform) Deploy(ctx context.Context) (*api.ApplyResult, error) {
 	cfg, err := p.loadConfig()
 	if err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (p *Platform) Rollback(ctx context.Context, sha string) (*api.RollbackRespo
 			return nil, fmt.Errorf("rollback failed: %w", errors.Join(err, err2))
 		}
 	}
-	result, err := p.Deploy(ctx, "")
+	result, err := p.Deploy(ctx)
 	if err != nil {
 		return nil, err
 	}

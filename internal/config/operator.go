@@ -9,13 +9,11 @@ import (
 )
 
 // OperatorConfig is the local runtime configuration (operator.yaml).
-// This file is NOT committed to git — it tells the operator which
-// runtime backend to use and how to find the Django control plane.
+// This file is NOT committed to git; it contains host-local operator settings.
 type OperatorConfig struct {
 	Runtime        string           `yaml:"runtime"` // docker-compose | kubernetes
 	Port           int              `yaml:"port,omitempty"`
 	AngeeRoot      string           `yaml:"angee_root,omitempty"`
-	DjangoURL      string           `yaml:"django_url,omitempty"`
 	APIKey         string           `yaml:"api_key,omitempty"`
 	BindAddress    string           `yaml:"bind_address,omitempty"`
 	CORSOrigins    []string         `yaml:"cors_origins,omitempty"`
@@ -26,7 +24,6 @@ type OperatorConfig struct {
 
 // DockerConfig holds Docker Compose backend settings.
 type DockerConfig struct {
-	Socket  string `yaml:"socket,omitempty"`
 	Network string `yaml:"network,omitempty"`
 }
 
@@ -49,11 +46,9 @@ func DefaultOperatorConfig(angeeRoot string) *OperatorConfig {
 		Runtime:     "docker-compose",
 		Port:        9000,
 		AngeeRoot:   angeeRoot,
-		DjangoURL:   "http://localhost:8000",
 		BindAddress: "127.0.0.1",
 		CORSOrigins: []string{"http://localhost:*"},
 		Docker: DockerConfig{
-			Socket:  "/var/run/docker.sock",
 			Network: "angee-net",
 		},
 	}

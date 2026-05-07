@@ -29,7 +29,7 @@ The template can be local, bundled, or fetched from a Git URL. Angee renders it 
 
 The template does not keep running the stack. Once `angee.yaml` exists, the operator works from that manifest.
 
-The provisioning path belongs to the operator, not to a separate CLI implementation. The CLI calls the same operator runtime that a long-running operator, MCP client, or Django backend can use for stacks, workspaces, agents, services, and MCP servers.
+The provisioning path belongs to the operator, not to a separate CLI implementation. The CLI calls the same operator runtime that a long-running operator, MCP client, or application backend can use for stacks, workspaces, agents, services, and MCP servers.
 
 ## How The Operator Works
 
@@ -44,7 +44,7 @@ The loop is:
 3. Compile deployment backend files if needed, such as `docker-compose.yaml` or Kubernetes manifests.
 4. Apply changes through the selected backend.
 5. Observe services, jobs, workflows, agents, and logs.
-6. Store state in one or more state sources, such as files, a Django API, a Django database, or Temporal persistence.
+6. Store state in one or more state sources, such as files, an application API, an application database, or Temporal persistence.
 
 The operator can run locally for development or as a long-running service in staging/production.
 
@@ -93,7 +93,7 @@ angee workspace init feat-x --branch feat-x --yes
 angee agent init feat-x --template agents/angee-developer --branch feat-x --yes
 ```
 
-The CLI submits the request. The operator provisions the workspace or agent from `angee.yaml` plus the selected templates. The same path is available to HTTP, MCP, and a future Django control plane.
+The CLI submits the request. The operator provisions the workspace or agent from `angee.yaml` plus the selected templates. The same path is available to HTTP, MCP, and application control planes.
 
 ## Scaling Later
 

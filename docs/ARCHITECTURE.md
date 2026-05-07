@@ -13,7 +13,7 @@ Angee has one user model: templates create `angee.yaml`, and the operator reconc
 | `angee.yaml` | Desired-state manifest under `$ANGEE_ROOT`. |
 | Copier templates | Render or update stack, workspace, and agent files. |
 | Deployment backend | Runs actual workloads. Docker Compose first, Kubernetes later. |
-| State sources | Files, Django API, Django database, and future Temporal persistence. Multiple sources can be used together. |
+| State sources | Files, application API, application database, and future Temporal persistence. Multiple sources can be used together. |
 
 ## Command Flow
 
@@ -94,7 +94,7 @@ This same pipeline is used by:
 - `angee dev`
 - HTTP API
 - MCP API
-- Django backend control plane
+- Application backend control plane
 
 ## Templates
 
@@ -122,15 +122,9 @@ Temporal is the target durable workflow backend for long-running provisioning an
 
 ## State Sources
 
-The operator can combine state sources:
+The operator can combine state sources declared in `$ANGEE_ROOT/angee.yaml`.
 
-```sh
-angee operator --state-source file
-angee operator --state-source file --state-source django-api
-angee operator --state-source django-api --state-source django-db
-```
-
-`file` stores local state under `$ANGEE_ROOT/state/`. `django-api` uses backend APIs. `django-db` reads and writes the Django database directly when colocated.
+`file` stores local state under `$ANGEE_ROOT/state/`. `django-api` uses application backend APIs. `django-db` reads and writes the application database directly when colocated.
 
 ## Non-Goals
 

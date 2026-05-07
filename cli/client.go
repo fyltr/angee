@@ -192,18 +192,6 @@ func localPost(ctx context.Context, rootPath, path string, reqBody any) (any, er
 			req.Name = pathSegment(path, 2)
 		}
 		return platform.AgentDestroy(ctx, req)
-	case strings.HasPrefix(path, "/agents/") && strings.HasSuffix(path, "/chat"):
-		req := reqBody.(api.AgentChatRequest)
-		if req.Name == "" {
-			req.Name = pathSegment(path, 2)
-		}
-		return platform.AgentChat(ctx, req)
-	case strings.HasPrefix(path, "/agents/") && strings.HasSuffix(path, "/ask"):
-		req := reqBody.(api.AgentAskRequest)
-		if req.Name == "" {
-			req.Name = pathSegment(path, 2)
-		}
-		return platform.AgentAsk(ctx, req)
 	case strings.HasPrefix(path, "/agents/") && strings.HasSuffix(path, "/start"):
 		return platform.AgentStart(ctx, pathSegment(path, 2))
 	case strings.HasPrefix(path, "/agents/") && strings.HasSuffix(path, "/stop"):
@@ -215,8 +203,7 @@ func localPost(ctx context.Context, rootPath, path string, reqBody any) (any, er
 	case path == "/reconcile":
 		return platform.Reconcile(ctx, reqBody.(api.ReconcileRequest))
 	case path == "/deploy":
-		req, _ := reqBody.(api.DeployRequest)
-		return platform.Deploy(ctx, req.Message)
+		return platform.Deploy(ctx)
 	case path == "/rollback":
 		return platform.Rollback(ctx, reqBody.(api.RollbackRequest).SHA)
 	case path == "/pull":

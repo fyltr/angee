@@ -69,8 +69,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /agents/{name}/update", s.handleAgentUpdate)
 	mux.HandleFunc("POST /agents/{name}/restart", s.handleAgentRestart)
 	mux.HandleFunc("POST /agents/{name}/destroy", s.handleAgentDestroy)
-	mux.HandleFunc("POST /agents/{name}/chat", s.handleAgentChat)
-	mux.HandleFunc("POST /agents/{name}/ask", s.handleAgentAsk)
 	mux.HandleFunc("POST /reconcile", s.handleReconcile)
 
 	// Deployment lifecycle

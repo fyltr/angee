@@ -73,11 +73,9 @@ angee agent init feat-refactor-2 \
   --yes
 ```
 
-Interact with the agent:
+Inspect the agent runtime:
 
 ```sh
-angee agent chat feat-refactor-2
-angee agent ask feat-refactor-2 "summarize the current branch"
 angee agent logs feat-refactor-2 --follow
 ```
 

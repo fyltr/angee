@@ -7,25 +7,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var deployMessage string
-
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy the current angee.yaml to the runtime",
-	Long: `Compile angee.yaml and apply it to the running platform.
-
-This is equivalent to asking the admin agent to deploy, but bypasses
-the agent for direct operator interaction.`,
-	RunE: runDeploy,
-}
-
-func init() {
-	deployCmd.Flags().StringVarP(&deployMessage, "message", "m", "", "Commit message for this deploy")
+	Long:  `Compile angee.yaml and apply it to the running platform.`,
+	RunE:  runDeploy,
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
 	var result api.ApplyResult
-	if _, err := apiPost("/deploy", api.DeployRequest{Message: deployMessage}, &result); err != nil {
+	if _, err := apiPost("/deploy", api.DeployRequest{}, &result); err != nil {
 		return fmt.Errorf("deploying: %w", err)
 	}
 

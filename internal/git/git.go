@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -113,11 +114,6 @@ func (r *Repo) CurrentSHA() (string, error) {
 	return r.run(context.Background(), "rev-parse", "HEAD")
 }
 
-// CurrentBranch returns the name of the current branch.
-func (r *Repo) CurrentBranch() (string, error) {
-	return r.run(context.Background(), "rev-parse", "--abbrev-ref", "HEAD")
-}
-
 // Log returns the last n commit log entries.
 func (r *Repo) Log(n int) ([]CommitInfo, error) {
 	return r.LogCtx(context.Background(), n)
@@ -153,16 +149,6 @@ func (r *Repo) LogCtx(ctx context.Context, n int) ([]CommitInfo, error) {
 	return commits, nil
 }
 
-// Diff returns the unstaged diff of the repository.
-func (r *Repo) Diff() (string, error) {
-	return r.run(context.Background(), "diff")
-}
-
-// DiffCached returns the staged diff.
-func (r *Repo) DiffCached() (string, error) {
-	return r.run(context.Background(), "diff", "--cached")
-}
-
 // Status returns the short git status output.
 func (r *Repo) Status() (string, error) {
 	return r.run(context.Background(), "status", "--short")
@@ -177,28 +163,6 @@ func (r *Repo) HasChanges() (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
-// Checkout switches to the given branch, creating it if create is true.
-//
-// `git checkout -b NAME` rejects a `--` separator before NAME, so we rely
-// on validateRef alone to keep the branch name out of git's flag namespace.
-func (r *Repo) Checkout(branch string, create bool) error {
-	if err := validateRef(branch); err != nil {
-		return err
-	}
-	args := []string{"checkout"}
-	if create {
-		args = append(args, "-b")
-	}
-	args = append(args, branch)
-	_, err := r.run(context.Background(), args...)
-	return err
-}
-
-// Revert creates a revert commit for the given SHA.
-func (r *Repo) Revert(sha string) error {
-	return r.RevertCtx(context.Background(), sha)
-}
-
 // RevertCtx creates a revert commit; ctx cancellation kills git.
 // SHA is validated against refRE so it can't smuggle a git flag.
 func (r *Repo) RevertCtx(ctx context.Context, sha string) error {
@@ -207,11 +171,6 @@ func (r *Repo) RevertCtx(ctx context.Context, sha string) error {
 	}
 	_, err := r.run(ctx, "revert", "--no-edit", "--", sha)
 	return err
-}
-
-// ResetHard resets to a given ref (use with care).
-func (r *Repo) ResetHard(ref string) error {
-	return r.ResetHardCtx(context.Background(), ref)
 }
 
 // ResetHardCtx resets to ref; ctx cancellation kills git.
@@ -224,16 +183,6 @@ func (r *Repo) ResetHardCtx(ctx context.Context, ref string) error {
 	// (it's not a pathspec command), so we rely on validateRef alone.
 	_, err := r.run(ctx, "reset", "--hard", ref)
 	return err
-}
-
-// Clone clones a git repository into dest. If branch is non-empty, only that
-// branch is cloned (--branch). The dest directory must not already exist.
-//
-// Per-protocol config restricts which transports git will follow, limiting
-// drive-by exposure if `url` ever flows from an untrusted source. These
-// `--config` values apply only to this single invocation.
-func Clone(url, dest, branch string) error {
-	return CloneCtx(context.Background(), url, dest, branch)
 }
 
 // CloneCtx is Clone with a context for cancellation.
@@ -285,14 +234,29 @@ func (r *Repo) SyncCtx(ctx context.Context, ref string) error {
 	return err
 }
 
-// IsRepo returns true if the path is a git repository.
+// IsRepo returns true only when path is the repository root. Git normally
+// searches parent directories, but ANGEE_ROOT can live inside an ignored app
+// repository; parent repositories must not be treated as the ANGEE_ROOT repo.
 func IsRepo(path string) bool {
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
-	return cmd.Run() == nil
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	repoRoot, err := filepath.Abs(strings.TrimSpace(string(out)))
+	if err != nil {
+		return false
+	}
+	return canonicalPath(repoRoot) == canonicalPath(abs)
 }
 
-// HasInitialCommit returns true if the repo has at least one commit.
-func (r *Repo) HasInitialCommit() bool {
-	_, err := r.run(context.Background(), "rev-parse", "HEAD")
-	return err == nil
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
 }

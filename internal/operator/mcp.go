@@ -141,7 +141,7 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 
 	// Deploy
 	case "deploy":
-		return s.Platform.Deploy(ctx, "")
+		return s.Platform.Deploy(ctx)
 	case "deploy_plan":
 		return s.Platform.Plan(ctx)
 	case "deploy_rollback":
@@ -194,14 +194,6 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args json.RawMes
 			return nil, fmt.Errorf("invalid arguments: %w", err)
 		}
 		return s.Platform.AgentLogs(ctx, p.Name, p.Lines)
-
-	// Credentials
-	case "credentials_list":
-		return nil, fmt.Errorf("credentials backend not configured")
-	case "credentials_set":
-		return nil, fmt.Errorf("credentials backend not configured")
-	case "credentials_delete":
-		return nil, fmt.Errorf("credentials backend not configured")
 
 	// History
 	case "history":

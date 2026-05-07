@@ -56,10 +56,6 @@ func rootFromRequest(req any) string {
 		return r.Root
 	case api.AgentActionRequest:
 		return r.Root
-	case api.AgentChatRequest:
-		return r.Root
-	case api.AgentAskRequest:
-		return r.Root
 	case api.ReconcileRequest:
 		return r.Root
 	default:

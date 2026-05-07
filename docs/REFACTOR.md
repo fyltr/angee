@@ -52,7 +52,7 @@ All of these entry points must call the same operator provisioning code:
 | `angee dev` | Runs the in-process operator runtime for the lifetime of the dev command and reconciles the dev stack. |
 | HTTP API | Lets dashboards, CI, or apps call the same provisioning/reconcile path. |
 | MCP API | Lets agents provision and operate resources through the same operator path. |
-| Django backend | Can control the operator by API or colocated DB access, but should not duplicate provisioning logic. |
+| Application backend | Can control the operator by API or colocated DB access, but should not duplicate provisioning logic. |
 
 This avoids a CLI-only init implementation and keeps local dev, staging, server-side platform provisioning, and future Kubernetes behavior aligned.
 
@@ -110,15 +110,9 @@ Port leases are self-contained declarations. Do not create separate Copier quest
 
 ## State Sources
 
-The operator can use multiple state sources at the same time:
+The operator can use multiple state sources at the same time. They are declared in `$ANGEE_ROOT/angee.yaml`.
 
-```sh
-angee operator --state-source file
-angee operator --state-source file --state-source django-api
-angee operator --state-source django-api --state-source django-db
-```
-
-`file` stores local state under `$ANGEE_ROOT/state/`. `django-api` talks to a Django backend. `django-db` reads/writes the Django database directly when colocated with the backend. These are deployment choices, not separate resource models.
+`file` stores local state under `$ANGEE_ROOT/state/`. `django-api` talks to an application backend. `django-db` reads/writes an application database directly when colocated with the backend. These are deployment choices, not separate resource models.
 
 ## Implementation Phases
 
@@ -191,5 +185,5 @@ Do not keep unused options, arguments, Cobra commands, runtime adapters, framewo
 - `angee dev` runs the in-process operator runtime and reconciles from `.angee/angee.yaml`.
 - `angee workspace init <name>` provisions through the operator path.
 - `angee agent init <name>` provisions through the operator path.
-- The Django backend can trigger the same operator provisioning path by API or DB-backed state sources.
+- Application backends can trigger the same operator provisioning path by API or DB-backed state sources.
 - Docker Compose staging works from the same manifest model that can later compile to Kubernetes.

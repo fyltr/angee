@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,53 +97,13 @@ func TestLog(t *testing.T) {
 	}
 }
 
-func TestCurrentBranch(t *testing.T) {
-	r := newTestRepo(t)
-	commitFile(t, r, "test.txt", "hello", "init")
-
-	branch, err := r.CurrentBranch()
-	if err != nil {
-		t.Fatalf("CurrentBranch() error: %v", err)
-	}
-	if branch != "main" {
-		t.Errorf("CurrentBranch() = %q, want %q", branch, "main")
-	}
-}
-
-func TestCheckout(t *testing.T) {
-	r := newTestRepo(t)
-	commitFile(t, r, "test.txt", "hello", "init")
-
-	// Create and switch to new branch
-	if err := r.Checkout("feature", true); err != nil {
-		t.Fatalf("Checkout() error: %v", err)
-	}
-
-	branch, err := r.CurrentBranch()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if branch != "feature" {
-		t.Errorf("CurrentBranch() = %q, want %q", branch, "feature")
-	}
-
-	// Switch back
-	if err := r.Checkout("main", false); err != nil {
-		t.Fatalf("Checkout(main) error: %v", err)
-	}
-	branch, _ = r.CurrentBranch()
-	if branch != "main" {
-		t.Errorf("CurrentBranch() = %q, want %q", branch, "main")
-	}
-}
-
 func TestRevert(t *testing.T) {
 	r := newTestRepo(t)
 	commitFile(t, r, "test.txt", "original", "first")
 	sha2 := commitFile(t, r, "test.txt", "changed", "second")
 
 	// Revert the second commit
-	if err := r.Revert(sha2); err != nil {
+	if err := r.RevertCtx(context.Background(), sha2); err != nil {
 		t.Fatalf("Revert() error: %v", err)
 	}
 
@@ -165,6 +126,14 @@ func TestIsRepo(t *testing.T) {
 	empty := t.TempDir()
 	if IsRepo(empty) {
 		t.Error("expected IsRepo=false for empty dir")
+	}
+
+	nested := filepath.Join(r.Path, "child")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if IsRepo(nested) {
+		t.Error("expected IsRepo=false for child of initialized repo")
 	}
 }
 
@@ -204,10 +173,10 @@ func TestValidateRef(t *testing.T) {
 func TestRevertCtx_rejectsFlagInjection(t *testing.T) {
 	r := newTestRepo(t)
 	commitFile(t, r, "test.txt", "x", "first")
-	if err := r.Revert("--upload-pack=evil"); err == nil {
+	if err := r.RevertCtx(context.Background(), "--upload-pack=evil"); err == nil {
 		t.Fatal("Revert with flag-shaped sha should error")
 	}
-	if err := r.ResetHard("--upload-pack=evil"); err == nil {
+	if err := r.ResetHardCtx(context.Background(), "--upload-pack=evil"); err == nil {
 		t.Fatal("ResetHard with flag-shaped ref should error")
 	}
 }

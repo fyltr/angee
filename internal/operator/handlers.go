@@ -196,40 +196,6 @@ func (s *Server) handleAgentDestroy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
-	var req api.AgentChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err)
-		return
-	}
-	if req.Name == "" {
-		req.Name = r.PathValue("name")
-	}
-	result, err := s.Platform.AgentChat(r.Context(), req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) handleAgentAsk(w http.ResponseWriter, r *http.Request) {
-	var req api.AgentAskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err)
-		return
-	}
-	if req.Name == "" {
-		req.Name = r.PathValue("name")
-	}
-	result, err := s.Platform.AgentAsk(r.Context(), req)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, result)
-}
-
 func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	var req api.ReconcileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -245,9 +211,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
-	var req api.DeployRequest
-	json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
-	result, err := s.Platform.Deploy(r.Context(), req.Message)
+	result, err := s.Platform.Deploy(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return

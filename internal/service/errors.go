@@ -21,10 +21,6 @@ func BadRequest(msg string) error { return &ServiceError{400, msg} }
 // Conflict returns a 409 error.
 func Conflict(msg string) error { return &ServiceError{409, msg} }
 
-// NotImplemented returns a 501 error for target endpoints whose command/API
-// surface exists before the provisioning implementation is filled in.
-func NotImplemented(msg string) error { return &ServiceError{501, msg} }
-
 // ErrorStatus extracts the HTTP status code from an error.
 // ServiceError returns its Status; all other errors default to 500.
 func ErrorStatus(err error) int {

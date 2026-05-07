@@ -43,7 +43,9 @@ func Initialize(path string) (*Root, error) {
 
 	r := &Root{Path: path, Git: git.New(path)}
 
-	// Initialize git
+	// Initialize the ANGEE_ROOT-owned repo. git.IsRepo intentionally ignores
+	// parent repositories so a project-local .angee stays independent from the
+	// application repo that normally ignores it.
 	if !git.IsRepo(path) {
 		if err := r.Git.Init(); err != nil {
 			return nil, fmt.Errorf("git init: %w", err)
@@ -98,7 +100,7 @@ workspaces/**/.env
 	return os.WriteFile(filepath.Join(r.Path, Gitignore), []byte(content), 0644)
 }
 
-// WriteAgeeYAML writes an angee.yaml to the root.
+// WriteAngeeYAML writes an angee.yaml to the root.
 func (r *Root) WriteAngeeYAML(content string) error {
 	return os.WriteFile(filepath.Join(r.Path, AngeeYAML), []byte(content), 0644)
 }
@@ -163,7 +165,8 @@ func (r *Root) EnvFilePath() string {
 	return filepath.Join(r.Path, ".env")
 }
 
-// InitialCommit stages all files and creates the first commit.
+// InitialCommit stages the non-ignored ANGEE_ROOT files and creates the first
+// config-history commit inside the ANGEE_ROOT repo.
 func (r *Root) InitialCommit() error {
 	if err := r.Git.Add("."); err != nil {
 		return err

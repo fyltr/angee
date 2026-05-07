@@ -61,7 +61,7 @@ Angee uses terms that line up with Docker Compose, Kubernetes, and Temporal wher
 | ANGEE_ROOT | The Angee control directory for one stack. In examples this is usually `.angee`, but it can be any path. |
 | Stack | The deployable or runnable unit managed by one ANGEE_ROOT. This is closest to a Docker Compose project, a Kubernetes namespace plus release, or a Temporal namespace for the stack's workflows. |
 | Manifest | YAML desired state for a stack, workspace, or agent. The operator must be able to reconcile directly from this YAML. |
-| Control plane | The API/UI that asks the operator to reconcile. Locally this is usually the CLI. Server-side this can be a Django backend. |
+| Control plane | The API/UI that asks the operator to reconcile. Locally this is usually the CLI. Server-side this can be an application backend. |
 | State source | One place the operator reads or writes observed state, locks, leases, workflow state, and service/job history. The operator can use multiple state sources at the same time, such as files plus API plus database. |
 | Stack worktree | The directory that receives stack template output. For project-local roots, this is usually the parent of `./.angee`. |
 | Template | A stack, workspace, or agent template, referenced as `stacks/<name>`, `workspaces/<name>`, or `agents/<name>`. |
@@ -201,10 +201,6 @@ angee stack init dev --root /tmp/notes-angee --yes
 | `ANGEE_ROOT` | Auto-detected; `./.angee` for new init; `~/.angee` fallback for existing stacks | Path to the Angee control directory. |
 | `ANGEE_OPERATOR_URL` | unset | Explicit operator service URL for remote-backed commands. |
 | `ANGEE_API_KEY` | empty | Bearer token for operator API calls. |
-| `ANGEE_TEMPLATE_ROOT` | unset | Optional user template library searched before global templates. |
-| `ANGEE_STATE_SOURCES` | `file` | Comma-separated operator state sources, such as `file`, `file,django-api`, or `django-api,django-db`. |
-| `ANGEE_DJANGO_URL` | unset | Django backend URL when the operator is controlled through Django APIs. |
-| `ANGEE_DATABASE_URL` | unset | Django database connection string when the operator uses direct DB state. |
 
 ### Files Under ANGEE_ROOT
 
@@ -223,17 +219,13 @@ Copier answers are written next to the rendered template output as `.copier-answ
 
 ### Git Ignore Defaults
 
-For project-local roots, templates should normally commit only safe Angee metadata and ignore runtime state:
+For project-local roots, the application repository should normally ignore the
+rendered `$ANGEE_ROOT` directory. Angee keeps config history inside the
+ANGEE_ROOT-owned git repo; runtime state and secrets remain ignored there:
 
 ```gitignore
-.angee/.env
-.angee/state/
-.angee/data/
-.angee/workspaces/
-.angee/agents/
+$ANGEE_ROOT/
 ```
-
-Commit `.angee/angee.yaml` when the project uses a project-local root. Do not commit secret files.
 
 ## Template Resolution
 
@@ -259,19 +251,16 @@ When `--template` is omitted, Angee chooses a logical ref from the command:
 |---|---|
 | `angee init` | Shorthand for `angee stack init dev` when `stacks/dev` exists, otherwise `angee stack init default`. |
 | `angee stack init <name>` | `stacks/<name>` |
-| `angee stack switch <name>` | `stacks/<name>` |
 | `angee workspace init <workspace>` | `workspaces.default_template` from `$ANGEE_ROOT/angee.yaml` |
 | `angee agent init <agent>` | `agents.default_template` from `$ANGEE_ROOT/angee.yaml`, or require `--template` if no default is declared |
 
 For a logical ref such as `stacks/dev`, Angee looks in this order:
 
 1. Explicit `--template` path or Git ref, if supplied.
-2. `templates/stacks/dev` under the current worktree.
-3. `templates/stacks/dev` under the stack worktree recorded in `$ANGEE_ROOT/angee.yaml`.
-4. `$ANGEE_ROOT/templates/stacks/dev`.
-5. `$ANGEE_TEMPLATE_ROOT/stacks/dev`, if `ANGEE_TEMPLATE_ROOT` is set.
-6. `~/.angee/templates/stacks/dev`.
-7. First-party templates bundled with or installed for Angee.
+2. `examples/templates/stacks/dev` relative to the current directory.
+3. `templates/stacks/dev` relative to the current directory.
+4. `stacks/dev` relative to the current directory.
+5. First-party templates bundled with or installed for Angee.
 
 The same lookup shape applies to `workspaces/<name>` and `agents/<name>`.
 
@@ -293,7 +282,7 @@ Operator responsibilities:
 
 | Responsibility | Meaning |
 |---|---|
-| Load manifest | Read `$ANGEE_ROOT/angee.yaml` or an explicit `--file PATH`. |
+| Load manifest | Read `$ANGEE_ROOT/angee.yaml`. |
 | Provision | Run the same template/source/secret/port pipeline for stack init, workspace init, agent init, service provisioning, and MCP server provisioning. |
 | Reconcile | Compare desired sources, volumes, services, jobs, workflows, secrets, and port leases to actual state. |
 | Compile | Produce deployment backend files such as `docker-compose.yaml` or Kubernetes manifests when needed. |
@@ -304,16 +293,15 @@ Operator responsibilities:
 Operator process forms:
 
 ```sh
-angee operator --root .angee
-angee operator --file .angee/angee.yaml
-angee operator --file ./angee.yaml --root /tmp/angee
+angee --root .angee operator
+angee --root /tmp/angee operator --bind 127.0.0.1 --port 9000
 ```
 
-`--file` points at the YAML manifest. `--root` points at the state directory used for secrets, logs, leases, generated files, and runtime state.
+`--root` points at the ANGEE_ROOT directory that contains `angee.yaml`, state, secrets, logs, leases, generated backend files, and runtime state.
 
 Most users do not run `angee operator` directly. Commands such as `angee init`, `angee stack init`, `angee workspace init`, `angee agent init`, `angee dev`, `angee up`, and `angee deploy` dispatch to the in-process operator runtime. `--operator` or `ANGEE_OPERATOR_URL` explicitly selects a running operator service.
 
-There is one provisioning path. The CLI does not have a separate implementation for stack, workspace, or agent initialization. It has the operator compiled in, dispatches through shared API request/response types without opening ports, and reuses the same provisioning code that HTTP, MCP, and a Django control plane can call.
+There is one provisioning path. The CLI does not have a separate implementation for stack, workspace, or agent initialization. It has the operator compiled in, dispatches through shared API request/response types without opening ports, and reuses the same provisioning code that HTTP, MCP, and application control planes can call.
 
 ### Control Plane And State Sources
 
@@ -321,19 +309,11 @@ The operator has separate desired-state and observed-state inputs. State sources
 
 | Axis | Local mode | Server-side mode |
 |---|---|---|
-| Control plane | CLI dispatches to the in-process operator runtime. | Django backend controls the operator through API calls, queued workflows, or direct deployment integration. |
-| Desired state | `$ANGEE_ROOT/angee.yaml` or `--file PATH`. | Django DB rows can be the desired state, or Django can render/export YAML for the operator. |
-| State sources | Usually files under `$ANGEE_ROOT/state/`. | Any combination of Django API, Django database, file cache, and Temporal persistence for durable workflows. |
+| Control plane | CLI dispatches to the in-process operator runtime. | An application backend controls the operator through API calls, queued workflows, or direct deployment integration. |
+| Desired state | `$ANGEE_ROOT/angee.yaml`. | Application DB rows can be the desired state, or the application can render/export YAML for the operator. |
+| State sources | Usually files under `$ANGEE_ROOT/state/`. | Any combination of application API, application database, file cache, and Temporal persistence for durable workflows. |
 
-Supported operator state source forms:
-
-```sh
-angee operator --file .angee/angee.yaml --state-source file
-angee operator --file .angee/angee.yaml --state-source file --state-source django-api --django-url https://app.example.com
-angee operator --state-source django-api --state-source django-db --django-url https://app.example.com --database-url "$DATABASE_URL"
-```
-
-`file` means the operator reads/writes local state under `$ANGEE_ROOT/state/`. `django-api` means the operator talks to the Django backend over its API. `django-db` means the operator is colocated with the Django deployment and can read/write the Django database directly for workspace, source, volume, service, job, workflow, and port lease state.
+State sources are declared in `$ANGEE_ROOT/angee.yaml`, not as operator CLI flags. `file` means the operator reads/writes local state under `$ANGEE_ROOT/state/`. `django-api` means the operator talks to an application backend over its API. `django-db` means the operator is colocated with the application deployment and can read/write its database for workspace, source, volume, service, job, workflow, and port lease state.
 
 Direct DB state is an optimization and deployment choice, not a different user model. The same resources still exist: sources, volumes, services, jobs, workflows, agents, secrets, and port leases. If multiple state sources are configured, the operator reconciles them according to the manifest's source priority and write policy.
 
@@ -366,9 +346,6 @@ These options are reused by init, update, workspace, and agent commands.
 | `--secret NAME=VALUE` | Supply a secret. Repeatable. |
 | `--port NAME=PORT` | Reserve a numeric host port for a template-declared port lease. Repeatable. |
 | `--yes`, `-y` | Non-interactive mode. Use defaults and fail on missing required values. |
-| `--dry-run` | Show what would happen without writing files or starting services. |
-| `--skip-post-init` | Render and write state, but skip the template-declared post-init workflow. |
-| `--keep-failed` | Keep partial workspace or agent files after provisioning fails. |
 
 Secret value forms:
 
@@ -491,12 +468,9 @@ Workspace options:
 | `--branch REF` | Branch or ref used by sources that follow the workspace branch. |
 | `--override SOURCE=REF` | Override one source ref. Repeatable. |
 | `--create-branches` | Create missing same-name branches from their default refs. |
-| `--agent-template REF` | Also render an agent template and place output under `$ANGEE_ROOT/agents/<workspace>/`. |
 | `--port NAME=PORT` | Override a template-declared port lease. |
 | `--secret NAME=VALUE` | Supply workspace or agent secret. |
 | `--start` | Start declared services after provisioning. |
-| `--no-start` | Provision only. This is the default unless the template says otherwise. |
-| `--keep-failed` | Keep partial files after provisioning fails. |
 | `--yes` | Non-interactive mode. |
 
 Default output without an agent template:
@@ -544,7 +518,6 @@ Examples:
 
 ```sh
 angee stack update
-angee stack update --ref v4
 angee stack update --set domain=staging.example.com
 angee workspace update feat-refactor-2 --ref v4
 angee agent update feat-refactor-2 --ref v4
@@ -558,11 +531,7 @@ Options:
 | `--set KEY=VALUE` | Change or supply an answer during update. |
 | `--secret NAME=VALUE` | Add or replace a secret. |
 | `--port NAME=PORT` | Change a port lease when allowed. |
-| `--conflict inline` | Put conflicts inline in files. Default. |
-| `--conflict rej` | Write rejected hunks to `.rej` files. |
 | `--yes` | Use existing answers and defaults without prompting. |
-| `--dry-run` | Preview update without changing files. |
-| `--skip-post-init` | Do not run the post-update workflow. |
 
 Behavior:
 
@@ -571,45 +540,36 @@ Behavior:
 3. Run Copier update using `.copier-answers.yml`.
 4. Preserve existing secrets unless changed explicitly.
 5. Preserve existing port leases unless changed explicitly.
-6. Recompile generated backend files.
-7. Run the post-update workflow unless skipped.
+6. Recompile generated backend files when the selected backend needs them.
 
 ## `angee stack`
 
-Inspect and change the active stack template.
+Initialize or update the current stack template.
 
 ```sh
-angee stack show
-angee stack validate
-angee stack templates [--kind stack|workspace|agent]
-angee stack switch <name> [options]
-angee stack set-template <ref> [options]
+angee stack init <name> [path] [options]
+angee stack update [options]
 ```
 
 Commands:
 
 | Command | Meaning |
 |---|---|
-| `stack show` | Print the resolved stack manifest. |
-| `stack validate` | Validate the manifest, template state, secrets, port leases, services, jobs, and workflows. |
-| `stack templates` | List templates visible to the resolver. |
-| `stack switch <name>` | Set the active template to `stacks/<name>` and run `angee stack update`. |
-| `stack set-template <ref>` | Set the active template to an explicit ref and run `angee stack update`. |
+| `stack init <name> [path]` | Render a stack template into a worktree and initialize `$ANGEE_ROOT/angee.yaml`. |
+| `stack update` | Re-render the active Copier template and preserve resolved secrets and port leases unless explicitly changed. |
 
 Examples:
 
 ```sh
-angee stack show
-angee stack templates --kind stack
-angee stack switch staging-docker --set domain=staging.example.com --yes
-angee stack set-template gh:org/templates#templates/stacks/prod --ref v2.0.0
+angee stack init dev . --template ./templates/stacks/dev --yes
+angee stack update --set domain=staging.example.com --yes
 ```
 
 ## `angee dev`
 
 Run the current stack's local dev services, prerequisite jobs, and optional dev workflow.
 
-`angee dev` runs the operator runtime for the selected ANGEE_ROOT in the foreground. The CLI is the terminal UI and lifecycle owner; the operator runtime is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, server-side Django control, and future Kubernetes/Temporal execution without leaving a background daemon behind.
+`angee dev` runs the operator runtime for the selected ANGEE_ROOT in the foreground. The CLI is the terminal UI and lifecycle owner; the operator runtime is the reconciler. This keeps dev mode on the same path as `up`, `deploy`, application control planes, and future Kubernetes/Temporal execution without leaving a background daemon behind.
 
 ```sh
 angee dev [options]
@@ -619,7 +579,6 @@ Options:
 
 | Option | Meaning |
 |---|---|
-| `--list` | Show declared dev services, jobs, and workflow steps, then exit. |
 | `--only a,b` | Run only these service, job, or workflow step names. |
 | `--except a,b` | Run all declared dev services, jobs, and workflow steps except these names. |
 | `--ui lines` | Prefix output lines by service, job, or workflow step. Default. |
@@ -629,7 +588,6 @@ Examples:
 
 ```sh
 angee dev
-angee dev --list
 angee dev --only web,ui
 angee dev --except worker
 angee dev --ui panes
@@ -637,126 +595,21 @@ angee dev --ui panes
 
 The ad-hoc operator reads service names, commands, dependencies, readiness checks, cwd, env, sources, volumes, workflows, jobs, and port leases from `$ANGEE_ROOT/angee.yaml`. Service names are template-defined.
 
-## Sources
-
-Sources are named content trees. A source can be checked out, copied, generated, mounted from a volume, or refreshed from an external location.
-
-```sh
-angee source list
-angee source show <source>
-angee source sync <source>
-angee source sync --all
-```
-
-Commands:
-
-| Command | Meaning |
-|---|---|
-| `source list` | List sources declared by the current stack or workspace. |
-| `source show <source>` | Show source kind, ref, tree, target path, and current materialized state. |
-| `source sync <source>` | Reconcile one source to its declared `ref` and `tree`. |
-| `source sync --all` | Reconcile all sources. |
-
-Examples:
-
-```sh
-angee source list
-angee source show app
-angee source sync app
-angee source sync --all
-```
-
-## Services
-
-Services are long-running workloads. A service can run as a local process, Docker container, or future Kubernetes workload. A service may have port leases and mounted sources or volumes.
-
-```sh
-angee service list
-angee service show <service>
-angee service start <service>
-angee service stop <service>
-angee service restart <service>
-angee service logs <service> [options]
-```
-
-Options:
-
-| Option | Command | Meaning |
-|---|---|---|
-| `-f`, `--follow` | `service logs` | Follow logs. |
-| `-n`, `--lines N` | `service logs` | Number of lines to show. Default: `100`. |
-
-Examples:
-
-```sh
-angee service list
-angee service show web
-angee service restart worker
-angee service logs web --follow
-```
-
-Stack-level shortcuts:
-
-```sh
-angee ls
-angee logs [service]
-angee up [service...]
-angee down [service...]
-angee restart [service...]
-```
-
-## Workflows, Jobs, And `angee run`
-
-Workflows are durable orchestrations made of activities. Locally, a workflow may run inline. On a server-side platform, a workflow may be backed by Temporal.
-
-Jobs are one-shot workloads. Migrations, build steps, fixture loading, checks, and user-declared one-off commands are jobs. A workflow activity may run a job, but not every job needs a durable workflow.
-
-```sh
-angee workflow list
-angee workflow show <workflow-id-or-name>
-angee workflow logs <workflow-id-or-name> [options]
-angee workflow cancel <workflow-id>
-angee job list
-angee job show <job-id-or-name>
-angee job run <name> [-- args...]
-angee job logs <job-id-or-name> [options]
-angee job cancel <job-id>
-angee run <name> [-- args...]
-angee run --list
-```
-
-`angee run <name>` is the short form for running a named job declared by the stack.
-
-Examples:
-
-```sh
-angee run build
-angee run migrate
-angee run fixtures -- load
-angee job run doctor
-angee workflow show deploy
-angee job logs migrate --follow
-```
-
-Top-level aliases such as `angee build`, `angee migrate`, `angee doctor`, and `angee fixtures` may exist as shortcuts. They must dispatch to declared jobs from `$ANGEE_ROOT/angee.yaml`. The CLI should not contain framework-specific implementation for those names.
-
 ## Deployment Backend Commands
 
 Use these when the stack renders deployment backend files such as `docker-compose.yaml`, Kubernetes manifests, or Angee intermediate files compiled into one of those backends.
 
 ```sh
-angee compile
-angee up [service...]
-angee down [service...]
-angee restart [service...]
-angee pull [service...]
+angee up
+angee down
+angee restart
+angee pull
 ```
 
 Commands:
 
 | Command | Meaning |
 |---|---|
-| `compile` | Compile stack inputs into deployment backend files. |
 | `up` | Compile and start stack services. |
 | `down` | Stop stack services. |
 | `restart` | Recompile, stop, and start services again. |
@@ -765,9 +618,7 @@ Commands:
 Examples:
 
 ```sh
-angee compile
 angee up
-angee up web worker
 angee pull && angee restart
 angee down
 ```
@@ -780,7 +631,7 @@ Use these when an operator is running for the stack.
 
 ```sh
 angee plan
-angee deploy [-m MESSAGE]
+angee deploy
 angee rollback <sha|HEAD~N>
 angee status
 angee ls
@@ -804,7 +655,6 @@ Options:
 
 | Option | Command | Meaning |
 |---|---|---|
-| `-m`, `--message TEXT` | `deploy` | Commit/deploy message. |
 | `-f`, `--follow` | `logs` | Follow logs. |
 | `-n`, `--lines N` | `logs` | Number of lines to show. Default: `100`. |
 
@@ -812,7 +662,7 @@ Examples:
 
 ```sh
 angee plan
-angee deploy -m "enable staging worker"
+angee deploy
 angee status
 angee logs web --follow
 angee rollback HEAD~1
@@ -824,11 +674,8 @@ Manage existing workspaces.
 
 ```sh
 angee workspace list
-angee workspace show <workspace>
 angee workspace update <workspace> [options]
 angee workspace dev <workspace> [dev-options]
-angee workspace logs <workspace> [options]
-angee workspace destroy <workspace> [--force]
 ```
 
 Commands:
@@ -836,20 +683,15 @@ Commands:
 | Command | Meaning |
 |---|---|
 | `workspace list` | List managed workspaces. |
-| `workspace show <workspace>` | Show sources, volumes, services, jobs, workflows, port leases, state, and paths. |
 | `workspace update <workspace>` | Update workspace from its template and sync sources. |
 | `workspace dev <workspace>` | Run the workspace's local dev services. |
-| `workspace logs <workspace>` | Show workflow, job, or service logs. |
-| `workspace destroy <workspace>` | Stop services, release port leases, and remove workspace files. |
 
 Examples:
 
 ```sh
 angee workspace list
-angee workspace show feat-refactor-2
 angee workspace dev feat-refactor-2 --only web,ui
 angee workspace update feat-refactor-2 --ref v4
-angee workspace destroy feat-refactor-2 --force
 ```
 
 ## Agent Commands
@@ -864,8 +706,6 @@ angee agent start <agent>
 angee agent stop <agent>
 angee agent restart <agent>
 angee agent logs <agent> [options]
-angee agent chat <agent>
-angee agent ask <agent> <message>
 angee agent update <agent> [options]
 angee agent destroy <agent> [--force]
 ```
@@ -882,7 +722,6 @@ angee agent destroy <agent> [--force]
 | `--secret NAME=VALUE` | Supply agent or workspace secret. |
 | `--port NAME=PORT` | Override a template-declared port lease. |
 | `--start` | Start agent services after provisioning. |
-| `--keep-failed` | Keep partial files after provisioning fails. |
 | `--yes` | Non-interactive mode. |
 
 Examples:
@@ -896,8 +735,6 @@ angee agent init feat-refactor-2 \
   --yes
 
 angee agent start feat-refactor-2
-angee agent chat feat-refactor-2
-angee agent ask feat-refactor-2 "summarize the current branch"
 angee agent logs feat-refactor-2 --follow
 ```
 
@@ -907,9 +744,7 @@ Agent names are user-defined. The CLI should not assume `admin`, `developer`, or
 
 ```sh
 angee destroy [--force]
-angee workspace destroy <workspace> [--force]
 angee agent destroy <agent> [--force]
-angee gc
 ```
 
 Commands:
@@ -917,9 +752,7 @@ Commands:
 | Command | Meaning |
 |---|---|
 | `destroy` | Destroy the current ANGEE_ROOT after confirmation. |
-| `workspace destroy` | Stop services, remove one workspace, and release port leases. |
 | `agent destroy` | Stop services, remove one agent workspace, and release port leases. |
-| `gc` | Clean stale leases, dead state entries, orphaned temp dirs, and old logs. |
 
 Use `--force` only in scripts or when confirmation is impossible.
 
@@ -982,12 +815,6 @@ angee up
 angee stack update
 ```
 
-### Switch Stack Target
-
-```sh
-angee stack switch staging-docker --set domain=staging.example.com --yes
-```
-
 ## Exit Behavior
 
 Commands should fail loudly and leave enough state for recovery.
@@ -998,7 +825,7 @@ Commands should fail loudly and leave enough state for recovery.
 | Port already leased or unavailable | Exit non-zero and name the port plus owner if known. |
 | Template update conflict | Exit non-zero after writing Copier conflict markers or `.rej` files. |
 | Workflow, activity, or job fails | Exit non-zero and keep logs under `$ANGEE_ROOT/state/logs/` or the workspace state dir. |
-| Workspace or agent provisioning fails | Exit non-zero and either clean the partial workspace or keep it when `--keep-failed` is set. |
+| Workspace or agent provisioning fails | Exit non-zero and leave the error path visible in the command output. |
 | Service fails to start | Exit non-zero and show the service log location or live log command. |
 
 ## What Not To Expect

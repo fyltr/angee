@@ -111,31 +111,17 @@ type AgentActionRequest struct {
 	Name string `json:"name"`
 }
 
-type AgentChatRequest struct {
-	Root string `json:"root,omitempty"`
-	Name string `json:"name"`
-}
-
-type AgentAskRequest struct {
-	Root    string `json:"root,omitempty"`
-	Name    string `json:"name"`
-	Message string `json:"message"`
-}
-
 type ReconcileRequest struct {
 	Root   string   `json:"root,omitempty"`
 	Mode   string   `json:"mode,omitempty"`
 	Only   []string `json:"only,omitempty"`
 	Except []string `json:"except,omitempty"`
-	Follow bool     `json:"follow,omitempty"`
 }
 
 // ── Deploy ──────────────────────────────────────────────────────────────────
 
 // DeployRequest is sent to POST /deploy.
-type DeployRequest struct {
-	Message string `json:"message,omitempty"`
-}
+type DeployRequest struct{}
 
 // ApplyResult is the outcome of a deploy or agent start.
 type ApplyResult struct {
@@ -230,14 +216,6 @@ type ConfigGetResponse struct {
 	Config any `json:"config"`
 }
 
-// ── Credentials ─────────────────────────────────────────────────────────────
-
-// CredentialSetRequest is sent to POST /credentials.
-type CredentialSetRequest struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
 // ── History ─────────────────────────────────────────────────────────────────
 
 // CommitInfo holds a single git log entry.
@@ -246,18 +224,4 @@ type CommitInfo struct {
 	Message string `json:"message"`
 	Author  string `json:"author"`
 	Date    string `json:"date"`
-}
-
-// ── Chat ────────────────────────────────────────────────────────────────────
-
-// ChatRequest is sent to POST /agents/{name}/chat.
-type ChatRequest struct {
-	Message string `json:"message"`
-	Agent   string `json:"agent,omitempty"`
-}
-
-// ChatResponse is returned by POST /agents/{name}/chat.
-type ChatResponse struct {
-	Response string `json:"response,omitempty"`
-	Message  string `json:"message,omitempty"`
 }

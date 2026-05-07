@@ -21,7 +21,7 @@ The operator owns the full provisioning and reconcile path for:
 - MCP servers
 - deployment backend files
 
-This means `angee stack init`, `angee workspace init`, and `angee agent init` all reuse operator code. A Django backend, HTTP API client, or MCP agent should call the same path.
+This means `angee stack init`, `angee workspace init`, and `angee agent init` all reuse operator code. An application backend, HTTP API client, or MCP agent should call the same path.
 
 ## Reconcile Loop
 
@@ -56,23 +56,17 @@ angee up
 angee deploy
 ```
 
-The operator can also be controlled by a Django backend or directly use the Django database as one state source.
+The operator can also be controlled by an application backend or use an application database as one state source.
 
 ## State Sources
 
-State sources are composable:
-
-```sh
-angee operator --state-source file
-angee operator --state-source file --state-source django-api
-angee operator --state-source django-api --state-source django-db
-```
+State sources are composable and are declared in `$ANGEE_ROOT/angee.yaml`.
 
 | State source | Meaning |
 |---|---|
 | `file` | Local state under `$ANGEE_ROOT/state/`. |
-| `django-api` | State and commands through Django backend APIs. |
-| `django-db` | Direct Django database access when colocated. |
+| `django-api` | State and commands through application backend APIs. |
+| `django-db` | Direct application database access when colocated. |
 | Temporal persistence | Future durable workflow state. |
 
 ## Interfaces

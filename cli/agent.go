@@ -186,30 +186,6 @@ var agentLogsCmd = &cobra.Command{
 	},
 }
 
-var agentChatCmd = &cobra.Command{
-	Use:   "chat <agent>",
-	Short: "Chat with an agent",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateAgentName(args[0]); err != nil {
-			return err
-		}
-		return postProvision("/agents/"+args[0]+"/chat", api.AgentChatRequest{Name: args[0], Root: resolveRoot()})
-	},
-}
-
-var agentAskCmd = &cobra.Command{
-	Use:   "ask <agent> <message>",
-	Short: "Send a one-shot message to an agent",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateAgentName(args[0]); err != nil {
-			return err
-		}
-		return postProvision("/agents/"+args[0]+"/ask", api.AgentAskRequest{Name: args[0], Root: resolveRoot(), Message: args[1]})
-	},
-}
-
 func init() {
 	agentInitCmd.Flags().StringVar(&agentInitOpts.Template, "template", "", "Agent template ref")
 	agentInitCmd.Flags().StringVar(&agentInitOpts.WorkspaceTemplate, "workspace-template", "", "Workspace template ref")
@@ -240,8 +216,6 @@ func init() {
 		agentStopCmd,
 		agentRestartCmd,
 		agentLogsCmd,
-		agentChatCmd,
-		agentAskCmd,
 		agentUpdateCmd,
 		agentDestroyCmd,
 	)

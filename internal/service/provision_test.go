@@ -93,6 +93,41 @@ func TestStackInitRequiresYes(t *testing.T) {
 	}
 }
 
+func TestStackInitUsesIndependentRootRepoInsideIgnoredParent(t *testing.T) {
+	if _, err := exec.LookPath("copier"); err != nil {
+		t.Skip("copier executable not available")
+	}
+	worktree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(worktree, ".gitignore"), []byte(".angee/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	initGitWorktree(t, worktree)
+	templateDir := writeStackTemplate(t)
+	initGitWorktree(t, templateDir)
+	rootPath := filepath.Join(worktree, ".angee")
+	platform, err := NewPlatform(rootPath, nil)
+	if err != nil {
+		t.Fatalf("NewPlatform() error: %v", err)
+	}
+	if _, err := platform.StackInit(context.Background(), api.StackInitRequest{
+		Name:     "dev",
+		Path:     worktree,
+		Root:     rootPath,
+		Template: templateDir,
+		Yes:      true,
+	}); err != nil {
+		t.Fatalf("StackInit() error: %v", err)
+	}
+	repoRoot := strings.TrimSpace(runGitOutput(t, rootPath, "rev-parse", "--show-toplevel"))
+	if canonicalTestPath(repoRoot) != canonicalTestPath(rootPath) {
+		t.Fatalf("ANGEE_ROOT git repo = %q, want %q", repoRoot, rootPath)
+	}
+	parentStatus := strings.TrimSpace(runGitOutput(t, worktree, "status", "--short", "--", ".angee"))
+	if parentStatus != "" {
+		t.Fatalf("parent repo should ignore .angee, got status %q", parentStatus)
+	}
+}
+
 func TestProvisioningRejectsInvalidResourceNames(t *testing.T) {
 	worktree := t.TempDir()
 	platform, err := NewPlatform(filepath.Join(worktree, ".angee"), nil)
@@ -128,6 +163,9 @@ func TestStackUpdateUsesCopierAndPreservesSecrets(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("StackInit() error: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(worktree, ".gitignore"), []byte(".angee/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	initGitWorktree(t, worktree)
 	store := state.New(rootPath)
 	secrets, err := store.LoadSecrets()
@@ -153,7 +191,7 @@ services:
     ports:
       - { name: web, target: "80" }
 `
-	if err := os.WriteFile(filepath.Join(templateDir, "template", ".angee", "angee.yaml.jinja"), []byte(updatedManifest), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(templateDir, "template", "{{ ANGEE_ROOT }}", "angee.yaml.jinja"), []byte(updatedManifest), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := platform.StackUpdate(context.Background(), api.StackUpdateRequest{Root: rootPath, Yes: true}); err != nil {
@@ -978,7 +1016,7 @@ func TestAgentStartMaterializesSourcesAndStopValidatesAgent(t *testing.T) {
 func writeStackTemplate(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "template", ".angee"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "template", "{{ ANGEE_ROOT }}"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	copierYAML := `_min_copier_version: "9.0"
@@ -1020,7 +1058,7 @@ services:
       - name: web
         target: "80"
 `
-	if err := os.WriteFile(filepath.Join(dir, "template", ".angee", "angee.yaml.jinja"), []byte(manifest), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "template", "{{ ANGEE_ROOT }}", "angee.yaml.jinja"), []byte(manifest), 0644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -1180,19 +1218,29 @@ agents:
 
 func initGitWorktree(t *testing.T, worktree string) {
 	t.Helper()
-	runGit := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = worktree
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, out)
-		}
+	runGitOutput(t, worktree, "init")
+	runGitOutput(t, worktree, "config", "user.name", "angee-test")
+	runGitOutput(t, worktree, "config", "user.email", "angee-test@example.invalid")
+	runGitOutput(t, worktree, "add", ".")
+	runGitOutput(t, worktree, "commit", "-m", "initial")
+}
+
+func runGitOutput(t *testing.T, worktree string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = worktree
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
-	runGit("init")
-	runGit("config", "user.name", "angee-test")
-	runGit("config", "user.email", "angee-test@example.invalid")
-	runGit("add", ".")
-	runGit("commit", "-m", "initial")
+	return string(out)
+}
+
+func canonicalTestPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
 }
 
 func waitReadFile(t *testing.T, path string) []byte {

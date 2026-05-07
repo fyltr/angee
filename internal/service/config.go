@@ -62,7 +62,7 @@ func (p *Platform) ConfigSet(ctx context.Context, content, message string, deplo
 		// self-deadlock. The on-disk state is already committed at this
 		// point, so a brief gap is safe.
 		p.writeMu.Unlock()
-		result, err := p.Deploy(ctx, "")
+		result, err := p.Deploy(ctx)
 		p.writeMu.Lock()
 		if err != nil {
 			return nil, err
