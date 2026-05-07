@@ -161,14 +161,18 @@ angee dev   [--build]                            # compose + process-compose + i
 # services land via `angee stack init`/`stack update`; `service init` is for ad-hoc
 # additions outside of a stack template.
 #
-# --runtime defaults: `--image` implies `--runtime container`; `--command` (without
-# --image) implies `--runtime local`. Pass `--runtime` explicitly only to override
-# or to disambiguate.
+# Runtime selection rules:
+#   container service: --image <img> required; --command optional (overrides image CMD)
+#   local service:     --command <cmd> required; --image rejected (no image to run)
+#   --runtime is optional and inferred from the flags above. Pass it explicitly only
+#   to disambiguate or to assert a defensive check.
 angee service init    <name> [--runtime <container|local>]
-                            (--image <img> | --command <cmd...>)
+                            --image <img>     [--command <cmd...>]   # container shape
+                          | --command <cmd...>                       # local shape
                             [--mount URI ...] [--env K=V ...] [--port spec...]
                             [--workdir URI] [--start]
-angee service update  <name> [--env K=V ...] [--mount URI ...] [--port spec ...]
+angee service update  <name> [--image <img>] [--command <cmd...>] [--env K=V ...]
+                             [--mount URI ...] [--port spec ...] [--workdir URI]
 angee service destroy <name>
 angee service start|stop|restart|logs <name>
 angee service list
@@ -180,7 +184,11 @@ angee job logs <name>
 
 # Workspaces (the only novel provisioning primitive)
 angee workspace create <template> [--input k=v ...] [--name <name>] [--ttl <dur>] [--start]
-angee workspace update <name> [--ttl <dur>]      # extend TTL or rerun copier update
+angee workspace update <name> [--input k=v ...] [--ttl <dur>] [--sync-sources]
+                                                   # bare:           rerun copier update on pinned chain
+                                                   # --input k=v:    above + update inputs (re-render)
+                                                   # --ttl <dur>:    TTL only, no render
+                                                   # --sync-sources: also re-fetch sources (Phase 5b)
 angee workspace destroy <name> [--purge|--force]
 angee workspace start|stop|restart <name>        # only meaningful when chain_root: is set
 angee workspace logs <name>                      # tails inner-stack logs when chain_root: is set
@@ -578,6 +586,35 @@ immediately after step 8.
 reverses provisioning, optionally removing the worktree and persistent
 dirs with `--purge`.
 
+### `workspace update`: what changes, what doesn't
+
+`workspace update <name>` is a deliberately narrow operation. It
+respects the resolved chain pinned at create time (under
+`workspaces.<n>.resolved.chain`) — `update` never re-resolves the
+chain to pick up upstream `_angee.chain` edits, because that would
+silently restructure a workspace mid-life. The four flag shapes and
+their effects:
+
+| Invocation | What changes |
+|---|---|
+| `workspace update <n>` (no flags) | Reruns `copier update` on each pinned chain entry to pick up upstream **template content** changes (templates evolve; answers stay). Two-pass compile re-runs. `StackPrepare` re-runs on the inner root. **Sources are not re-fetched**; their pinned refs stand. |
+| `workspace update <n> --input k=v ...` | Same as above, plus updates `inputs:`, which feeds into the rerendered chain and inner manifest. |
+| `workspace update <n> --ttl <dur>` | TTL only. Recomputes `ttl_expires_at` from now. No render, no `StackPrepare`. Pass `--ttl ""` (empty) or PATCH `{ "ttl": null }` to remove the TTL. |
+| `workspace update <n> --sync-sources` | Re-fetches each declared source (`git fetch`, plus `git pull` on worktree branches when fast-forward — pull lands in **Phase 5b**, so until 5b ships this flag is fetch-only and the operator returns a `worktree pull deferred to 5b` notice rather than merging). The flag is opt-in because it can change what the workspace "is" between update calls. |
+
+What `update` will **not** do:
+
+- Re-resolve the chain. Use `workspace destroy` + `workspace create`
+  if the entry-point template's `_angee.chain` has structurally
+  changed.
+- Change source `mode:` (worktree → clone). Same answer: destroy +
+  create.
+- Move the worktree branch. Use git directly inside the worktree, or
+  `workspace destroy --purge` + create on a new branch.
+
+The PATCH alias accepts the same body keys: `ttl`, `inputs`,
+`sync_sources` (boolean).
+
 The result on disk for the example manifest:
 
 ```
@@ -702,28 +739,61 @@ operations against different sources run in parallel.
 
 Anything a workspace template needs to keep across restarts (browser
 caches, model-weights downloads, SQLite databases, etc.) is declared
-under a `persist_paths:` map. The map shape is the only schema for
-persistence; there is no boolean `persist:` flag. The workspace
-directory itself is preserved by default until `workspace destroy`
-(see workspace lifecycle).
+in the **template's `_angee` metadata**, under `_angee.persist_paths:`.
+The map shape is the only schema for persistence; there is no boolean
+`persist:` flag. The workspace directory itself is preserved by default
+until `workspace destroy` (see workspace lifecycle).
+
+Source of truth and resolved location:
 
 ```yaml
-workspaces:
-  feat-issue-123:
-    persist_paths:
-      browser-data: { subpath: .browser-data, scope: workspace }
-      model-cache:  { subpath: .models,       scope: stack }
+# .templates/workspaces/pr/copier.yml — the template declares paths it needs
+_angee:
+  kind: workspace
+  name: pr
+  persist_paths:
+    browser-data: { subpath: .browser-data, scope: workspace }
+    model-cache:  { subpath: .models,       scope: stack }
 ```
 
+```yaml
+# $ANGEE_ROOT/angee.yaml — the operator copies the resolved declarations
+# into the workspace's resolved fields at create time, alongside chain
+# and chain_root. Users don't write this; the operator does.
+workspaces:
+  feat-issue-123:
+    template: workspaces/pr
+    resolved:
+      chain: [...]
+      chain_root: code/.angee
+      persist_paths:
+        browser-data: { subpath: .browser-data, scope: workspace }
+        model-cache:  { subpath: .models,       scope: stack }
+```
+
+The chain-walk in workspace create reads `_angee.persist_paths` from
+each chain entry (workspace + stack templates can both declare them),
+unions them by key (later entries override earlier ones; warn on
+collision), and writes the union into `workspaces.<n>.resolved.persist_paths`.
+
 The operator:
-- Creates the directory on first start under
-  `${workspace.<name>.path}/<subpath>` (or under a stack-scoped path if
-  `scope: stack`).
+- **Creates the directory during `workspace create`** (after step 5,
+  before step 6's render pass) under `${workspace.<name>.path}/<subpath>`
+  for `scope: workspace`, or under a stack-scoped path for `scope:
+  stack`. The directory exists by the time any service mounts the
+  workspace, even if `workspace start` is never called.
 - Exposes the absolute path as `${persist.<key>}` for use anywhere in
   the same template.
 - Preserves it across `workspace stop`/`workspace start` and `workspace
   update`.
 - Removes it on `workspace destroy --purge` (or stack `--purge`).
+
+Creating-on-create matters because services can mount a workspace
+directly via `workspace://<n>:/path` without ever calling `workspace
+start` (a workspace whose chain doesn't produce an inner stack has no
+"start" semantics — the workspace is just a directory). If
+`persist_paths` were first-start-only, those services would mount a
+workspace whose `${persist.<key>}` paths don't exist yet.
 
 ## Substitution Grammar
 
@@ -869,6 +939,29 @@ References inside `angee.yaml` (`workspaces.<n>.template:`,
 `template.active:`, etc.) use the **kind-relative** form — `stacks/dev`,
 `workspaces/pr`. The resolver prepends the lookup root.
 
+### Template argument forms (CLI vs API vs manifest)
+
+The CLI accepts a **bare name** as shorthand because the command
+already declares the kind:
+
+| Invocation | Resolves to |
+|---|---|
+| `angee init --dev`             | `stacks/dev`     (the `init --dev` alias hard-codes `stacks/`) |
+| `angee stack init dev`         | `stacks/dev`     (kind = stack, from the `stack` subcommand) |
+| `angee stack init stacks/dev`  | `stacks/dev`     (full form; kind must match `stack`) |
+| `angee workspace create pr`    | `workspaces/pr`  (kind = workspace, from the `workspace` subcommand) |
+| `angee workspace create workspaces/pr` | `workspaces/pr` (full form) |
+
+Both forms accepted everywhere; the bare form is shorthand. If a user
+passes `stacks/x` to `workspace create`, the resolver rejects with a
+"kind mismatch" error.
+
+The HTTP API and the manifest **always** use the full kind-relative
+form (`workspaces/pr`, `stacks/dev`). HTTP/manifest contexts don't have
+an implicit "kind"-from-command, so the bare form would be ambiguous.
+This is why `POST /workspaces { "template": "workspaces/pr" }` and
+`workspaces.<n>.template: workspaces/pr` both spell it out.
+
 Rendering is done in-process by `github.com/fyltr/copier-go`. It
 implements `copier copy`, `copier update`, and the answers-file
 lifecycle natively in Go, so there is no Python runtime requirement.
@@ -881,10 +974,14 @@ Thin adapter over `service.Platform`. Same surface for HTTP and MCP. No
 agent endpoints.
 
 ```
-# Stack
-POST   /stack/init                            # body: { template, inputs, path }
+# Stack — all routes operate on the operator's served ANGEE_ROOT (one operator,
+# one root). `path` is never accepted in request bodies on the HTTP surface;
+# it's a CLI-only concept that decides which root the in-process operator runs
+# against before binding.
+POST   /stack/init                            # body: { template, inputs }; refuses if root is already initialized
 POST   /stack/update                          # body: { inputs }; reruns copier update
 POST   /stack/{build|up|dev|down|destroy}     GET  /stack/status
+GET    /stack/logs                            # tails all services in the stack
 
 # Services
 POST   /services                              # body: full service spec; manifest edit + reconcile
@@ -896,9 +993,10 @@ GET    /services/{n}                          GET  /services/{n}/logs       GET 
 POST   /jobs/{n}/run                          GET  /jobs                    GET /jobs/{n}/logs
 
 # Workspaces
-POST   /workspaces                            POST /workspaces/{n}/{update|start|stop|destroy}
-PATCH  /workspaces/{n}                        # alias for /update; body may include ttl, inputs
+POST   /workspaces                            POST /workspaces/{n}/{update|start|stop|restart|destroy}
+PATCH  /workspaces/{n}                        # alias for /update; body may include ttl, inputs, sync_sources
 GET    /workspaces/{n}                        GET  /workspaces
+GET    /workspaces/{n}/logs                   # tails inner-stack logs when chain produced an inner root
 POST   /workspaces/{n}/push                   GET  /workspaces/{n}/git
 
 # Sources
@@ -1016,6 +1114,15 @@ Extend a TTL with `POST /workspaces/{n}/update` (`PATCH /workspaces/{n}`
 is accepted as an alias) and a body like `{ "ttl": "24h" }`, which
 recomputes `ttl_expires_at` from now. Pass `{ "ttl": null }` to remove
 the TTL entirely.
+
+The TTL sweep runs **whenever an operator process is alive** for the
+ANGEE_ROOT — that means the in-process operator under `angee dev` runs
+the sweep on its loopback port, and the standalone `angee operator`
+daemon runs the sweep on its bound port. Default tick is 60 seconds.
+If no operator is running for an ANGEE_ROOT (no `dev` session, no
+daemon), nothing sweeps; expired workspaces sit at `ttl_expires_at <
+now()` until the next operator process comes up and catches them on
+its first tick.
 
 **GC behavior when destroy is blocked.** A workspace whose
 `ttl_expires_at` has passed but whose destroy is refused by the safety

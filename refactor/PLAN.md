@@ -10,9 +10,11 @@ overview is the target shape.
 operations on worktree-backed sources, supervises services. It does not
 know what an "agent" is.**
 
-Anything an agent needs (MCP wiring, model API keys, addressability, TTL
-sweeping, "talk to me over HTTP", PR creation) is the application layer's
-job. The
+Anything an agent needs (MCP wiring, model API keys, addressability,
+agent-specific TTL semantics, "talk to me over HTTP", PR creation) is
+the application layer's job. (Workspace TTLs *are* core v1 — Angee
+sweeps expired workspaces; the carve-out is on agent-shaped state, not
+on TTL semantics in general.) The
 application layer asks Angee for two things:
 
 1. A **workspace** — a directory rendered from a chain of Copier templates
@@ -131,9 +133,14 @@ angee logs    [service...]
 angee status                                     # alias: ls, ps; shows services + workspaces + jobs
 angee dev   [--build]                            # compose + process-compose + in-process operator
 
-# Services
-angee service init <name> --runtime <container|local> [--image img|--command ...] [--mount URI ...] [--env K=V ...] [--port spec] [--start]
-angee service update <name> [--env K=V ...] [--mount URI ...] [--port spec]
+# Services — runtime inferred from flags. Container needs --image (and optional
+# --command override); local needs --command (and rejects --image).
+angee service init <name> [--runtime <container|local>]
+                          (--image img [--command ...] | --command ...)
+                          [--mount URI ...] [--env K=V ...] [--port spec ...]
+                          [--workdir URI] [--start]
+angee service update <name> [--image img] [--command ...] [--env K=V ...]
+                            [--mount URI ...] [--port spec ...] [--workdir URI]
 angee service destroy <name>
 angee service start|stop|restart|logs <name>
 angee service list
@@ -144,17 +151,22 @@ angee job list
 angee job logs <name>
 
 # Workspaces (the only novel provisioning primitive)
-angee workspace create <template> [--input k=v ...] [--name <name>] [--start]
-angee workspace update <name>
+angee workspace create <template> [--input k=v ...] [--name <name>] [--ttl <dur>] [--start]
+angee workspace update <name> [--input k=v ...] [--ttl <dur>] [--sync-sources]
 angee workspace destroy <name> [--purge|--force]
-angee workspace start|stop|restart <name> # only meaningful when chain_root: is set
+angee workspace start|stop|restart <name>   # only meaningful when chain produces an inner root
 angee workspace logs <name>
 angee workspace list
-angee workspace get <name>                # path, sources, mounted-by, status
+angee workspace get <name>                  # path, sources, mounted-by, status, ttl
+angee workspace push <name> [--ref <r>]     # Phase 5b — push every worktree-mode source
+angee workspace git  <name>                 # Phase 5b — status of every worktree-mode source
 
-# Sources (declared in angee.yaml; CLI is read/refresh only here; git ops in Phase 5b)
-angee source list
-angee source fetch <name>                 # refresh a source's local cache
+# Sources (declared in angee.yaml; CLI is read + git ops on the cached source)
+angee source list                           # Phase 5a
+angee source fetch  <name>                  # Phase 5a — git fetch on the cache
+angee source status <name>                  # Phase 5a — branch / dirty state (read-only)
+angee source pull   <name> [--ref <r>]      # Phase 5b — needs auth wiring
+angee source push   <name> [--ref <r>]      # Phase 5b
 
 # Operator
 angee operator [--bind 0.0.0.0] [--port 9000]
@@ -190,14 +202,14 @@ ports:
   django: { value: 8100, export_env: DJANGO_PORT }
 
 volumes:
-  app-data: { driver: local-fs, path: .angee/data }
+  app-data: { driver: local-fs, path: data }   # → $ANGEE_ROOT/data
 
 sources:
   django-angee:
     kind: git
-    repo: ../django-angee
+    repo: ../django-angee                      # parent of $ANGEE_ROOT
     default_ref: dev
-    cache_path: .angee/sources/django-angee
+    cache_path: sources/django-angee           # → $ANGEE_ROOT/sources/django-angee
   runner-skills:
     kind: git
     repo: https://github.com/fyltr/runner-skills
@@ -205,13 +217,10 @@ sources:
 
 workspaces:
   feat-issue-123:
-    template:
-      - workspaces/pr      # chain step 1: layout, scripts, .env scaffold
-      - stacks/angee-notes-dev           # chain step 2: emits an inner angee.yaml
+    template: workspaces/pr            # entry-point only; chain comes from its _angee metadata
     inputs:
       branch: feat/issue-123
       base_branch: dev
-      app_subpath: examples/angee-notes
     sources:
       code:
         source: django-angee
@@ -221,7 +230,11 @@ workspaces:
       skills:
         source: runner-skills
         subpath: skills
-    chain_root: code/examples/angee-notes/.angee  # inner ANGEE_ROOT lives at workspace/<this path>
+    resolved:                          # written by operator at create time
+      chain:
+        - workspaces/pr                # _angee.kind: workspace
+        - stacks/angee-notes-dev       # _angee.kind: stack
+      chain_root: code/.angee          # → workspaces/feat-issue-123/code/.angee/
 
 services:
   postgres:
@@ -264,6 +277,7 @@ agent-scoped flavors are gone.
 | `${alloc.pool}` | Operator port pool, allocated at workspace/service init. |
 | `${workspace.name.path}` | Absolute path of a named workspace on disk. |
 | `${source.name.path}` | Absolute path of a fetched source's local cache. |
+| `${persist.<key>}` | Absolute path to a template-declared persistent dir (see workspace `persist_paths:`). |
 | `${operator.url}`, `${operator.domain}` | Operator URL; host portion rewritten per consumer. |
 | `${inputs.key}` | Provisioning-time inputs. |
 | `${name}` | Resolved instance name (workspace or service). |
@@ -278,35 +292,35 @@ gitignored `.env` carries the resolved values at `0600`.
 
 ## Workspace lifecycle (replaces agent provisioning)
 
-`workspace create` runs this sequence:
+Authoritative sequence for `workspace create` lives in
+[`OVERVIEW-v2.md` §Goal 2: Workspace Provisioning](./OVERVIEW-v2.md).
+Brief, kept aligned with that source:
 
-1. **Resolve template chain.** Each entry is a Copier template. Walk left
-   to right; later templates can read answers persisted by earlier ones.
-2. **Compute the instance name.** From `--name` or from
-   `_angee.instance_naming.pattern` declared in the first template that
-   declares one.
-3. **Allocate ports** for any `${alloc.<pool>}` references encountered in
-   the chain or in the resulting `angee.yaml` fragment.
-4. **Resolve / generate secrets** in the configured backend.
-5. **Materialize sources** declared by the workspace into
-   `$ANGEE_ROOT/workspaces/<name>/<subpath>/`:
-   - `kind: git, mode: worktree` → `git worktree add` off the source's
-     shared `cache_path`.
-   - `kind: git, mode: clone` → shallow clone with locked commit.
-   - `kind: template` → `copier copy` into the subpath.
-   - `kind: url|archive` → download + checksum verify + extract.
-   - `kind: local` → bind or copy.
-   - `kind: volume` → mount a declared volume at the subpath.
-6. **Render the template chain** with `copier-go` in two passes (reference
-   pass + resolve-into-env pass).
-7. **Optionally provision the inner ANGEE_ROOT.** If `chain_root:` is set
-   and the template emitted an `angee.yaml` there, run the same stack
-   prepare/reconcile path against `<inner-root>` — same per-root advisory
-   lock as any other reconciliation. It does not start the inner stack
-   unless the request included `--start`.
-8. **Register the workspace in the outer `angee.yaml`** and write
-   addresses/ports/paths into the workspace's gitignored `.env` for
-   processes that read it.
+1. **Load the entry-point template** the caller named; resolve the full
+   chain from its `_angee.chain` (entry-point is implicitly first).
+   Validate: at most one `kind: stack`; if any, `_angee.chain_root`
+   required.
+2. **Compute instance name** from `--name` or entry-point's
+   `_angee.instance_naming.pattern`.
+3. **Allocate ports** for `${alloc.<pool>}` references.
+4. **Resolve / generate secrets** in the backend.
+5. **Materialize sources** into `$ANGEE_ROOT/workspaces/<name>/<subpath>/`
+   (worktree / clone / copier / archive / local / volume per `kind:`).
+6. **Render the chain** with `copier-go`, two passes per entry. Render
+   destination per `_angee.kind`: `workspace` → workspace root;
+   `stack` → `<workspace-root>/<chain_root>/`.
+7. **Prepare the inner ANGEE_ROOT** with `service.Platform.StackPrepare(<inner-root>)`
+   (not `StackInit` — chain step 6 already produced the manifest).
+   Resolves secrets, allocates inner ports, compiles backend files. Does
+   not start runtimes.
+8. **Register in the outer `angee.yaml`** under `workspaces.<n>` with
+   the resolved chain + chain_root, port leases, source materializations,
+   `ttl_expires_at`. Write workspace `.env`.
+
+`workspace create --start` runs `workspace start` immediately after
+step 8. `workspace start` itself uses the `_angee.chain_lifecycle`
+declared by the entry-point template (`auto`/`dev`/`up`); `auto`
+auto-detects from inner-stack runtimes.
 
 `workspace start` (only meaningful when `chain_root:` is set) brings the
 inner stack up via the matching lifecycle trigger (`StackUp` for
@@ -338,21 +352,12 @@ category.
 
 ## Mount syntax
 
-Service `mounts:` accept a tiny URI scheme:
-
-| URI | Resolves to |
-|---|---|
-| `workspace://<name>` | `${workspace.<name>.path}` (read-write). |
-| `workspace://<name>:/path` | bind workspace at `/path` in container. |
-| `workspace://<name>/<subpath>:/path:ro` | bind a subpath read-only. |
-| `source://<name>` | the source's local cache path. |
-| `source://<name>:/path:ro` | bind read-only. |
-| `volume://<name>:/path` | named volume mount (compose `volumes:` proxy). |
-| `bind:///abs/host/path:/path` | absolute host bind (compose-equivalent). |
-
-For `runtime: local` services, mounts collapse to env vars
-(`WORKSPACE_PATH=...`, `SOURCE_<NAME>=...`) plus a working-directory
-override; there is no Linux mount to perform.
+See OVERVIEW-v2 §Mount syntax for the full table. Summary: container
+services bind URIs as Linux mounts; **local services receive env vars
+in the form `WORKSPACE_<N>_PATH`, `SOURCE_<N>_PATH`, etc.** (one per
+mount, with the URI's `:/path` portion as documentation only).
+`workdir:` is a separate explicit field that resolves against the same
+URI scheme.
 
 ## Architecture invariants (kept from OVERVIEW-v2)
 
@@ -412,17 +417,25 @@ cmd/
 templates/                        # seeded from refactor/examples-v2 once Phase 5 is real
 ```
 
-`service.Platform` exposes one method per operator action (no agent methods):
-`StackInit`, `StackUpdate`, `StackPrepare`, `StackBuild`, `StackUp`,
-`StackDev`, `StackDown`, `StackDestroy`,
-`ServiceInit`, `ServiceUpdate`, `ServiceBuild`, `ServiceStart`,
-`ServiceStop`, `ServiceRestart`, `ServiceLogs`, `ServiceList`,
-`ServiceDestroy`,
-`JobRun`, `JobLogs`, `JobList`, `WorkspaceCreate`, `WorkspaceUpdate`,
-`WorkspaceStart`, `WorkspaceStop`, `WorkspaceDestroy`, `WorkspaceList`,
-`WorkspaceGet`, `SourceList`, `SourceFetch`.
+`service.Platform` exposes one method per operator action (no agent
+methods):
 
-`StackInit` vs `StackPrepare`: `StackInit(<template>, <root>, <inputs>)`
+```
+Stack:      StackInit, StackUpdate, StackPrepare, StackBuild, StackUp,
+            StackDev, StackDown, StackDestroy, StackStatus, StackLogs
+Service:    ServiceInit, ServiceUpdate, ServiceBuild, ServiceStart,
+            ServiceStop, ServiceRestart, ServiceLogs, ServiceList,
+            ServiceGet, ServiceDestroy
+Job:        JobRun, JobLogs, JobList
+Workspace:  WorkspaceCreate, WorkspaceUpdate, WorkspaceStart,
+            WorkspaceStop, WorkspaceRestart, WorkspaceLogs,
+            WorkspaceDestroy, WorkspaceList, WorkspaceGet,
+            WorkspacePush, WorkspaceGitStatus
+Source:     SourceList, SourceFetch, SourceStatus, SourcePull, SourcePush
+Operations: OperationGet, EventStream  (in-memory; SSE)
+```
+
+`StackInit` vs `StackPrepare`: `StackInit(<root>, <template>, <inputs>)`
 renders a stack template into a *fresh* root and then prepares it
 (compiles backend files, resolves secrets, allocates ports).
 `StackPrepare(<root>)` operates on an *existing* `angee.yaml` under
@@ -453,11 +466,27 @@ to `docker compose`. CLI adds `init`, `stack init`, `build`, `up`,
 `build` is a literal `docker compose build` shim; `up --build` and
 `dev --build` pass through the same flag.
 
+**Dynamic service ops (container path).** `service.Platform.ServiceInit`,
+`ServiceUpdate`, `ServiceDestroy`, `ServiceBuild` for `runtime: container`
+land here. `ServiceInit` is a manifest edit + reconcile: validate the
+spec, resolve substitutions, append to `docker-compose.yaml`, and (if
+`--start`) call the runtime backend's `Up(<service>)`. CLI surface:
+`angee service init|update|destroy|start|stop|restart|logs`.
+
+After this phase, dynamic **container** service init/update/destroy
+works against a manifest that has no workspaces (services declared
+inline, ad-hoc additions over HTTP). The full `workspace create +
+service init` composition the success-shape demonstrates is **not**
+runnable yet — workspaces don't land until Phase 5. Phase 3 only
+delivers the service half of that composition.
+
 Acceptance test: postgres + redis stack comes up cleanly; a service with
 a `build:` directive (e.g., a tiny Dockerfile referencing the local
 context) builds via `angee build` and then runs via `angee up`; secrets
 land in gitignored `.env`, absent from any committed file; `down` cleans
-up.
+up. Plus: `angee service init my-extra --image alpine:3 --command ['sleep','3600']
+--start` adds a service to the running stack and `angee service destroy my-extra`
+removes it, with no `dev`/`up` restart in between.
 
 ### Phase 4 — Goal 1 local slice (`angee dev`)
 
@@ -467,7 +496,12 @@ API. Address rewriting in `internal/substitute/` (the consumer's runtime
 location now matters). In-process operator HTTP+MCP listener, loopback
 only, bound for the lifetime of `angee dev`. Env injection
 (`ANGEE_OPERATOR_URL`, `ANGEE_OPERATOR_TOKEN`, port env vars) into every
-supervised process. Acceptance: a stack with both `runtime: container` and
+supervised process.
+
+**Dynamic service ops (local path).** `ServiceInit` etc. extended for
+`runtime: local`: append to `process-compose.yaml`, hot-add via
+process-compose's REST API. After this phase, dynamic service init
+works for both runtimes. Acceptance: a stack with both `runtime: container` and
 `runtime: local` services brings everything up under `angee dev`; `curl
 $ANGEE_OPERATOR_URL/healthz` works from the local process; Ctrl+C tears
 down cleanly; container sidecars persist across `dev` runs.
@@ -481,8 +515,19 @@ it into a service. Git **write** operations land in Phase 5b.
 1. `internal/manifest/` extends with `sources:`, `workspaces:`, mount URI
    scheme, and `_angee.inputs` / `instance_naming` template metadata.
 2. `internal/git/` — read-side git operations: `clone`, `fetch`,
-   `worktree add`, `worktree list`, `status`. Per-source advisory lock so
-   concurrent worktree-adds against the same cache serialize.
+   `worktree add`, `worktree list`, `status`. Per-source advisory lock
+   so concurrent worktree-adds against the same cache serialize.
+   **Auth wiring lands here, not in 5b** — clone/fetch/worktree-add
+   on a private repo need credentials just as much as push does.
+   `auth.mode: ssh` (key materialized to a 0600 tempfile under
+   `<root>/run/`), `auth.mode: https-token` (credential helper),
+   `auth.mode: host` (loopback-bound operators only) all ship in 5a.
+   Phase 5b adds *write*-path semantics (push pre-flight checks,
+   conflict detection on pull) on top of the same auth machinery. A
+   stack with only `kind: local` or public-`kind: git` sources
+   technically doesn't need auth at all in 5a, but the auth path is
+   a hard requirement for any private-repo workspace and ships with
+   the read primitive, not after.
 3. `service.Platform.WorkspaceCreate / WorkspaceUpdate / WorkspaceStart /
    WorkspaceStop / WorkspaceDestroy / WorkspaceList / WorkspaceGet` —
    the eight-step sequence above.
@@ -516,14 +561,15 @@ it into a service. Git **write** operations land in Phase 5b.
    manifest has any running service or job referencing the workspace
    via `mounts:`, `workdir:`, or `${workspace.<n>...}` env values.
    `--force` overrides; `--purge` implies `--force`.
-7. Acceptance test: a "developer workspace" template (seeded from
-   `refactor/examples-v2/templates/workspaces/pr/`) renders into
-   `$ANGEE_ROOT/workspaces/feat-x/`
-    with a git worktree at `code/`, an inner `angee-notes-dev` stack at
-    `code/examples/angee-notes/.angee/`, and the workspace shows up in
-    `angee workspace list`.
-   Then a separate `agent-claude-feat-x` service mounting that workspace
-   starts cleanly via `angee service init --start`.
+10. Acceptance test: a workspace template (seeded from
+    `refactor/examples-v2/templates/workspaces/pr/`) renders into
+    `$ANGEE_ROOT/workspaces/feat-x/` with a git worktree at `code/`, an
+    inner `angee-notes-dev` stack at `code/.angee/`, and the workspace
+    shows up in `angee workspace list`. Then a separate
+    `agent-claude-feat-x` service mounting that workspace starts cleanly
+    via `angee service init --image ... --mount workspace://feat-x:/workspace
+    --start`. The `--runtime container` is implicit because `--image` is
+    set.
 
 ### Phase 5b — Goal 2b: git write path on sources
 
@@ -534,22 +580,23 @@ sources or local-dev only — for any workflow that involves an agent
 opening a PR, this phase is mandatory.
 
 1. `internal/git/` adds: `pull`, `push`, per-worktree branch tracking,
-   conflict detection (refuse fast-forward-only ops on conflict), credential
-   helper composition.
-2. Auth modes wired through the secrets backend:
-   - `auth.mode: ssh` → `GIT_SSH_COMMAND=ssh -i <key-from-secret> -o
-     IdentitiesOnly=yes`. The key material lives in the secrets backend
-     and is materialized to a 0600 tempfile under `<root>/run/` for the
-     duration of the git call.
-   - `auth.mode: https-token` → custom credential helper that reads the
-     token from the secrets backend.
-   - `auth.mode: host` → inherit `~/.ssh/` and `~/.gitconfig`. Documented
-     as local-dev-only; not safe in multi-tenant deployments.
+   conflict detection (refuse fast-forward-only ops on conflict).
+   Reuses the auth wiring shipped in Phase 5a (ssh / https-token /
+   host); no new credential machinery here.
+2. Pull/push semantics:
+   - `pull` is fast-forward-only by default. Detect divergence and
+     fail with a clear "agent should rebase or merge inside the
+     worktree" message rather than auto-merging.
+   - `push` pre-flight: refuse if the worktree has unstaged or
+     uncommitted changes, or if the branch has no upstream and the
+     caller didn't pass `--set-upstream`.
 3. `service.Platform.SourcePull / SourcePush / WorkspacePush /
-   WorkspaceGitStatus`.
-4. CLI: `angee source pull|push|status`, `angee workspace push`.
-5. HTTP: `POST /sources/{n}/{pull|push}`, `GET /sources/{n}/status`,
-   `GET /workspaces/{n}/git`, `POST /workspaces/{n}/push`.
+   WorkspaceGitStatus`. (`SourceStatus` already shipped in Phase 5a as
+   a read-only no-auth operation.)
+4. CLI: `angee source pull|push`, `angee workspace push|git`.
+5. HTTP: `POST /sources/{n}/{pull|push}`, `GET /workspaces/{n}/git`,
+   `POST /workspaces/{n}/push`. (`GET /sources/{n}/status` shipped in
+   Phase 5a.)
 6. Operator commit identity: `sources.<name>.git.user_name` /
    `git.user_email` apply only to commits the operator itself makes (e.g.
    automated `copier update` rebases). Agent-driven commits use whatever
@@ -574,13 +621,17 @@ in-process listener, bound on a non-loopback address; bearer auth required.
 HTTP surface (no agent endpoints):
 
 ```
-POST   /stack/{up|dev|down|destroy}     GET  /stack/status
-POST   /services                        POST /services/{n}/{start|stop|restart|destroy}
+POST   /stack/init                      POST /stack/update
+POST   /stack/{build|up|dev|down|destroy}     GET  /stack/status
+GET    /stack/logs                                  # tails all services
+POST   /services                        PATCH /services/{n}
+POST   /services/{n}/{start|stop|restart|destroy}
 GET    /services/{n}                    GET  /services/{n}/logs       GET /services
 POST   /jobs/{n}/run                    GET  /jobs                    GET /jobs/{n}/logs
 POST   /workspaces                      PATCH /workspaces/{n}
-POST   /workspaces/{n}/{update|start|stop|destroy}
+POST   /workspaces/{n}/{update|start|stop|restart|destroy}
 GET    /workspaces/{n}                  GET  /workspaces
+GET    /workspaces/{n}/logs
 GET    /sources                         POST /sources/{n}/{fetch|pull|push}
 GET    /sources/{n}/status              GET  /workspaces/{n}/git
 POST   /workspaces/{n}/push
@@ -588,15 +639,27 @@ GET    /operations/{id}                 GET  /events                  (SSE)
 GET    /mcp                             (MCP JSON-RPC; same operations as tools)
 ```
 
-No `/agents/*`. Async provisioning works the same way (202 + `operation_id`
-+ SSE) for `POST /workspaces`. Adds the **workspace TTL sweep**: a
-background goroutine started by the daemon iterates every minute over
-workspaces with `ttl_expires_at < now()` and calls `WorkspaceDestroy`
-on each (skipping any that hit the destroy safety guard, with a
-warning log). Acceptance: a tiny external app (could be Django, could
-be `curl`) provisions a workspace, then a service that mounts it,
-watches `/events` for readiness, and reaches the running service over
-its declared port — all without Angee knowing what an "agent" is.
+No `/agents/*`. Async provisioning works the same way (202 +
+`operation_id` + SSE) for `POST /workspaces`.
+
+**Workspace TTL sweep — implementation lives here.** The sweep is
+implemented as `service.Platform.startSweepLoop()` and ships **in this
+phase**. Once it lands, every operator process — the in-process operator
+under `angee dev` (Phase 4) and the standalone daemon (this phase) —
+calls `startSweepLoop()` at startup and runs the sweep. The behavior
+isn't gated on which mode you're in; the implementation phase is just
+the one phase. Pre-Phase-6 versions of the in-process operator have no
+sweep loop at all; expired workspaces accumulate until the operator
+process is restarted on a Phase-6+ binary and catches them on the next
+tick. The sweep iterates every minute over workspaces with
+`ttl_expires_at < now()` and calls `WorkspaceDestroy` on each (skipping
+any that hit the destroy safety guard, with a warning log +
+`workspace.destroy_blocked` SSE event).
+
+Acceptance: a tiny external app (could be Django, could be `curl`)
+provisions a workspace, then a service that mounts it, watches
+`/events` for readiness, and reaches the running service over its
+declared port — all without Angee knowing what an "agent" is.
 
 ### Phase 7 — Secrets backend pluralism
 
@@ -608,11 +671,13 @@ stack with `type: openbao` produces identical end-state behavior; gitignored
 
 ### Phase 8 — Polish
 
-Workspace TTLs are *not* deferred to this phase — TTL declarations land
+Workspace TTLs are *not* deferred to this phase. TTL declarations land
 in Phase 5 (`ttl_expires_at` on workspace records, accepted on
-`WorkspaceCreate` / `WorkspaceUpdate`) and the periodic sweep loop
-lands in Phase 6 (the standalone-operator daemon, which is the natural
-host for a background goroutine). Phase 8 is just polish on top.
+`WorkspaceCreate` / `WorkspaceUpdate`). The periodic sweep loop lives
+in `service.Platform.startSweepLoop()` and runs inside **any operator
+process alive for the ANGEE_ROOT** — the in-process operator under
+`angee dev` (Phase 4) and the standalone daemon (Phase 6) both pick
+it up. Phase 8 is just polish on top.
 
 1. Port lease persistence and release on workspace/service destroy
    (the data structure landed earlier; this phase audits leak paths and
@@ -670,18 +735,12 @@ Recommend **A** for the v1 cut. It keeps Angee strictly substrate-shaped.
 A `POST /workspaces?with_service=...` convenience endpoint can land in
 Phase 8 without changing the model.
 
-### 2. Should `auth.mode: host` be allowed in the standalone operator?
+### 2. ~~Should `auth.mode: host` be allowed in the standalone operator?~~ — **decided**
 
-`host` is the only mode that "just works" for a developer running `angee
-dev` locally with their normal SSH agent / `~/.gitconfig`. It's also the
-mode that breaks tenancy in any deployed operator. Two paths:
-
-- **Always allow it; document the risk.** Easiest. Wrong default for any
-  ops-shaped deployment.
-- **Allow only when `operator.bind` is loopback.** The standalone operator
-  binding to `0.0.0.0:9000` refuses to use `auth.mode: host`; only the
-  in-process operator under `angee dev` (loopback) accepts it.
-
-Recommend the second. It gives developers the convenient "uses my SSH key"
-behavior locally and refuses to surface the same hole on a hosted
-operator.
+Resolved: `auth.mode: host` is allowed only when the operator binds on
+loopback. The standalone daemon binding to a non-loopback address
+refuses the mode at startup with a clear error pointing at the source's
+`auth.mode`. The in-process operator under `angee dev` (loopback by
+construction) accepts it. This gives developers the "uses my SSH key"
+ergonomics locally and refuses to surface the same hole on a hosted
+operator. Implementation lives in Phase 5b's auth wiring.
