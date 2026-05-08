@@ -1,6 +1,21 @@
-# AGENTS.md
+# AGENTS.md — angee-go
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This is the canonical agent-instructions file for `angee-go` (the angee CLI + operator + compose backend). It's read natively by Codex CLI, Cursor, Gemini CLI, and (via the `CLAUDE.md` symlink) Claude Code.
+
+> ## ⚠ For new development work, start in `angee-examples`
+>
+> If you're starting a fresh session and want to **make changes** to angee-go, do **not** clone or work directly in this repo. Instead:
+>
+> ```sh
+> cd ~/Work/fyltr/angee-examples
+> # create a sandboxed workspace that materialises angee-go + django-angee + angee-examples worktrees
+> angee workspace create dev-pr-multi --name fix-issue-123 --start
+> # in Claude Code: `/workspace fix-issue-123 --multi`
+> ```
+>
+> All slash commands and sub-agents (including `go-code-reviewer`) live in [`angee-examples/.agents/`](https://github.com/fyltr/angee-examples) and operate on the worktrees a workspace materialises. This repo no longer ships its own `.claude/` tooling.
+>
+> The rest of this file (Go conventions, build commands, RuntimeBackend contract) still applies — Codex/Claude/Gemini walk parents and concatenate, so when you're inside a workspace at `<workspace>/angee-go/`, this file gets layered on top of `<host>/AGENTS.md`.
 
 ## What is angee
 
