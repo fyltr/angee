@@ -243,6 +243,7 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 				Ports:       ports,
 				Volumes:     containerMounts,
 				WorkingDir:  workdir,
+				DependsOn:   composeDependsOn(append(service.After, service.DependsOn...), stack),
 			}
 		case manifest.RuntimeLocal:
 			localEnv, err := localMountEnv(mounts, mountResolver)
@@ -345,6 +346,21 @@ func processDependsOn(names []string, stack *manifest.Stack) map[string]proccomp
 			condition = "process_completed_successfully"
 		}
 		deps[name] = proccompose.ProcessDependency{Condition: condition}
+	}
+	return deps
+}
+
+func composeDependsOn(names []string, stack *manifest.Stack) map[string]compose.ServiceDependency {
+	if len(names) == 0 {
+		return nil
+	}
+	deps := map[string]compose.ServiceDependency{}
+	for _, name := range names {
+		condition := "service_started"
+		if _, ok := stack.Jobs[name]; ok {
+			condition = "service_completed_successfully"
+		}
+		deps[name] = compose.ServiceDependency{Condition: condition}
 	}
 	return deps
 }

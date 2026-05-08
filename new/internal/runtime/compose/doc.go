@@ -9,13 +9,18 @@ type File struct {
 }
 
 type Service struct {
-	Image       string            `yaml:"image,omitempty"`
-	Build       any               `yaml:"build,omitempty"`
-	Command     []string          `yaml:"command,omitempty"`
-	Environment map[string]string `yaml:"environment,omitempty"`
-	Ports       []string          `yaml:"ports,omitempty"`
-	Volumes     []string          `yaml:"volumes,omitempty"`
-	WorkingDir  string            `yaml:"working_dir,omitempty"`
+	Image       string                       `yaml:"image,omitempty"`
+	Build       any                          `yaml:"build,omitempty"`
+	Command     []string                     `yaml:"command,omitempty"`
+	Environment map[string]string            `yaml:"environment,omitempty"`
+	Ports       []string                     `yaml:"ports,omitempty"`
+	Volumes     []string                     `yaml:"volumes,omitempty"`
+	WorkingDir  string                       `yaml:"working_dir,omitempty"`
+	DependsOn   map[string]ServiceDependency `yaml:"depends_on,omitempty"`
+}
+
+type ServiceDependency struct {
+	Condition string `yaml:"condition,omitempty"`
 }
 
 type Volume struct {

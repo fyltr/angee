@@ -72,7 +72,11 @@ func ResolveContainer(raw string, resolver Resolver) (string, error) {
 		}
 		return m.Name + ":" + m.Target + suffix, nil
 	case "bind":
-		return filepath.Clean(m.HostPath) + ":" + m.Target + suffix, nil
+		host := filepath.Clean(m.HostPath)
+		if !filepath.IsAbs(host) && !strings.HasPrefix(host, ".") {
+			host = "." + string(filepath.Separator) + host
+		}
+		return host + ":" + m.Target + suffix, nil
 	default:
 		return "", fmt.Errorf("unsupported mount scheme %q", m.Scheme)
 	}

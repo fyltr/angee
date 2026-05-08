@@ -77,8 +77,11 @@ func (p *Platform) StackInit(ctx context.Context, template string, targetPath st
 	if err != nil {
 		return StackInitResult{}, err
 	}
-	_, err = initialized.StackPrepare(ctx)
+	stack, err := initialized.LoadStack()
 	if err != nil {
+		return StackInitResult{}, err
+	}
+	if err := initialized.materializeReferencedSources(ctx, stack); err != nil {
 		return StackInitResult{}, err
 	}
 	return StackInitResult{Template: template, Root: preparedRoot}, nil

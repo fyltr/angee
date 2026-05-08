@@ -244,7 +244,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 			if err != nil {
 				return err
 			}
-			if err := platform.StackUp(cmd.Context(), args, build); err != nil {
+			if err := platform.StackUpForeground(cmd.Context(), args, build, stdout, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintln(stdout, "container services started")
@@ -655,6 +655,9 @@ func resolveStackTemplateInputs(cmd *cobra.Command, platform *service.Platform, 
 			continue
 		}
 		question := questions[key]
+		if question.Generated {
+			continue
+		}
 		defaultValue, hasDefault := defaults[key]
 		prompt := key + ": "
 		if hasDefault {

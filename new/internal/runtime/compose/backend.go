@@ -58,7 +58,13 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
-	return b.Up(ctx, target)
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "up", "-d")
+	if target.Build {
+		args = append(args, "--build")
+	}
+	args = append(args, target.Services...)
+	return b.runForeground(ctx, target.Root, stdout, stderr, args...)
 }
 
 func (b Backend) Down(ctx context.Context, root string) error {
@@ -124,6 +130,17 @@ func (b Backend) run(ctx context.Context, root string, args ...string) ([]byte, 
 		b.Runner = ExecRunner{}
 	}
 	return b.Runner.Run(ctx, root, "docker", args...)
+}
+
+func (b Backend) runForeground(ctx context.Context, root string, stdout io.Writer, stderr io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 func (b Backend) baseArgs(root, envFile string) []string {

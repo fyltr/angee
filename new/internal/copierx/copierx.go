@@ -2,6 +2,8 @@ package copierx
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"os"
@@ -54,6 +56,8 @@ type Input struct {
 	Required  bool   `yaml:"required"`
 	Default   any    `yaml:"default"`
 	Immutable bool   `yaml:"immutable"`
+	Generated bool   `yaml:"generated"`
+	Length    int    `yaml:"length"`
 }
 
 type TemplateSource struct {
@@ -219,10 +223,35 @@ func mergeInputs(cfg config, inputs Inputs) Inputs {
 	for key, value := range cfg.Defaults {
 		mergedInputs[key] = value
 	}
+	for key, spec := range cfg.Questions {
+		if _, ok := mergedInputs[key]; ok || !spec.Generated {
+			continue
+		}
+		length := spec.Length
+		if length == 0 {
+			length = 32
+		}
+		mergedInputs[key] = generatedInput(length)
+	}
 	for key, value := range inputs {
 		mergedInputs[key] = value
 	}
 	return mergedInputs
+}
+
+func generatedInput(length int) string {
+	if length < 1 {
+		length = 32
+	}
+	raw := make([]byte, length)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(raw)
+	if len(encoded) < length {
+		return encoded
+	}
+	return encoded[:length]
 }
 
 func defaultsFromRaw(raw map[string]any) Inputs {

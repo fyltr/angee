@@ -15,6 +15,9 @@ func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 	if err != nil {
 		return err
 	}
+	if err := p.bootstrapOpenBao(ctx, stack, nil, nil); err != nil {
+		return err
+	}
 	compiled, err := p.StackPrepare(ctx)
 	if err != nil {
 		return err
@@ -34,6 +37,9 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 	if err != nil {
 		return err
 	}
+	if err := p.bootstrapOpenBao(ctx, stack, nil, nil); err != nil {
+		return err
+	}
 	compiled, err := p.StackPrepare(ctx)
 	if err != nil {
 		return err
@@ -48,9 +54,34 @@ func (p *Platform) StackUp(ctx context.Context, services []string, build bool) e
 	return p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Services: selected, Build: build, EnvFile: p.runtimeEnvFile(stack)})
 }
 
+func (p *Platform) StackUpForeground(ctx context.Context, services []string, build bool, stdout io.Writer, stderr io.Writer) error {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	if err := p.bootstrapOpenBao(ctx, stack, stdout, stderr); err != nil {
+		return err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	selected, err := selectRuntimeServices(stack, services, manifest.RuntimeContainer)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) == 0 || len(selected) == 0 && len(services) > 0 {
+		return nil
+	}
+	return p.composeBackend.UpForeground(ctx, runtime.Target{Root: p.root, Services: selected, Build: build, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr)
+}
+
 func (p *Platform) StackDev(ctx context.Context, build bool) error {
 	stack, err := p.LoadStack()
 	if err != nil {
+		return err
+	}
+	if err := p.bootstrapOpenBao(ctx, stack, nil, nil); err != nil {
 		return err
 	}
 	compiled, err := p.StackPrepare(ctx)
@@ -75,12 +106,15 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 	if err != nil {
 		return err
 	}
+	if err := p.bootstrapOpenBao(ctx, stack, stdout, stderr); err != nil {
+		return err
+	}
 	compiled, err := p.StackPrepare(ctx)
 	if err != nil {
 		return err
 	}
 	if len(compiled.Compose.Services) > 0 {
-		if err := p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Build: build, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+		if err := p.composeBackend.UpForeground(ctx, runtime.Target{Root: p.root, Build: build, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr); err != nil {
 			return err
 		}
 	}
@@ -100,20 +134,31 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 }
 
 func (p *Platform) StackDown(ctx context.Context) error {
-	compiled, err := p.StackPrepare(ctx)
+	stack, err := p.LoadStack()
 	if err != nil {
 		return err
 	}
-	if len(compiled.Compose.Services) == 0 {
-		if len(compiled.ProcessCompose.Processes) == 0 {
-			return nil
+	hasContainers := false
+	hasLocal := false
+	for _, service := range stack.Services {
+		switch service.Runtime {
+		case manifest.RuntimeContainer:
+			hasContainers = true
+		case manifest.RuntimeLocal:
+			hasLocal = true
 		}
-		return p.procBackend.Down(ctx, p.root)
 	}
-	if err := p.composeBackend.Down(ctx, p.root); err != nil {
-		return err
+	for _, job := range stack.Jobs {
+		if job.Runtime == manifest.RuntimeLocal {
+			hasLocal = true
+		}
 	}
-	if len(compiled.ProcessCompose.Processes) > 0 {
+	if hasContainers {
+		if err := p.composeBackend.Down(ctx, p.root); err != nil {
+			return err
+		}
+	}
+	if hasLocal {
 		return p.procBackend.Down(ctx, p.root)
 	}
 	return nil
