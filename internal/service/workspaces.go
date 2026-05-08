@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,13 @@ import (
 	"github.com/fyltr/angee/internal/manifest"
 	"github.com/fyltr/angee/internal/ports"
 	"github.com/fyltr/angee/internal/substitute"
+)
+
+// Resolved values for `_angee.chain_lifecycle`.
+const (
+	chainLifecycleAuto = "auto"
+	chainLifecycleDev  = "dev"
+	chainLifecycleUp   = "up"
 )
 
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error) {
@@ -30,6 +38,9 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	}
 	metadata, err := copierx.ValidateMetadata(templatePath, "workspace")
 	if err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	if err := manifest.Ensure(stack, metadata.Ensure); err != nil {
 		return api.WorkspaceRef{}, err
 	}
 	inputs := workspaceInputs(metadata, req.Inputs)
@@ -54,6 +65,9 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	}
 	renderInputs := copierx.Inputs(inputs)
 	renderInputs["workspace_name"] = name
+	for pool, port := range allocations {
+		renderInputs["alloc_"+pool] = strconv.Itoa(port)
+	}
 	if err := (copierx.LocalRenderer{}).Copy(ctx, copierx.CopyRequest{Template: templatePath, Dest: workspacePath, Inputs: renderInputs}); err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -62,6 +76,10 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		return api.WorkspaceRef{}, err
 	}
 	resolvedChain = append([]string{templateRef}, resolvedChain...)
+	if err := materializePersistPaths(workspacePath, metadata.Persist); err != nil {
+		return api.WorkspaceRef{}, err
+	}
+	lifecycle := resolveChainLifecycle(metadata.ChainLifecycle)
 	workspace := manifest.Workspace{
 		Template: templateRef,
 		Inputs:   map[string]string(inputs),
@@ -69,6 +87,8 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		Resolved: manifest.WorkspaceResolved{
 			Chain:        resolvedChain,
 			ChainRoot:    chainRoot,
+			Lifecycle:    lifecycle,
+			Allocations:  copyIntMap(allocations),
 			PersistPaths: metadata.Persist,
 		},
 		TTL: req.TTL,
@@ -259,10 +279,11 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
+	workspacePath := filepath.Join(p.root, "workspaces", name)
 	if workspace.Resolved.ChainRoot == "" {
-		return nil
+		return runWorkspaceHooks(ctx, workspacePath, name, hookKindPostStart, workspace.Resolved.Allocations)
 	}
-	innerRoot := filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot)
+	innerRoot := filepath.Join(workspacePath, workspace.Resolved.ChainRoot)
 	if _, err := os.Stat(manifest.Path(innerRoot)); err != nil {
 		return err
 	}
@@ -274,12 +295,10 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	for _, service := range innerStack.Services {
-		if service.Runtime == manifest.RuntimeLocal {
-			return inner.StackDev(ctx, false)
-		}
+	if err := startInnerStack(ctx, inner, innerStack, workspace.Resolved.Lifecycle); err != nil {
+		return err
 	}
-	return inner.StackUp(ctx, nil, false)
+	return runWorkspaceHooks(ctx, workspacePath, name, hookKindPostStart, workspace.Resolved.Allocations)
 }
 
 func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
@@ -291,14 +310,69 @@ func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
+	workspacePath := filepath.Join(p.root, "workspaces", name)
+	if err := runWorkspaceHooks(ctx, workspacePath, name, hookKindPreStop, workspace.Resolved.Allocations); err != nil {
+		return err
+	}
 	if workspace.Resolved.ChainRoot == "" {
 		return nil
 	}
-	inner, err := New(filepath.Join(p.root, "workspaces", name, workspace.Resolved.ChainRoot))
+	inner, err := New(filepath.Join(workspacePath, workspace.Resolved.ChainRoot))
 	if err != nil {
 		return err
 	}
 	return inner.StackDown(ctx)
+}
+
+func startInnerStack(ctx context.Context, inner *Platform, innerStack *manifest.Stack, lifecycle string) error {
+	switch resolveChainLifecycle(lifecycle) {
+	case chainLifecycleDev:
+		return inner.StackDev(ctx, false)
+	case chainLifecycleUp:
+		return inner.StackUp(ctx, nil, false)
+	}
+	for _, service := range innerStack.Services {
+		if service.Runtime == manifest.RuntimeLocal {
+			return inner.StackDev(ctx, false)
+		}
+	}
+	return inner.StackUp(ctx, nil, false)
+}
+
+func resolveChainLifecycle(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case chainLifecycleDev:
+		return chainLifecycleDev
+	case chainLifecycleUp:
+		return chainLifecycleUp
+	default:
+		return chainLifecycleAuto
+	}
+}
+
+func materializePersistPaths(workspacePath string, persist map[string]manifest.PersistPath) error {
+	for _, key := range sortedKeys(persist) {
+		entry := persist[key]
+		if entry.Subpath == "" {
+			continue
+		}
+		dir := filepath.Join(workspacePath, filepath.FromSlash(entry.Subpath))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("persist %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
+func copyIntMap(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.SourceState, error) {
