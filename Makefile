@@ -5,7 +5,7 @@ LDFLAGS := -s -w -X github.com/fyltr/angee/internal/cli.Version=$(VERSION)
 
 build: build-cli build-operator
 
-init: build
+install: build
 	ANGEE_DIST_DIR="$(CURDIR)/dist" sh scripts/install.sh
 
 build-cli:
