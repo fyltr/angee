@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -38,12 +37,12 @@ func (l *Lock) Lock(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		err := tryLockFile(file)
 		if err == nil {
 			l.file = file
 			return nil
 		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
+		if !isLockBusy(err) {
 			file.Close()
 			return fmt.Errorf("lock %s: %w", l.path, err)
 		}
@@ -62,17 +61,21 @@ func (l *Lock) Unlock() error {
 	}
 	file := l.file
 	l.file = nil
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
+	if err := unlockFile(file); err != nil {
 		_ = file.Close()
 		return err
 	}
 	return file.Close()
 }
 
-func (l *Lock) With(ctx context.Context, fn func() error) error {
+func (l *Lock) With(ctx context.Context, fn func() error) (err error) {
 	if err := l.Lock(ctx); err != nil {
 		return err
 	}
-	defer l.Unlock()
+	defer func() {
+		if unlockErr := l.Unlock(); err == nil && unlockErr != nil {
+			err = unlockErr
+		}
+	}()
 	return fn()
 }

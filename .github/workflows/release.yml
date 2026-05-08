@@ -9,7 +9,7 @@ env:
   REGISTRY: ghcr.io
   OPERATOR_IMAGE: ghcr.io/fyltr/angee-operator
   CLI_IMAGE: ghcr.io/fyltr/angee-cli
-  GO_VERSION: "1.25"
+  GO_VERSION: "1.25.10"
 
 permissions:
   contents: read
@@ -90,7 +90,7 @@ jobs:
           if [ "${{ matrix.os }}" = "windows" ]; then EXT=".exe"; fi
 
           mkdir -p dist
-          LDFLAGS="-s -w -X github.com/fyltr/angee/cli.Version=${VERSION}"
+          LDFLAGS="-s -w -X github.com/fyltr/angee/internal/cli.Version=${VERSION}"
 
           go build -trimpath -ldflags="${LDFLAGS}" \
             -o "dist/angee${EXT}" \
@@ -190,6 +190,8 @@ jobs:
           file: Dockerfile.operator
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
           tags: ${{ steps.meta-operator.outputs.tags }}
           labels: ${{ steps.meta-operator.outputs.labels }}
           cache-from: type=gha
@@ -214,6 +216,8 @@ jobs:
           file: Dockerfile.cli
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
           tags: ${{ steps.meta-cli.outputs.tags }}
           labels: ${{ steps.meta-cli.outputs.labels }}
           cache-from: type=gha

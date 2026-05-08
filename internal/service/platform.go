@@ -447,12 +447,14 @@ func shellQuote(arg string) string {
 	if arg == "" {
 		return "''"
 	}
-	if strings.IndexFunc(arg, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_+-=./:", r))
-	}) == -1 {
+	if strings.IndexFunc(arg, func(r rune) bool { return !isShellSafeRune(r) }) == -1 {
 		return arg
 	}
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
+}
+
+func isShellSafeRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_+-=./:", r)
 }
 
 func (p *Platform) writeCompiled(compiled *CompiledStack) error {

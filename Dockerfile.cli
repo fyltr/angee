@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /build
+RUN apk add --no-cache git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X github.com/fyltr/angee/internal/cli.Version=${VERSION}" \
+    -o angee \
+    ./cmd/angee
+
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git
+COPY --from=builder /build/angee /usr/local/bin/angee
+
+ENTRYPOINT ["/usr/local/bin/angee"]
