@@ -754,6 +754,9 @@ func resolveRoot(root string) (string, error) {
 	if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
 		return control, nil
 	}
+	if info, err := os.Stat(filepath.Join(root, ".templates", "workspaces")); err == nil && info.IsDir() {
+		return control, nil
+	}
 	return root, nil
 }
 

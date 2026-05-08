@@ -61,12 +61,18 @@ type Input struct {
 }
 
 type TemplateSource struct {
-	Source   string `yaml:"source"`
-	Mode     string `yaml:"mode"`
-	Ref      string `yaml:"ref"`
-	Branch   string `yaml:"branch"`
-	Subpath  string `yaml:"subpath"`
-	Optional bool   `yaml:"optional"`
+	Source     string `yaml:"source"`
+	Kind       string `yaml:"kind"`
+	Repo       string `yaml:"repo"`
+	URL        string `yaml:"url"`
+	Path       string `yaml:"path"`
+	DefaultRef string `yaml:"default_ref"`
+	CachePath  string `yaml:"cache_path"`
+	Mode       string `yaml:"mode"`
+	Ref        string `yaml:"ref"`
+	Branch     string `yaml:"branch"`
+	Subpath    string `yaml:"subpath"`
+	Optional   bool   `yaml:"optional"`
 }
 
 type ChainEntry struct {

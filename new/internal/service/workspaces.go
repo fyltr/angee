@@ -20,7 +20,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if req.Template == "" {
 		return api.WorkspaceRef{}, fmt.Errorf("workspace template is required")
 	}
-	stack, err := p.LoadStack()
+	stack, err := p.loadOrCreateWorkspaceStack()
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -95,6 +95,28 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 		}
 	}
 	return ref, nil
+}
+
+func (p *Platform) loadOrCreateWorkspaceStack() (*manifest.Stack, error) {
+	stack, err := p.LoadStack()
+	if err == nil {
+		return stack, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return p.EmptyStack(defaultWorkspaceStackName(p.root)), nil
+}
+
+func defaultWorkspaceStackName(root string) string {
+	name := filepath.Base(root)
+	if name == ".angee" {
+		name = filepath.Base(filepath.Dir(root))
+	}
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return "workspace"
+	}
+	return name
 }
 
 func (p *Platform) WorkspaceList(ctx context.Context) ([]api.WorkspaceRef, error) {
@@ -374,14 +396,31 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	result := map[string]manifest.WorkspaceSource{}
 	for slot, spec := range metadata.Sources {
 		sourceName := spec.Source
+		if sourceName == "" {
+			sourceName = slot
+		}
 		source, ok := stack.Sources[sourceName]
+		if !ok {
+			var err error
+			source, err = resolveWorkspaceTemplateSource(spec, inputs, workspaceName, alloc)
+			if err != nil {
+				return nil, err
+			}
+			if source.Kind != "" {
+				if stack.Sources == nil {
+					stack.Sources = map[string]manifest.Source{}
+				}
+				stack.Sources[sourceName] = source
+				ok = true
+			}
+		}
 		if !ok {
 			if spec.Optional {
 				continue
 			}
 			return nil, fmt.Errorf("workspace source %q references undeclared source %q", slot, sourceName)
 		}
-		resolved, err := p.resolveWorkspaceSource(spec, inputs, workspaceName, alloc)
+		resolved, err := p.resolveWorkspaceSource(spec, sourceName, inputs, workspaceName, alloc)
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +439,44 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 	return result, nil
 }
 
-func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.WorkspaceSource, error) {
+func resolveWorkspaceTemplateSource(spec copierx.TemplateSource, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.Source, error) {
+	ctx := substitute.Context{Inputs: inputs, Name: workspaceName, Alloc: alloc}
+	kind, err := substitute.Resolve(spec.Kind, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	repo, err := substitute.Resolve(spec.Repo, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	url, err := substitute.Resolve(spec.URL, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	path, err := substitute.Resolve(spec.Path, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	defaultRef, err := substitute.Resolve(spec.DefaultRef, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	cachePath, err := substitute.Resolve(spec.CachePath, ctx)
+	if err != nil {
+		return manifest.Source{}, err
+	}
+	if kind == "" {
+		switch {
+		case repo != "":
+			kind = "git"
+		case path != "":
+			kind = "local"
+		}
+	}
+	return manifest.Source{Kind: kind, Repo: repo, URL: url, Path: path, DefaultRef: defaultRef, CachePath: cachePath}, nil
+}
+
+func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceName string, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.WorkspaceSource, error) {
 	ctx := substitute.Context{Inputs: inputs, Name: workspaceName, Alloc: alloc}
 	branch, err := substitute.Resolve(spec.Branch, ctx)
 	if err != nil {
@@ -414,7 +490,7 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, inputs ma
 	if err != nil {
 		return manifest.WorkspaceSource{}, err
 	}
-	return manifest.WorkspaceSource{Source: spec.Source, Mode: spec.Mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
+	return manifest.WorkspaceSource{Source: sourceName, Mode: spec.Mode, Branch: branch, Ref: ref, Subpath: subpath}, nil
 }
 
 func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string) error {
@@ -464,7 +540,11 @@ func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath strin
 		if entry.Template == "" {
 			continue
 		}
-		path, ref, err := p.resolveTemplate(ctx, entry.Template, "stack")
+		templateRef, err := substitute.Resolve(entry.Template, subCtx)
+		if err != nil {
+			return nil, "", err
+		}
+		path, ref, err := p.resolveWorkspaceChainTemplate(ctx, workspacePath, templateRef)
 		if err != nil {
 			return nil, "", err
 		}
@@ -496,6 +576,16 @@ func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath strin
 		chain = append(chain, ref)
 	}
 	return chain, chainRoot, nil
+}
+
+func (p *Platform) resolveWorkspaceChainTemplate(ctx context.Context, workspacePath, ref string) (string, string, error) {
+	if ref != "" && !filepath.IsAbs(ref) && !isRemoteTemplateRef(ref) {
+		candidate := filepath.Join(workspacePath, filepath.FromSlash(ref))
+		if _, err := os.Stat(filepath.Join(candidate, "copier.yml")); err == nil {
+			return candidate, ref, nil
+		}
+	}
+	return p.resolveTemplate(ctx, ref, "stack")
 }
 
 func allocateWorkspacePorts(stack *manifest.Stack, workspaceName string) (map[string]int, error) {
