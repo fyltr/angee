@@ -1,8 +1,15 @@
-// angee is the Angee CLI — agentic infrastructure as code.
 package main
 
-import "github.com/fyltr/angee/cli"
+import (
+	"fmt"
+	"os"
+
+	"github.com/fyltr/angee/internal/cli"
+)
 
 func main() {
-	cli.Execute()
+	if err := cli.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

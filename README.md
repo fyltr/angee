@@ -1,78 +1,106 @@
-# angee
+# Angee
 
-**Angee is the stack manager for [angee.ai](https://angee.ai).** It compiles one declarative manifest (`angee.yaml`) into a running environment — secrets resolved, services supervised, workspaces provisioned — and exposes that environment over a stable HTTP+MCP control surface so the runtime above it can mutate the stack programmatically.
+Angee is a self-managed stack orchestration engine for agent-native applications. It compiles one declarative `angee.yaml` into runtime files, resolves secrets, manages services and jobs, provisions workspaces, and exposes the same control plane through the CLI and HTTP operator.
 
-Think Docker Compose, but with workspaces, sources, secrets, port leases, and an HTTP/MCP API that lets the application layer self-manage its own stack.
+This branch is the v1 prototype. The old v0 line is preserved on `main-v0`; the prototype history is preserved on `prototype-v1`.
 
-## Two Consumers
+## Install
 
-Angee has exactly two callers, and the architecture flows from that:
+```sh
+curl -fsSL https://angee.ai/install.sh | sh
+```
 
-1. **Humans, via the CLI** — `angee init`, `angee dev`, `angee up`, `angee workspace create`, etc. Terminal-driven setup, dev loop, day-to-day ops.
-2. **Angee runtimes, via the operator HTTP+MCP API** — e.g. `django-angee` runs *inside* a stack Angee manages, and calls `POST /workspaces`, `POST /sources/<n>/pull`, `POST /services`, etc. to **self-manage the stack and self-update its sources**. Spinning up a session-scoped workspace, pulling fresh code into an existing worktree, rotating a secret, scaling a worker — all happen as HTTP calls from the runtime to its own operator, with no human in the loop. The same operations are exposed as MCP tools at `/mcp`.
+From a checkout:
 
-Both paths go through one business-logic layer (`service.Platform`); the CLI and the HTTP/MCP server are thin adapters. Anything a human can do from a terminal, a runtime can do over HTTP, and vice versa.
-
-## Target Model
-
-- One manifest: `$ANGEE_ROOT/angee.yaml`.
-- Templates are Copier templates with Angee metadata under `_angee`.
-- The operator owns provisioning and reconciliation, and runs continuously alongside the runtime — in-process under `angee dev`, as a standalone daemon in production.
-- The `angee` CLI has the operator compiled in. Local commands dispatch to the in-process operator runtime without opening ports; `--operator` / `ANGEE_OPERATOR_URL` switches to a remote operator over HTTP.
-- Framework details belong in templates and rendered manifests, not in the Go CLI.
+```sh
+make build
+sudo cp dist/angee /usr/local/bin/angee
+sudo cp dist/angee-operator /usr/local/bin/angee-operator
+```
 
 ## Quick Start
 
 ```sh
-angee init --yes
+angee init --dev --yes
 angee dev
 ```
 
-`angee init` is shorthand for the default stack init, usually `angee stack init dev`.
+`angee init --dev` renders the local dev stack template into `.angee/`. `angee dev` prepares declared runtime files, starts container sidecars and local processes, and stays in the foreground.
 
-Explicit stack initialization:
-
-```sh
-angee stack init dev --yes
-angee dev
-```
-
-Staging-style stack:
+## Core Commands
 
 ```sh
-angee stack init staging-docker \
-  --set domain=staging.example.com \
-  --secret anthropic-api-key=env:ANTHROPIC_API_KEY \
-  --yes
-angee up
-```
-
-## Commands
-
-```sh
-angee init [path]
-angee stack init <name> [path]
+# Stack
+angee init --dev [path]
+angee stack init <template> [path] [--input key=value ...]
 angee stack update
-angee dev
-angee up
-angee deploy
 angee status
-angee logs <service>
-angee workspace init <name>
-angee workspace update <name>
-angee agent init <name>
-angee agent update <name>
-angee agent list
-angee agent logs <name>
+
+# Runtime
+angee build [service...]
+angee up [service...] [--build]
+angee dev [--build]
+angee down
+angee logs [service...]
+
+# Services and jobs
+angee service init <name> [--runtime container|local] [--image image] [--command arg ...]
+angee service list
+angee job list
+angee job run <name>
+
+# Sources and workspaces
+angee source list
+angee source fetch <name>
+angee workspace create <template> [--name name] [--input key=value ...]
+angee workspace list
+angee workspace git <name>
+
+# Operator
+angee operator --root .angee --bind 127.0.0.1 --port 9000
+angee --operator http://127.0.0.1:9000 status
 ```
 
-Full target usage reference: [`docs/USAGE.md`](./docs/USAGE.md).
+## Architecture
+
+```text
+CLI / HTTP operator
+        |
+        v
+service.Platform
+        |
+        +-- docker compose for container services
+        +-- process-compose for local processes
+        +-- copier-go for stack and workspace templates
+        +-- git for source caches and worktrees
+        +-- env-file or OpenBao for secrets
+```
+
+The CLI runs in-process by default. Passing `--operator` or setting `ANGEE_OPERATOR_URL` dispatches supported operations to a running HTTP operator.
+
+## Project Layout
+
+| Path | Purpose |
+|---|---|
+| `api/` | Shared API request and response types. |
+| `cmd/angee/` | CLI entrypoint. |
+| `cmd/operator/` | Standalone operator entrypoint. |
+| `internal/cli/` | Cobra command implementation and HTTP operator client. |
+| `internal/operator/` | HTTP operator server and routes. |
+| `internal/service/` | Shared business logic for stacks, services, sources, jobs, and workspaces. |
+| `templates/` | Bundled prototype stack and workspace templates. |
+| `docs/` | Refactor notes, deferred items, and example v2 template sketches. |
+| `scripts/install.sh` | Website installer script. |
 
 ## Development
 
 ```sh
-make build
 make test
+make build
 ```
 
-Current refactor plan: [`docs/REFACTOR.md`](./docs/REFACTOR.md).
+Useful references:
+
+- `docs/OVERVIEW-v2.md`
+- `docs/PLAN.md`
+- `docs/DEFERRED.md`

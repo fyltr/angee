@@ -1,286 +1,182 @@
-// Package compose implements RuntimeBackend using docker compose CLI.
 package compose
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/fyltr/angee/internal/compiler"
 	"github.com/fyltr/angee/internal/runtime"
 )
 
-// Backend implements RuntimeBackend by shelling out to `docker compose`.
+type Runner interface {
+	Run(ctx context.Context, dir string, name string, args ...string) ([]byte, error)
+}
+
+type ExecRunner struct{}
+
+func (ExecRunner) Run(ctx context.Context, dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
 type Backend struct {
-	ComposeFile string // path to the generated docker-compose.yaml
-	ProjectName string // docker compose project name
-	EnvFile     string // optional: path to root .env file
-	Log         *slog.Logger
+	Runner Runner
 }
 
-// New creates a DockerCompose backend.
-func New(rootPath, projectName string) *Backend {
-	return &Backend{
-		ComposeFile: filepath.Join(rootPath, "docker-compose.yaml"),
-		ProjectName: projectName,
-		EnvFile:     filepath.Join(rootPath, ".env"),
-		Log:         slog.Default(),
-	}
+func NewBackend() Backend {
+	return Backend{Runner: ExecRunner{}}
 }
 
-func (b *Backend) args(extra ...string) []string {
-	base := []string{
-		"compose",
-		"--project-name", b.ProjectName,
-		"--file", b.ComposeFile,
-	}
-	if _, err := os.Stat(b.EnvFile); err == nil {
-		base = append(base, "--env-file", b.EnvFile)
-	}
-	return append(base, extra...)
+func (b Backend) Build(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "build")
+	args = append(args, target.Services...)
+	_, err := b.run(ctx, target.Root, args...)
+	return err
 }
 
-func (b *Backend) run(ctx context.Context, args ...string) ([]byte, error) {
+func (b Backend) Up(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "up", "-d")
+	if target.Build {
+		args = append(args, "--build")
+	}
+	args = append(args, target.Services...)
+	_, err := b.run(ctx, target.Root, args...)
+	return err
+}
+
+func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "up", "-d")
+	if target.Build {
+		args = append(args, "--build")
+	}
+	args = append(args, target.Services...)
+	return b.runForeground(ctx, target.Root, stdout, stderr, args...)
+}
+
+func (b Backend) Down(ctx context.Context, root string) error {
+	args := b.baseArgs(root, "")
+	args = append(args, "down")
+	_, err := b.run(ctx, root, args...)
+	return err
+}
+
+func (b Backend) Start(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "start")
+	args = append(args, target.Services...)
+	_, err := b.run(ctx, target.Root, args...)
+	return err
+}
+
+func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "stop")
+	args = append(args, target.Services...)
+	_, err := b.run(ctx, target.Root, args...)
+	return err
+}
+
+func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
+	args = append(args, "restart")
+	args = append(args, target.Services...)
+	_, err := b.run(ctx, target.Root, args...)
+	return err
+}
+
+func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
+	args := b.baseArgs(req.Root, req.EnvFile)
+	args = append(args, "logs")
+	if req.Follow {
+		args = append(args, "--follow")
+	}
+	args = append(args, req.Services...)
+	out, err := b.run(ctx, req.Root, args...)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan string, 1)
+	ch <- string(out)
+	close(ch)
+	return ch, nil
+}
+
+func (b Backend) Status(ctx context.Context, root string) ([]runtime.ServiceStatus, error) {
+	args := b.baseArgs(root, "")
+	args = append(args, "ps", "--format", "json")
+	out, err := b.run(ctx, root, args...)
+	if err != nil {
+		return nil, err
+	}
+	return parsePS(out), nil
+}
+
+func (b Backend) run(ctx context.Context, root string, args ...string) ([]byte, error) {
+	if b.Runner == nil {
+		b.Runner = ExecRunner{}
+	}
+	return b.Runner.Run(ctx, root, "docker", args...)
+}
+
+func (b Backend) runForeground(ctx context.Context, root string, stdout io.Writer, stderr io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	var out, stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
+	cmd.Dir = root
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		// joinSubcommand renders just the user-relevant suffix of the argv.
-		// strings.Join(args[:2], " ") panicked when args had < 2 elements.
-		return nil, fmt.Errorf("docker %s: %w: %s", joinSubcommand(args), err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
 	}
-	return out.Bytes(), nil
+	return nil
 }
 
-// joinSubcommand returns up to the first three argv elements joined for use
-// in error messages. We always start with "compose <verb>" so three is a
-// useful upper bound; falls back gracefully when args is short.
-func joinSubcommand(args []string) string {
-	n := len(args)
-	if n > 3 {
-		n = 3
+func (b Backend) baseArgs(root, envFile string) []string {
+	args := []string{"compose", "-f", filepath.Join(root, "docker-compose.yaml")}
+	if envFile != "" {
+		args = append(args, "--env-file", envFile)
 	}
-	return strings.Join(args[:n], " ")
+	return args
 }
 
-// Diff shows what would change (docker compose up --dry-run is not universally available,
-// so we compare `ps` output against the compose file service list).
-func (b *Backend) Diff(ctx context.Context, composeFile string) (*runtime.ChangeSet, error) {
-	current, err := b.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	running := make(map[string]bool)
-	for _, s := range current {
-		if s.Status == "running" {
-			running[s.Name] = true
-		}
-	}
-
-	// Parse the compose file service names
-	out, err := b.run(ctx, b.args("config", "--services")...)
-	if err != nil {
-		return nil, err
-	}
-
-	desired := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			desired[line] = true
-		}
-	}
-
-	cs := &runtime.ChangeSet{}
-	for svc := range desired {
-		if running[svc] {
-			cs.Update = append(cs.Update, svc)
-		} else {
-			cs.Add = append(cs.Add, svc)
-		}
-	}
-	for svc := range running {
-		if !desired[svc] {
-			cs.Remove = append(cs.Remove, svc)
-		}
-	}
-	return cs, nil
-}
-
-// Apply runs `docker compose up -d --remove-orphans`.
-func (b *Backend) Apply(ctx context.Context, composeFile string) (*runtime.ApplyResult, error) {
-	before, beforeErr := b.Status(ctx)
-	if beforeErr != nil {
-		// Don't abort the deploy — we can still proceed and report a partial
-		// result — but log so a failing docker socket isn't silently masked.
-		b.Log.Warn("pre-apply status failed", "err", beforeErr)
-	}
-
-	_, err := b.run(ctx, b.args("up", "-d", "--remove-orphans", "--pull", "missing")...)
-	if err != nil {
-		return nil, fmt.Errorf("compose up: %w", err)
-	}
-
-	after, err := b.Status(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	beforeMap := make(map[string]bool)
-	for _, s := range before {
-		beforeMap[s.Name] = true
-	}
-
-	result := &runtime.ApplyResult{}
-	for _, s := range after {
-		if beforeMap[s.Name] {
-			result.ServicesUpdated = append(result.ServicesUpdated, s.Name)
-		} else {
-			result.ServicesStarted = append(result.ServicesStarted, s.Name)
-		}
-	}
-
-	return result, nil
-}
-
-// composePS is the JSON format returned by docker compose ps --format json.
-type composePS struct {
-	Name    string `json:"Name"`
-	Service string `json:"Service"`
-	Status  string `json:"Status"`
-	Health  string `json:"Health"`
-	Image   string `json:"Image"`
-	Ports   string `json:"Ports"`
-}
-
-// Status returns the current state of all containers in the project.
-//
-// Returns (nil, nil) when the project simply has no containers yet — this is
-// the "happy path" before the first deploy. Other failures (docker daemon
-// down, permission denied on /var/run/docker.sock) are logged but still
-// returned as an empty status to keep `ls`/`status` responsive; callers
-// that need authoritative data should check the operator log.
-func (b *Backend) Status(ctx context.Context) ([]*runtime.ServiceStatus, error) {
-	out, err := b.run(ctx, b.args("ps", "--format", "json", "--all")...)
-	if err != nil {
-		b.Log.Warn("docker compose ps failed", "err", err)
-		return nil, nil
-	}
-
-	var results []*runtime.ServiceStatus
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+func parsePS(data []byte) []runtime.ServiceStatus {
+	var statuses []runtime.ServiceStatus
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		var ps composePS
-		if err := json.Unmarshal([]byte(line), &ps); err != nil {
+		var one struct {
+			Service string `json:"Service"`
+			Name    string `json:"Name"`
+			State   string `json:"State"`
+		}
+		if err := json.Unmarshal([]byte(line), &one); err != nil {
 			continue
 		}
-
-		svcType := "service"
-		if strings.HasPrefix(ps.Service, compiler.AgentServicePrefix) {
-			svcType = "agent"
+		name := one.Service
+		if name == "" {
+			name = one.Name
 		}
-
-		status := "stopped"
-		if strings.Contains(strings.ToLower(ps.Status), "up") ||
-			strings.Contains(strings.ToLower(ps.Status), "running") {
-			status = "running"
-		} else if strings.Contains(strings.ToLower(ps.Status), "exit") {
-			status = "stopped"
-		} else if strings.Contains(strings.ToLower(ps.Status), "error") {
-			status = "error"
+		if name == "" {
+			continue
 		}
-
-		health := "unknown"
-		if ps.Health != "" {
-			health = strings.ToLower(ps.Health)
-		}
-
-		results = append(results, &runtime.ServiceStatus{
-			Name:            ps.Service,
-			Type:            svcType,
-			Status:          status,
-			Health:          health,
-			ContainerID:     ps.Name,
-			Image:           ps.Image,
-			ReplicasRunning: 1,
-			ReplicasDesired: 1,
-			LastUpdated:     time.Now(),
-		})
+		statuses = append(statuses, runtime.ServiceStatus{Name: name, Runtime: "container", State: one.State})
 	}
-
-	return results, nil
+	return statuses
 }
 
-// Logs returns a reader for service logs.
-func (b *Backend) Logs(ctx context.Context, service string, opts runtime.LogOptions) (io.ReadCloser, error) {
-	args := b.args("logs")
-	if opts.Follow {
-		args = append(args, "--follow")
-	}
-	if opts.Lines > 0 {
-		args = append(args, "--tail", fmt.Sprintf("%d", opts.Lines))
-	}
-	if opts.Since != "" {
-		args = append(args, "--since", opts.Since)
-	}
-	if service != "" {
-		args = append(args, service)
-	}
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	// WaitDelay (Go 1.20+) ensures the kernel reaps the process even if the
-	// reader of `pr` stops draining — without this, a hung consumer leaks
-	// the goroutine below for the lifetime of the operator process.
-	cmd.WaitDelay = 5 * time.Second
-	pr, pw := io.Pipe()
-	cmd.Stdout = pw
-	cmd.Stderr = pw
-
-	go func() {
-		err := cmd.Run()
-		_ = pw.CloseWithError(err)
-	}()
-
-	return pr, nil
-}
-
-// Scale adjusts the replica count for a service.
-//
-// `--no-recreate` keeps other services in the project untouched — without it,
-// docker compose may tear down and re-create unrelated services if their
-// config drifted, which is surprising for a "scale" operation.
-func (b *Backend) Scale(ctx context.Context, service string, replicas int) error {
-	_, err := b.run(ctx, b.args("up", "-d", "--no-recreate", "--scale", fmt.Sprintf("%s=%d", service, replicas))...)
-	return err
-}
-
-// Stop stops the named services without removing them.
-func (b *Backend) Stop(ctx context.Context, services ...string) error {
-	args := b.args("stop")
-	args = append(args, services...)
-	_, err := b.run(ctx, args...)
-	return err
-}
-
-// Pull pulls the latest images for all services.
-func (b *Backend) Pull(ctx context.Context) error {
-	_, err := b.run(ctx, b.args("pull")...)
-	return err
-}
-
-// Down brings the entire stack down.
-func (b *Backend) Down(ctx context.Context) error {
-	_, err := b.run(ctx, b.args("down")...)
-	return err
-}
+var ErrNoServices = errors.New("no container services selected")

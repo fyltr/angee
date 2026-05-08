@@ -59,7 +59,7 @@ if [ -z "$ANGEE_VERSION" ]; then
   }
 
   BUILD_VERSION="$(cd "$SRCDIR" && git describe --tags --always 2>/dev/null || echo dev)"
-  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/fyltr/angee/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
+  (cd "$SRCDIR" && go build -ldflags="-s -w -X github.com/fyltr/angee/internal/cli.Version=${BUILD_VERSION}" -o angee ./cmd/angee/) || {
     echo "  ✗ Build failed."
     exit 1
   }
@@ -76,8 +76,8 @@ if [ -z "$ANGEE_VERSION" ]; then
   echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
   echo ""
   echo "  Get started:"
-  echo "    angee init"
-  echo "    angee up"
+  echo "    angee init --dev --yes"
+  echo "    angee dev"
   echo ""
   exit 0
 fi
@@ -137,6 +137,6 @@ if [ -f "${INSTALL_DIR}/angee-operator" ]; then
 fi
 echo ""
 echo "  Get started:"
-echo "    angee init"
-echo "    angee up"
+echo "    angee init --dev --yes"
+echo "    angee dev"
 echo ""

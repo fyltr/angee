@@ -1,6 +1,6 @@
 # Implementation Plan
 
-This is the active build plan for the clean Angee CLI and operator implementation in this folder.
+This is the active build plan for the clean Angee CLI and operator implementation in this repository.
 
 ## Invariants
 
@@ -8,7 +8,7 @@ This is the active build plan for the clean Angee CLI and operator implementatio
 - CLI, HTTP, and MCP are adapters over the same operations.
 - One operator process serves exactly one `ANGEE_ROOT`.
 - `angee up` starts container services only.
-- `angee dev` starts container services, local processes, and an in-process operator.
+- `angee dev` starts container services and local processes in the foreground; the in-process operator lifetime is tracked in `docs/DEFERRED.md`.
 - Resolved secrets never enter committed files.
 - A stack with only `services:` and `jobs:` works without workspace or source code paths.
 - Workspaces are the only provisioning primitive beyond services and jobs.
@@ -20,7 +20,7 @@ Status: complete.
 
 Delivered:
 
-- Standalone Go module under `new/`.
+- Standalone Go module at the repository root.
 - CLI and operator entrypoints.
 - Shared API request/response types.
 - Manifest schema, strict load/save, validation, and path rules.
