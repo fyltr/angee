@@ -7,6 +7,18 @@ ANGEE_VERSION=latest
 REPO="fyltr/angee"
 INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 
+install_bin() {
+  src="$1"
+  dst="$2"
+  if [ -w "$INSTALL_DIR" ]; then
+    cp "$src" "$dst"
+    chmod +x "$dst"
+  else
+    sudo cp "$src" "$dst"
+    sudo chmod +x "$dst"
+  fi
+}
+
 # Detect OS and arch
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -28,6 +40,35 @@ case "$OS" in
     exit 1
     ;;
 esac
+
+if [ -n "${ANGEE_DIST_DIR:-}" ]; then
+  DIST_DIR="${ANGEE_DIST_DIR%/}"
+  CLI_BIN="${DIST_DIR}/angee"
+  OPERATOR_BIN="${DIST_DIR}/angee-operator"
+
+  if [ ! -f "$CLI_BIN" ]; then
+    echo "  ✗ No angee binary found at ${CLI_BIN}"
+    echo "    Run: make build"
+    exit 1
+  fi
+
+  install_bin "$CLI_BIN" "${INSTALL_DIR}/angee"
+  if [ -f "$OPERATOR_BIN" ]; then
+    install_bin "$OPERATOR_BIN" "${INSTALL_DIR}/angee-operator"
+  fi
+
+  echo ""
+  echo "  ✔ angee installed to ${INSTALL_DIR}/angee from ${DIST_DIR}"
+  if [ -f "$OPERATOR_BIN" ]; then
+    echo "  ✔ angee-operator installed to ${INSTALL_DIR}/angee-operator from ${DIST_DIR}"
+  fi
+  echo ""
+  echo "  Get started:"
+  echo "    angee init --dev --yes"
+  echo "    angee dev"
+  echo ""
+  exit 0
+fi
 
 # Resolve latest version if needed
 if [ "$ANGEE_VERSION" = "latest" ]; then
@@ -64,13 +105,7 @@ if [ -z "$ANGEE_VERSION" ]; then
     exit 1
   }
 
-  if [ -w "$INSTALL_DIR" ]; then
-    cp "${SRCDIR}/angee" "${INSTALL_DIR}/angee"
-    chmod +x "${INSTALL_DIR}/angee"
-  else
-    sudo cp "${SRCDIR}/angee" "${INSTALL_DIR}/angee"
-    sudo chmod +x "${INSTALL_DIR}/angee"
-  fi
+  install_bin "${SRCDIR}/angee" "${INSTALL_DIR}/angee"
 
   echo ""
   echo "  ✔ angee ${BUILD_VERSION} installed to ${INSTALL_DIR}/angee"
@@ -113,18 +148,6 @@ else
 fi
 
 # Install CLI; install operator too when the tarball ships it (>=v0.2.0).
-install_bin() {
-  src="$1"
-  dst="$2"
-  if [ -w "$INSTALL_DIR" ]; then
-    cp "$src" "$dst"
-    chmod +x "$dst"
-  else
-    sudo cp "$src" "$dst"
-    sudo chmod +x "$dst"
-  fi
-}
-
 install_bin "$CLI_BIN" "${INSTALL_DIR}/angee"
 if [ -f "${TMP}/angee-operator" ]; then
   install_bin "${TMP}/angee-operator" "${INSTALL_DIR}/angee-operator"

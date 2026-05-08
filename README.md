@@ -13,10 +13,10 @@ curl -fsSL https://angee.ai/install.sh | sh
 From a checkout:
 
 ```sh
-make build
-sudo cp dist/angee /usr/local/bin/angee
-sudo cp dist/angee-operator /usr/local/bin/angee-operator
+make init
 ```
+
+`make init` builds `dist/angee` and `dist/angee-operator`, then runs `scripts/install.sh` against those local binaries. Set `ANGEE_INSTALL_DIR` to install somewhere other than `/usr/local/bin`.
 
 ## Quick Start
 
