@@ -20,8 +20,8 @@ func isLockBusy(err error) bool {
 	return errors.Is(err, syscall.EWOULDBLOCK)
 }
 
-func flock(file *os.File, how int) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_FLOCK, file.Fd(), uintptr(how), 0)
+func flock(file *os.File, how uintptr) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_FLOCK, file.Fd(), how, 0)
 	if errno != 0 {
 		return errno
 	}

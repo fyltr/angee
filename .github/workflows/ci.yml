@@ -104,7 +104,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v6
         with:
-          file: coverage.out
+          files: coverage.out
         continue-on-error: true
 
   # ── Stage 4: cross-compile sanity check ─────────────────────────────
