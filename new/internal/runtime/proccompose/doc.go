@@ -8,10 +8,14 @@ type File struct {
 }
 
 type Process struct {
-	Command     string            `yaml:"command,omitempty"`
-	Environment map[string]string `yaml:"environment,omitempty"`
-	WorkingDir  string            `yaml:"working_dir,omitempty"`
-	DependsOn   []string          `yaml:"depends_on,omitempty"`
+	Command     string                       `yaml:"command,omitempty"`
+	Environment []string                     `yaml:"environment,omitempty"`
+	WorkingDir  string                       `yaml:"working_dir,omitempty"`
+	DependsOn   map[string]ProcessDependency `yaml:"depends_on,omitempty"`
+}
+
+type ProcessDependency struct {
+	Condition string `yaml:"condition,omitempty"`
 }
 
 func Marshal(file File) ([]byte, error) {

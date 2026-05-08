@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,10 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, args...)
 	return err
+}
+
+func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
+	return b.Up(ctx, target)
 }
 
 func (b Backend) Down(ctx context.Context, root string) error {

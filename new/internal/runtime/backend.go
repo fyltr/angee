@@ -1,6 +1,9 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 type Target struct {
 	Root     string
@@ -25,6 +28,7 @@ type ServiceStatus struct {
 type Backend interface {
 	Build(ctx context.Context, target Target) error
 	Up(ctx context.Context, target Target) error
+	UpForeground(ctx context.Context, target Target, stdout io.Writer, stderr io.Writer) error
 	Down(ctx context.Context, root string) error
 	Start(ctx context.Context, target Target) error
 	Stop(ctx context.Context, target Target) error

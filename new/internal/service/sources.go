@@ -14,6 +14,9 @@ import (
 
 func (p *Platform) materializeReferencedSources(ctx context.Context, stack *manifest.Stack) error {
 	seen := map[string]bool{}
+	for name := range stack.Sources {
+		seen[name] = true
+	}
 	collect := func(value string) {
 		if !strings.HasPrefix(value, "source://") {
 			return

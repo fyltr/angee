@@ -1,12 +1,19 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/operator"
@@ -17,10 +24,16 @@ import (
 var Version = "dev"
 
 func Execute() error {
-	return NewRoot(os.Stdout, os.Stderr).Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return NewRootWithIO(os.Stdin, os.Stdout, os.Stderr).ExecuteContext(ctx)
 }
 
 func NewRoot(stdout, stderr io.Writer) *cobra.Command {
+	return NewRootWithIO(strings.NewReader(""), stdout, stderr)
+}
+
+func NewRootWithIO(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
 	var root string
 	var operatorURL string
 	var jsonOutput bool
@@ -28,17 +41,18 @@ func NewRoot(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "angee",
 		Short:         "Stack manager for angee.ai",
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	cmd.SetIn(stdin)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.PersistentFlags().StringVar(&root, "root", ".", "ANGEE_ROOT containing angee.yaml")
 	cmd.PersistentFlags().StringVar(&operatorURL, "operator", os.Getenv("ANGEE_OPERATOR_URL"), "operator URL for HTTP mode")
 	cmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "write JSON output")
 
-	cmd.AddCommand(versionCommand(stdout))
-	cmd.AddCommand(initCommand(stdout, &root, &operatorURL))
+	cmd.AddCommand(initCommand(stdout, stderr, &root, &operatorURL))
 	cmd.AddCommand(stackCommand(stdout, &root, &operatorURL))
 	cmd.AddCommand(statusCommand(stdout, &root, &operatorURL, &jsonOutput))
 	cmd.AddCommand(runtimeCommands(stdout, &root, &operatorURL)...)
@@ -51,8 +65,10 @@ func NewRoot(stdout, stderr io.Writer) *cobra.Command {
 	return cmd
 }
 
-func initCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
+func initCommand(stdout, stderr io.Writer, root, operatorURL *string) *cobra.Command {
 	var dev bool
+	var force bool
+	var yes bool
 	var inputs []string
 	cmd := &cobra.Command{
 		Use:   "init [path]",
@@ -71,25 +87,81 @@ func initCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			platform, err := localPlatform(root, operatorURL)
+			platform, err := localPlatformForRoot(root, operatorURL, false)
 			if err != nil {
 				return err
 			}
-			if err := platform.StackInit(cmd.Context(), template, path, parsedInputs); err != nil {
+			parsedInputs, err = resolveStackTemplateInputs(cmd, platform, template, parsedInputs, yes)
+			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(stdout, "stack initialized")
+			result, err := platform.StackInit(cmd.Context(), template, path, parsedInputs, force)
+			if err != nil {
+				return stackInitError(template, err)
+			}
+			_, err = fmt.Fprintf(stdout, "stack template %s initialized as %s\n", result.Template, displayPath(result.Root))
 			return err
 		},
 	}
 	cmd.Flags().BoolVar(&dev, "dev", false, "use the dev stack template")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively")
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
+	cmd.AddCommand(initStackCommand(stdout, root, operatorURL))
+	return cmd
+}
+
+func initStackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
+	var template string
+	var force bool
+	var yes bool
+	var inputValues []string
+	cmd := &cobra.Command{
+		Use:   "stack --template <template> <ANGEE_ROOT>",
+		Short: "Initialize a stack root from a template",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if template == "" {
+				return fmt.Errorf("--template is required")
+			}
+			inputs, err := parseKeyValues(inputValues)
+			if err != nil {
+				return err
+			}
+			if inputs == nil {
+				inputs = map[string]string{}
+			}
+			if _, ok := inputs["ANGEE_ROOT"]; !ok {
+				inputs["ANGEE_ROOT"] = "."
+			}
+			platform, err := localPlatformForRoot(root, operatorURL, false)
+			if err != nil {
+				return err
+			}
+			inputs, err = resolveStackTemplateInputs(cmd, platform, template, inputs, yes)
+			if err != nil {
+				return err
+			}
+			result, err := platform.StackInit(cmd.Context(), template, args[0], inputs, force)
+			if err != nil {
+				return stackInitError(template, err)
+			}
+			_, err = fmt.Fprintf(stdout, "stack template %s initialized as %s\n", result.Template, displayPath(result.Root))
+			return err
+		},
+	}
+	cmd.Flags().StringVarP(&template, "template", "t", "", "template ref, URL, or path")
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite a non-empty stack root")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "accept template defaults and run non-interactively")
+	cmd.Flags().StringArrayVar(&inputValues, "input", nil, "template input K=V")
 	return cmd
 }
 
 func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	cmd := &cobra.Command{Use: "stack", Short: "Manage stack configuration"}
 	var initInputs []string
+	var initForce bool
+	var initYes bool
 	initCmd := &cobra.Command{
 		Use:   "init <template> [path]",
 		Short: "Initialize a stack from a template",
@@ -103,17 +175,24 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			platform, err := localPlatform(root, operatorURL)
+			platform, err := localPlatformForRoot(root, operatorURL, false)
 			if err != nil {
 				return err
 			}
-			if err := platform.StackInit(cmd.Context(), args[0], path, inputs); err != nil {
+			inputs, err = resolveStackTemplateInputs(cmd, platform, args[0], inputs, initYes)
+			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(stdout, "stack initialized")
+			result, err := platform.StackInit(cmd.Context(), args[0], path, inputs, initForce)
+			if err != nil {
+				return stackInitError(args[0], err)
+			}
+			_, err = fmt.Fprintf(stdout, "stack template %s initialized as %s\n", result.Template, displayPath(result.Root))
 			return err
 		},
 	}
+	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite a non-empty stack root")
+	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "accept template defaults and run non-interactively")
 	initCmd.Flags().StringArrayVar(&initInputs, "input", nil, "template input K=V")
 	cmd.AddCommand(initCmd)
 	cmd.AddCommand(&cobra.Command{
@@ -152,18 +231,6 @@ func stackCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	destroyCmd.Flags().BoolVar(&purge, "purge", false, "remove runtime state directories")
 	cmd.AddCommand(destroyCmd)
 	return cmd
-}
-
-func versionCommand(stdout io.Writer) *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the Angee version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := fmt.Fprintln(stdout, Version)
-			return err
-		},
-	}
 }
 
 func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Command {
@@ -258,11 +325,7 @@ func runtimeCommands(stdout io.Writer, root, operatorURL *string) []*cobra.Comma
 			if err != nil {
 				return err
 			}
-			if err := platform.StackDev(cmd.Context(), devBuild); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintln(stdout, "dev stack started")
-			return err
+			return platform.StackDevForeground(cmd.Context(), devBuild, stdout, cmd.ErrOrStderr())
 		},
 	}
 	devCmd.Flags().BoolVar(&devBuild, "build", false, "build container images before starting")
@@ -555,11 +618,140 @@ func parseKeyValues(values []string) (map[string]string, error) {
 	return out, nil
 }
 
+func stackInitError(template string, err error) error {
+	var exists *service.StackRootExistsError
+	if errors.As(err, &exists) {
+		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(exists.Root))
+	}
+	return err
+}
+
+func resolveStackTemplateInputs(cmd *cobra.Command, platform *service.Platform, template string, provided map[string]string, yes bool) (map[string]string, error) {
+	if provided == nil {
+		provided = map[string]string{}
+	}
+	if yes {
+		return provided, nil
+	}
+	questions, defaults, err := platform.StackTemplateQuestions(cmd.Context(), template)
+	if err != nil {
+		return nil, err
+	}
+	if len(questions) == 0 {
+		return provided, nil
+	}
+	reader := bufio.NewReader(cmd.InOrStdin())
+	keys := make([]string, 0, len(questions))
+	for key := range questions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := map[string]string{}
+	for key, value := range provided {
+		out[key] = value
+	}
+	for _, key := range keys {
+		if _, ok := out[key]; ok {
+			continue
+		}
+		question := questions[key]
+		defaultValue, hasDefault := defaults[key]
+		prompt := key + ": "
+		if hasDefault {
+			prompt = fmt.Sprintf("%s [%s]: ", key, defaultValue)
+		}
+		if _, err := fmt.Fprint(cmd.ErrOrStderr(), prompt); err != nil {
+			return nil, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			return nil, fmt.Errorf("template input %s requires interactive input; use --yes to accept defaults or --input %s=value", key, key)
+		}
+		value := strings.TrimSpace(line)
+		if value == "" && hasDefault {
+			value = defaultValue
+		}
+		if value == "" && question.Required {
+			return nil, fmt.Errorf("template input %s is required; pass --input %s=value", key, key)
+		}
+		if value != "" {
+			if err := validateTemplateInputValue(key, question.Type, value); err != nil {
+				return nil, err
+			}
+			out[key] = value
+		}
+	}
+	return out, nil
+}
+
+func validateTemplateInputValue(key string, typ string, value string) error {
+	switch typ {
+	case "", "str", "string":
+		return nil
+	case "int", "integer":
+		if _, err := strconv.Atoi(value); err != nil {
+			return fmt.Errorf("template input %s must be an integer", key)
+		}
+		return nil
+	case "bool", "boolean":
+		if _, err := strconv.ParseBool(value); err != nil {
+			return fmt.Errorf("template input %s must be a boolean", key)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func displayPath(path string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil {
+		return path
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		if rel == "." {
+			return rel
+		}
+		return path
+	}
+	return rel
+}
+
 func localPlatform(root, operatorURL *string) (*service.Platform, error) {
+	return localPlatformForRoot(root, operatorURL, true)
+}
+
+func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (*service.Platform, error) {
 	if operatorURL != nil && *operatorURL != "" {
 		return nil, fmt.Errorf("HTTP operator mode is not wired yet")
 	}
-	return service.New(*root)
+	selected := *root
+	if resolveControlRoot {
+		resolved, err := resolveRoot(selected)
+		if err != nil {
+			return nil, err
+		}
+		selected = resolved
+	}
+	return service.New(selected)
+}
+
+func resolveRoot(root string) (string, error) {
+	if root == "" {
+		root = "."
+	}
+	if _, err := os.Stat(filepath.Join(root, "angee.yaml")); err == nil {
+		return root, nil
+	}
+	control := filepath.Join(root, ".angee")
+	if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
+		return control, nil
+	}
+	return root, nil
 }
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
@@ -939,10 +1131,7 @@ func statusCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool
 		Short: "Show declared stack state",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if *operatorURL != "" {
-				return fmt.Errorf("HTTP operator mode is not wired yet")
-			}
-			platform, err := service.New(*root)
+			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
 			}
@@ -971,10 +1160,7 @@ func internalCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bo
 		Short: "Compile runtime backend files without starting processes",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if *operatorURL != "" {
-				return fmt.Errorf("HTTP operator mode is not wired yet")
-			}
-			platform, err := service.New(*root)
+			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
 			}
@@ -998,10 +1184,7 @@ func internalCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bo
 		Short: "Compile and write runtime backend files",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if *operatorURL != "" {
-				return fmt.Errorf("HTTP operator mode is not wired yet")
-			}
-			platform, err := service.New(*root)
+			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
 				return err
 			}

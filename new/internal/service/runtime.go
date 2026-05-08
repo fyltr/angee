@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/fyltr/angee/internal/manifest"
@@ -62,7 +63,36 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 		}
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 {
-		if err := p.procBackend.Up(ctx, runtime.Target{Root: p.root}); err != nil {
+		if err := p.procBackend.Up(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io.Writer, stderr io.Writer) error {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) > 0 {
+		if err := p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Build: build, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+			return err
+		}
+	}
+	if len(compiled.ProcessCompose.Processes) > 0 {
+		return p.procBackend.UpForeground(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr)
+	}
+	logs, err := p.StackLogs(ctx, nil, true)
+	if err != nil {
+		return err
+	}
+	for line := range logs {
+		if _, err := io.WriteString(stdout, line); err != nil {
 			return err
 		}
 	}
@@ -175,7 +205,7 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 		return err
 	}
 	containerTarget := runtime.Target{Root: p.root, Services: container, EnvFile: p.runtimeEnvFile(stack)}
-	localTarget := runtime.Target{Root: p.root, Services: local}
+	localTarget := runtime.Target{Root: p.root, Services: local, EnvFile: p.runtimeEnvFile(stack)}
 	switch action {
 	case "start":
 		if len(container) > 0 {

@@ -12,6 +12,7 @@ This is the active build plan for the clean Angee CLI and operator implementatio
 - Resolved secrets never enter committed files.
 - A stack with only `services:` and `jobs:` works without workspace or source code paths.
 - Workspaces are the only provisioning primitive beyond services and jobs.
+- Project templates live in `.templates/<kind>/<name>/`; this path has lookup priority.
 
 ## Phase 1: Foundation
 

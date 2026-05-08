@@ -24,7 +24,7 @@ func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateR
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
-	templatePath, templateRef, err := p.resolveTemplate(req.Template, "workspace")
+	templatePath, templateRef, err := p.resolveTemplate(ctx, req.Template, "workspace")
 	if err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -464,7 +464,7 @@ func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath strin
 		if entry.Template == "" {
 			continue
 		}
-		path, ref, err := p.resolveTemplate(entry.Template, "stack")
+		path, ref, err := p.resolveTemplate(ctx, entry.Template, "stack")
 		if err != nil {
 			return nil, "", err
 		}
@@ -572,9 +572,12 @@ func (p *Platform) workspaceName(metadata copierx.Metadata, explicit string, inp
 	return name, nil
 }
 
-func (p *Platform) resolveTemplate(ref, kind string) (string, string, error) {
+func (p *Platform) resolveTemplate(ctx context.Context, ref, kind string) (string, string, error) {
 	if ref == "" {
 		return "", "", fmt.Errorf("template reference is empty")
+	}
+	if isRemoteTemplateRef(ref) {
+		return p.resolveRemoteTemplate(ctx, ref, kind)
 	}
 	if filepath.IsAbs(ref) {
 		if _, err := os.Stat(ref); err != nil {

@@ -73,11 +73,12 @@ type ChainEntry struct {
 }
 
 type config struct {
-	Subdirectory string   `yaml:"_subdirectory"`
-	Suffix       string   `yaml:"_templates_suffix"`
-	AnswersFile  string   `yaml:"_answers_file"`
-	Angee        Metadata `yaml:"_angee"`
-	Defaults     Inputs   `yaml:"-"`
+	Subdirectory string           `yaml:"_subdirectory"`
+	Suffix       string           `yaml:"_templates_suffix"`
+	AnswersFile  string           `yaml:"_answers_file"`
+	Angee        Metadata         `yaml:"_angee"`
+	Defaults     Inputs           `yaml:"-"`
+	Questions    map[string]Input `yaml:"-"`
 }
 
 type LocalRenderer struct{}
@@ -102,6 +103,22 @@ func (r LocalRenderer) Update(ctx context.Context, req UpdateRequest) error {
 	return r.Copy(ctx, CopyRequest{Template: req.Template, Dest: req.Dest, Inputs: req.Inputs})
 }
 
+func TemplateInputs(templatePath string, inputs Inputs) (Inputs, error) {
+	cfg, err := readConfig(templatePath)
+	if err != nil {
+		return nil, err
+	}
+	return mergeInputs(cfg, inputs), nil
+}
+
+func TemplateQuestions(templatePath string) (map[string]Input, Inputs, error) {
+	cfg, err := readConfig(templatePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg.Questions, cfg.Defaults, nil
+}
+
 func readConfig(templatePath string) (config, error) {
 	data, err := os.ReadFile(filepath.Join(templatePath, "copier.yml"))
 	if err != nil {
@@ -114,6 +131,7 @@ func readConfig(templatePath string) (config, error) {
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err == nil {
 		cfg.Defaults = defaultsFromRaw(raw)
+		cfg.Questions = questionsFromRaw(raw)
 	}
 	if cfg.Subdirectory == "" {
 		cfg.Subdirectory = "."
@@ -127,14 +145,31 @@ func readConfig(templatePath string) (config, error) {
 	return cfg, nil
 }
 
+func questionsFromRaw(raw map[string]any) map[string]Input {
+	questions := map[string]Input{}
+	for key, value := range raw {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		body, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		encoded, err := yaml.Marshal(body)
+		if err != nil {
+			continue
+		}
+		var input Input
+		if err := yaml.Unmarshal(encoded, &input); err != nil {
+			continue
+		}
+		questions[key] = input
+	}
+	return questions
+}
+
 func render(ctx context.Context, templatePath, dest string, cfg config, inputs Inputs) error {
-	mergedInputs := Inputs{}
-	for key, value := range cfg.Defaults {
-		mergedInputs[key] = value
-	}
-	for key, value := range inputs {
-		mergedInputs[key] = value
-	}
+	mergedInputs := mergeInputs(cfg, inputs)
 	src := filepath.Join(templatePath, cfg.Subdirectory)
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
@@ -177,6 +212,17 @@ func render(ctx context.Context, templatePath, dest string, cfg config, inputs I
 		return err
 	}
 	return os.WriteFile(filepath.Join(dest, cfg.AnswersFile), answers, 0o644)
+}
+
+func mergeInputs(cfg config, inputs Inputs) Inputs {
+	mergedInputs := Inputs{}
+	for key, value := range cfg.Defaults {
+		mergedInputs[key] = value
+	}
+	for key, value := range inputs {
+		mergedInputs[key] = value
+	}
+	return mergedInputs
 }
 
 func defaultsFromRaw(raw map[string]any) Inputs {

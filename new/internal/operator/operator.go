@@ -172,11 +172,12 @@ func (s *Server) stackInit(w http.ResponseWriter, r *http.Request) {
 		writeBadRequest(w, err)
 		return
 	}
-	if err := s.platform.StackInit(r.Context(), req.Template, req.Path, req.Inputs); err != nil {
+	result, err := s.platform.StackInit(r.Context(), req.Template, req.Path, req.Inputs, req.Force)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"status": "initialized"})
+	writeJSON(w, http.StatusCreated, map[string]any{"status": "initialized", "template": result.Template, "root": result.Root})
 }
 
 func (s *Server) stackUpdate(w http.ResponseWriter, r *http.Request) {

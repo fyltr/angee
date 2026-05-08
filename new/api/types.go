@@ -23,6 +23,8 @@ type StackInitRequest struct {
 	Template string            `json:"template"`
 	Path     string            `json:"path,omitempty"`
 	Inputs   map[string]string `json:"inputs,omitempty"`
+	Force    bool              `json:"force,omitempty"`
+	Yes      bool              `json:"yes,omitempty"`
 }
 
 type StackPrepareRequest struct {

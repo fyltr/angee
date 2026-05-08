@@ -264,14 +264,89 @@ func Compile(stack *manifest.Stack, root string, resolvedSecrets map[string]stri
 			}
 			compiled.ProcessCompose.Processes[name] = proccompose.Process{
 				Command:     shellCommand(command),
-				Environment: env,
+				Environment: envList(env),
 				WorkingDir:  workdir,
-				DependsOn:   append(service.After, service.DependsOn...),
+				DependsOn:   processDependsOn(append(service.After, service.DependsOn...), stack),
 			}
 		}
 	}
 
+	for _, name := range sortedKeys(stack.Jobs) {
+		job := stack.Jobs[name]
+		if job.Runtime != manifest.RuntimeLocal {
+			continue
+		}
+		jobCtx := ctx
+		jobCtx.Name = name
+		env, err := substitute.ResolveMap(job.Env, jobCtx)
+		if err != nil {
+			return nil, fmt.Errorf("job %s env: %w", name, err)
+		}
+		command, err := substitute.ResolveSlice(job.Command, jobCtx)
+		if err != nil {
+			return nil, fmt.Errorf("job %s command: %w", name, err)
+		}
+		mounts, err := substitute.ResolveSlice([]string(job.Mounts), jobCtx)
+		if err != nil {
+			return nil, fmt.Errorf("job %s mounts: %w", name, err)
+		}
+		workdir, err := substitute.Resolve(job.Workdir, jobCtx)
+		if err != nil {
+			return nil, fmt.Errorf("job %s workdir: %w", name, err)
+		}
+		localEnv, err := localMountEnv(mounts, mountResolver)
+		if err != nil {
+			return nil, fmt.Errorf("job %s mounts: %w", name, err)
+		}
+		if len(localEnv) > 0 && env == nil {
+			env = map[string]string{}
+		}
+		for key, value := range localEnv {
+			env[key] = value
+		}
+		workdir, err = mountx.ResolveWorkdir(workdir, mountResolver)
+		if err != nil {
+			return nil, fmt.Errorf("job %s workdir: %w", name, err)
+		}
+		if workdir != "" && !filepath.IsAbs(workdir) {
+			workdir = filepath.Join(root, workdir)
+		}
+		compiled.ProcessCompose.Processes[name] = proccompose.Process{
+			Command:     shellCommand(command),
+			Environment: envList(env),
+			WorkingDir:  workdir,
+			DependsOn:   processDependsOn(job.DependsOn, stack),
+		}
+	}
+
 	return compiled, nil
+}
+
+func envList(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := sortedKeys(env)
+	items := make([]string, 0, len(keys))
+	for _, key := range keys {
+		items = append(items, key+"="+env[key])
+	}
+	return items
+}
+
+func processDependsOn(names []string, stack *manifest.Stack) map[string]proccompose.ProcessDependency {
+	if len(names) == 0 {
+		return nil
+	}
+	deps := map[string]proccompose.ProcessDependency{}
+	for _, name := range names {
+		condition := "process_started"
+		if _, ok := stack.Jobs[name]; ok {
+			condition = "process_completed_successfully"
+		}
+		deps[name] = proccompose.ProcessDependency{Condition: condition}
+	}
+	return deps
 }
 
 func resolveContainerMounts(mounts []string, resolver mountx.Resolver) ([]string, error) {
@@ -321,6 +396,10 @@ func resourceResolver(stack *manifest.Stack, root string) mountx.Resolver {
 		resolver.Workspaces[name] = filepath.Join(root, "workspaces", name)
 	}
 	for name, source := range stack.Sources {
+		if source.Kind == "local" && source.Path != "" {
+			resolver.Sources[name] = manifest.ResolvePath(root, source.Path)
+			continue
+		}
 		cachePath := source.CachePath
 		if cachePath == "" {
 			cachePath = filepath.Join("sources", name)
