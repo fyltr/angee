@@ -1,0 +1,259 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/fyltr/angee/internal/manifest"
+	"github.com/fyltr/angee/internal/runtime"
+)
+
+func (p *Platform) StackBuild(ctx context.Context, services []string) error {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	selected, err := selectRuntimeServices(stack, services, manifest.RuntimeContainer)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) == 0 || len(selected) == 0 && len(services) > 0 {
+		return nil
+	}
+	return p.composeBackend.Build(ctx, runtime.Target{Root: p.root, Services: selected, EnvFile: p.runtimeEnvFile(stack)})
+}
+
+func (p *Platform) StackUp(ctx context.Context, services []string, build bool) error {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	selected, err := selectRuntimeServices(stack, services, manifest.RuntimeContainer)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) == 0 || len(selected) == 0 && len(services) > 0 {
+		return nil
+	}
+	return p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Services: selected, Build: build, EnvFile: p.runtimeEnvFile(stack)})
+}
+
+func (p *Platform) StackDev(ctx context.Context, build bool) error {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) > 0 {
+		if err := p.composeBackend.Up(ctx, runtime.Target{Root: p.root, Build: build, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+			return err
+		}
+	}
+	if len(compiled.ProcessCompose.Processes) > 0 {
+		if err := p.procBackend.Up(ctx, runtime.Target{Root: p.root}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Platform) StackDown(ctx context.Context) error {
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return err
+	}
+	if len(compiled.Compose.Services) == 0 {
+		if len(compiled.ProcessCompose.Processes) == 0 {
+			return nil
+		}
+		return p.procBackend.Down(ctx, p.root)
+	}
+	if err := p.composeBackend.Down(ctx, p.root); err != nil {
+		return err
+	}
+	if len(compiled.ProcessCompose.Processes) > 0 {
+		return p.procBackend.Down(ctx, p.root)
+	}
+	return nil
+}
+
+func (p *Platform) ServiceStart(ctx context.Context, names []string) error {
+	return p.serviceRuntimeAction(ctx, "start", names)
+}
+
+func (p *Platform) ServiceStop(ctx context.Context, names []string) error {
+	return p.serviceRuntimeAction(ctx, "stop", names)
+}
+
+func (p *Platform) ServiceRestart(ctx context.Context, names []string) error {
+	return p.serviceRuntimeAction(ctx, "restart", names)
+}
+
+func (p *Platform) StackLogs(ctx context.Context, services []string, follow bool) (<-chan string, error) {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := p.StackPrepare(ctx)
+	if err != nil {
+		return nil, err
+	}
+	container := []string{}
+	local := []string{}
+	if len(services) == 0 {
+		for _, name := range sortedKeys(stack.Services) {
+			switch stack.Services[name].Runtime {
+			case manifest.RuntimeContainer:
+				container = append(container, name)
+			case manifest.RuntimeLocal:
+				local = append(local, name)
+			}
+		}
+	} else {
+		container, local, err = splitRuntimeServices(stack, services)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var channels []<-chan string
+	if len(compiled.Compose.Services) > 0 && len(container) > 0 {
+		ch, err := p.composeBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: container, Follow: follow, EnvFile: p.runtimeEnvFile(stack)})
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, ch)
+	}
+	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
+		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow})
+		if err != nil {
+			return nil, err
+		}
+		channels = append(channels, ch)
+	}
+	if len(channels) == 0 {
+		ch := make(chan string)
+		close(ch)
+		return ch, nil
+	}
+	out := make(chan string)
+	go func() {
+		defer close(out)
+		for _, ch := range channels {
+			for line := range ch {
+				out <- line
+			}
+		}
+	}()
+	return out, nil
+}
+
+func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, names []string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("at least one service name is required")
+	}
+	stack, err := p.LoadStack()
+	if err != nil {
+		return err
+	}
+	if _, err := p.StackPrepare(ctx); err != nil {
+		return err
+	}
+	container, local, err := splitRuntimeServices(stack, names)
+	if err != nil {
+		return err
+	}
+	containerTarget := runtime.Target{Root: p.root, Services: container, EnvFile: p.runtimeEnvFile(stack)}
+	localTarget := runtime.Target{Root: p.root, Services: local}
+	switch action {
+	case "start":
+		if len(container) > 0 {
+			if err := p.composeBackend.Start(ctx, containerTarget); err != nil {
+				return err
+			}
+		}
+		if len(local) > 0 {
+			return p.procBackend.Start(ctx, localTarget)
+		}
+		return nil
+	case "stop":
+		if len(container) > 0 {
+			if err := p.composeBackend.Stop(ctx, containerTarget); err != nil {
+				return err
+			}
+		}
+		if len(local) > 0 {
+			return p.procBackend.Stop(ctx, localTarget)
+		}
+		return nil
+	case "restart":
+		if len(container) > 0 {
+			if err := p.composeBackend.Restart(ctx, containerTarget); err != nil {
+				return err
+			}
+		}
+		if len(local) > 0 {
+			return p.procBackend.Restart(ctx, localTarget)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown service runtime action %q", action)
+	}
+}
+
+func splitRuntimeServices(stack *manifest.Stack, names []string) ([]string, []string, error) {
+	container := []string{}
+	local := []string{}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		service, ok := stack.Services[name]
+		if !ok {
+			return nil, nil, fmt.Errorf("service %q is not declared", name)
+		}
+		switch service.Runtime {
+		case manifest.RuntimeContainer:
+			container = append(container, name)
+		case manifest.RuntimeLocal:
+			local = append(local, name)
+		default:
+			return nil, nil, fmt.Errorf("service %q has unsupported runtime %q", name, service.Runtime)
+		}
+	}
+	return container, local, nil
+}
+
+func selectRuntimeServices(stack *manifest.Stack, names []string, runtimeKind manifest.Runtime) ([]string, error) {
+	if len(names) == 0 {
+		selected := make([]string, 0)
+		for _, name := range sortedKeys(stack.Services) {
+			if stack.Services[name].Runtime == runtimeKind {
+				selected = append(selected, name)
+			}
+		}
+		return selected, nil
+	}
+	selected := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		service, ok := stack.Services[name]
+		if !ok {
+			return nil, fmt.Errorf("service %q is not declared", name)
+		}
+		if service.Runtime != runtimeKind {
+			return nil, fmt.Errorf("service %q uses runtime %q, not %q", name, service.Runtime, runtimeKind)
+		}
+		selected = append(selected, name)
+	}
+	return selected, nil
+}

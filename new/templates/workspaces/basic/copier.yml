@@ -1,0 +1,19 @@
+_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+
+_angee:
+  kind: workspace
+  name: basic
+  description: Basic workspace directory
+  instance_naming:
+    pattern: "${inputs.name | slug}"
+    max_length: 40
+  inputs:
+    name:
+      type: str
+      required: true
+
+name:
+  type: str
+  default: workspace

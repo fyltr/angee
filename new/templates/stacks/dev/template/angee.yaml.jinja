@@ -1,0 +1,27 @@
+version: 1
+kind: stack
+name: {{ project_name }}
+
+template:
+  active: stacks/dev
+  answers_file: .copier-answers.yml
+
+operator:
+  url: http://127.0.0.1:{{ operator_port }}
+  token_secret: operator-token
+  port_pool:
+    web: { range: "8200-8299" }
+    custom: { range: "10000-10999" }
+
+secrets_backend:
+  type: env-file
+  path: .env
+
+secrets:
+  operator-token: { generated: true, length: 32 }
+
+ports:
+  web: { value: {{ web_port }}, export_env: WEB_PORT }
+
+services: {}
+jobs: {}

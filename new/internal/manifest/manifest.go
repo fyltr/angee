@@ -1,0 +1,371 @@
+package manifest
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	KindStack      = "stack"
+	VersionCurrent = 1
+)
+
+type Runtime string
+
+const (
+	RuntimeContainer Runtime = "container"
+	RuntimeLocal     Runtime = "local"
+)
+
+type Stack struct {
+	Version        int                    `yaml:"version" json:"version"`
+	Kind           string                 `yaml:"kind" json:"kind"`
+	Name           string                 `yaml:"name" json:"name"`
+	Template       *Template              `yaml:"template,omitempty" json:"template,omitempty"`
+	Operator       Operator               `yaml:"operator,omitempty" json:"operator,omitempty"`
+	SecretsBackend SecretsBackend         `yaml:"secrets_backend,omitempty" json:"secrets_backend,omitempty"`
+	Secrets        map[string]Secret      `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Ports          map[string]Port        `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Volumes        map[string]Volume      `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	Sources        map[string]Source      `yaml:"sources,omitempty" json:"sources,omitempty"`
+	Workspaces     map[string]Workspace   `yaml:"workspaces,omitempty" json:"workspaces,omitempty"`
+	Services       map[string]Service     `yaml:"services,omitempty" json:"services,omitempty"`
+	Jobs           map[string]Job         `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+	PortLeases     map[string][]PortLease `yaml:"port_leases,omitempty" json:"port_leases,omitempty"`
+}
+
+type Template struct {
+	Active      string `yaml:"active,omitempty" json:"active,omitempty"`
+	AnswersFile string `yaml:"answers_file,omitempty" json:"answers_file,omitempty"`
+}
+
+type Operator struct {
+	URL           string              `yaml:"url,omitempty" json:"url,omitempty"`
+	Domain        string              `yaml:"domain,omitempty" json:"domain,omitempty"`
+	TokenSecret   string              `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
+	PortPool      map[string]PortPool `yaml:"port_pool,omitempty" json:"port_pool,omitempty"`
+	TemplatePaths []string            `yaml:"template_paths,omitempty" json:"template_paths,omitempty"`
+}
+
+type PortPool struct {
+	Range string `yaml:"range" json:"range"`
+}
+
+type PortLease struct {
+	Port      int       `yaml:"port" json:"port"`
+	Owner     string    `yaml:"owner" json:"owner"`
+	CreatedAt time.Time `yaml:"created_at" json:"created_at"`
+}
+
+type SecretsBackend struct {
+	Type    string `yaml:"type,omitempty" json:"type,omitempty"`
+	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	Mount   string `yaml:"mount,omitempty" json:"mount,omitempty"`
+	Token   string `yaml:"token,omitempty" json:"token,omitempty"`
+}
+
+type Secret struct {
+	Generated bool   `yaml:"generated,omitempty" json:"generated,omitempty"`
+	Length    int    `yaml:"length,omitempty" json:"length,omitempty"`
+	Required  bool   `yaml:"required,omitempty" json:"required,omitempty"`
+	Import    string `yaml:"import,omitempty" json:"import,omitempty"`
+}
+
+type Port struct {
+	Value     int      `yaml:"value" json:"value"`
+	ExportEnv string   `yaml:"export_env,omitempty" json:"export_env,omitempty"`
+	Aliases   []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+}
+
+type Volume struct {
+	Driver string `yaml:"driver,omitempty" json:"driver,omitempty"`
+	Path   string `yaml:"path,omitempty" json:"path,omitempty"`
+}
+
+type Source struct {
+	Kind       string     `yaml:"kind" json:"kind"`
+	Repo       string     `yaml:"repo,omitempty" json:"repo,omitempty"`
+	URL        string     `yaml:"url,omitempty" json:"url,omitempty"`
+	Path       string     `yaml:"path,omitempty" json:"path,omitempty"`
+	DefaultRef string     `yaml:"default_ref,omitempty" json:"default_ref,omitempty"`
+	CachePath  string     `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+	Auth       SourceAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Git        SourceGit  `yaml:"git,omitempty" json:"git,omitempty"`
+	Checksum   string     `yaml:"checksum,omitempty" json:"checksum,omitempty"`
+}
+
+type SourceAuth struct {
+	Mode         string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	SSHKeySecret string `yaml:"ssh_key_secret,omitempty" json:"ssh_key_secret,omitempty"`
+	TokenSecret  string `yaml:"token_secret,omitempty" json:"token_secret,omitempty"`
+}
+
+type SourceGit struct {
+	UserName  string `yaml:"user_name,omitempty" json:"user_name,omitempty"`
+	UserEmail string `yaml:"user_email,omitempty" json:"user_email,omitempty"`
+}
+
+type Workspace struct {
+	Template     string                     `yaml:"template" json:"template"`
+	Inputs       map[string]string          `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Sources      map[string]WorkspaceSource `yaml:"sources,omitempty" json:"sources,omitempty"`
+	Resolved     WorkspaceResolved          `yaml:"resolved,omitempty" json:"resolved,omitempty"`
+	TTL          string                     `yaml:"ttl,omitempty" json:"ttl,omitempty"`
+	TTLExpiresAt *time.Time                 `yaml:"ttl_expires_at,omitempty" json:"ttl_expires_at,omitempty"`
+}
+
+type WorkspaceSource struct {
+	Source  string `yaml:"source" json:"source"`
+	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Ref     string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Subpath string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
+}
+
+type WorkspaceResolved struct {
+	Chain        []string               `yaml:"chain,omitempty" json:"chain,omitempty"`
+	ChainRoot    string                 `yaml:"chain_root,omitempty" json:"chain_root,omitempty"`
+	PersistPaths map[string]PersistPath `yaml:"persist_paths,omitempty" json:"persist_paths,omitempty"`
+}
+
+type PersistPath struct {
+	Subpath string `yaml:"subpath" json:"subpath"`
+	Scope   string `yaml:"scope" json:"scope"`
+}
+
+type Service struct {
+	Runtime   Runtime           `yaml:"runtime" json:"runtime"`
+	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
+	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
+	Command   []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	EnvFile   string            `yaml:"env_file,omitempty" json:"env_file,omitempty"`
+	Ports     StringList        `yaml:"ports,omitempty" json:"ports,omitempty"`
+	Mounts    StringList        `yaml:"mounts,omitempty" json:"mounts,omitempty"`
+	Workdir   string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	After     []string          `yaml:"after,omitempty" json:"after,omitempty"`
+	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+}
+
+type Job struct {
+	Runtime   Runtime           `yaml:"runtime" json:"runtime"`
+	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
+	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
+	Command   []string          `yaml:"command,omitempty" json:"command,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	EnvFile   string            `yaml:"env_file,omitempty" json:"env_file,omitempty"`
+	Mounts    StringList        `yaml:"mounts,omitempty" json:"mounts,omitempty"`
+	Workdir   string            `yaml:"workdir,omitempty" json:"workdir,omitempty"`
+	DependsOn []string          `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	RunOn     []string          `yaml:"run_on,omitempty" json:"run_on,omitempty"`
+}
+
+type StringList []string
+
+func (s *StringList) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		*s = StringList{value.Value}
+		return nil
+	}
+	if value.Kind != yaml.SequenceNode {
+		return fmt.Errorf("expected string list")
+	}
+	items := make([]string, 0, len(value.Content))
+	for _, item := range value.Content {
+		switch item.Kind {
+		case yaml.ScalarNode:
+			items = append(items, item.Value)
+		case yaml.MappingNode:
+			items = append(items, stringifyMapping(item))
+		default:
+			return fmt.Errorf("unsupported list item kind %d", item.Kind)
+		}
+	}
+	*s = items
+	return nil
+}
+
+func stringifyMapping(node *yaml.Node) string {
+	values := map[string]string{}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		values[node.Content[i].Value] = node.Content[i+1].Value
+	}
+	if typ, ok := values["type"]; ok {
+		source := values["source"]
+		target := values["target"]
+		ro := ""
+		if values["read_only"] == "true" || values["ro"] == "true" {
+			ro = ":ro"
+		}
+		switch typ {
+		case "volume":
+			return "volume://" + source + ":" + target + ro
+		case "bind":
+			return "bind://" + source + ":" + target + ro
+		}
+	}
+	if port, ok := values["port"]; ok {
+		if host := values["host"]; host != "" {
+			return host + ":" + port
+		}
+		return port
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+values[key])
+	}
+	return strings.Join(parts, ",")
+}
+
+func LoadFile(path string) (*Stack, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var stack Stack
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(true)
+	if err := dec.Decode(&stack); err != nil {
+		return nil, err
+	}
+	stack.initMaps()
+	if err := stack.Validate(); err != nil {
+		return nil, err
+	}
+	return &stack, nil
+}
+
+func SaveFile(path string, stack *Stack) error {
+	if stack == nil {
+		return errors.New("manifest is nil")
+	}
+	stack.initMaps()
+	if err := stack.Validate(); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(stack)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func Path(root string) string {
+	return filepath.Join(root, "angee.yaml")
+}
+
+func ResolvePath(root, p string) string {
+	if p == "" {
+		return ""
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Clean(filepath.Join(root, p))
+}
+
+func (s *Stack) EnvFilePath(root string) string {
+	path := s.SecretsBackend.Path
+	if path == "" {
+		path = ".env"
+	}
+	return ResolvePath(root, path)
+}
+
+func (s *Stack) Validate() error {
+	if s.Version == 0 {
+		s.Version = VersionCurrent
+	}
+	if s.Version != VersionCurrent {
+		return fmt.Errorf("unsupported manifest version %d", s.Version)
+	}
+	if s.Kind == "" {
+		s.Kind = KindStack
+	}
+	if s.Kind != KindStack {
+		return fmt.Errorf("unsupported manifest kind %q", s.Kind)
+	}
+	if strings.TrimSpace(s.Name) == "" {
+		return errors.New("manifest name is required")
+	}
+	if s.SecretsBackend.Type == "" {
+		s.SecretsBackend.Type = "env-file"
+	}
+	if s.SecretsBackend.Type != "env-file" && s.SecretsBackend.Type != "openbao" {
+		return fmt.Errorf("unsupported secrets backend %q", s.SecretsBackend.Type)
+	}
+	for name, service := range s.Services {
+		if err := validateRunnable("service", name, service.Runtime, service.Image, service.Build, service.Command); err != nil {
+			return err
+		}
+	}
+	for name, job := range s.Jobs {
+		if err := validateRunnable("job", name, job.Runtime, job.Image, job.Build, job.Command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRunnable(kind, name string, runtime Runtime, image string, build any, command []string) error {
+	switch runtime {
+	case RuntimeContainer:
+		if image == "" && build == nil {
+			return fmt.Errorf("%s %q with runtime container requires image or build", kind, name)
+		}
+	case RuntimeLocal:
+		if image != "" {
+			return fmt.Errorf("%s %q with runtime local must not set image", kind, name)
+		}
+		if len(command) == 0 {
+			return fmt.Errorf("%s %q with runtime local requires command", kind, name)
+		}
+	case "":
+		return fmt.Errorf("%s %q requires runtime", kind, name)
+	default:
+		return fmt.Errorf("%s %q has unsupported runtime %q", kind, name, runtime)
+	}
+	return nil
+}
+
+func (s *Stack) initMaps() {
+	if s.Secrets == nil {
+		s.Secrets = map[string]Secret{}
+	}
+	if s.Ports == nil {
+		s.Ports = map[string]Port{}
+	}
+	if s.Volumes == nil {
+		s.Volumes = map[string]Volume{}
+	}
+	if s.Sources == nil {
+		s.Sources = map[string]Source{}
+	}
+	if s.Workspaces == nil {
+		s.Workspaces = map[string]Workspace{}
+	}
+	if s.Services == nil {
+		s.Services = map[string]Service{}
+	}
+	if s.Jobs == nil {
+		s.Jobs = map[string]Job{}
+	}
+	if s.PortLeases == nil {
+		s.PortLeases = map[string][]PortLease{}
+	}
+}
