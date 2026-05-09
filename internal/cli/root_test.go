@@ -192,6 +192,34 @@ func TestStatusDiscoversParentAngeeRoot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCreateUsesDotAngeeForTemplatesDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeWorkspaceTemplate(t, root)
+	t.Chdir(root)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{
+		"workspace",
+		"create",
+		"dev-pr",
+		"--name",
+		"feature-a",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".angee", "angee.yaml")); err != nil {
+		t.Fatalf("Stat(.angee/angee.yaml) error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "angee.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected root angee.yaml err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".angee", "workspaces", "feature-a", "README.md")); err != nil {
+		t.Fatalf("Stat(workspace README) error = %v", err)
+	}
+}
+
 func TestWorkspaceStatusInfersCurrentWorkspace(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, ".angee")
@@ -248,6 +276,29 @@ name: test
 `
 	if err := os.WriteFile(filepath.Join(manifestDir, "angee.yaml.jinja"), []byte(manifestYAML), 0o644); err != nil {
 		t.Fatalf("WriteFile(angee.yaml.jinja) error = %v", err)
+	}
+	return templateRoot
+}
+
+func writeWorkspaceTemplate(t *testing.T, root string) string {
+	t.Helper()
+	templateRoot := filepath.Join(root, "templates", "workspaces", "dev-pr")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace template) error = %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: dev-pr
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace copier.yml) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "README.md.jinja"), []byte("workspace {{ workspace_name }}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace README template) error = %v", err)
 	}
 	return templateRoot
 }

@@ -762,7 +762,7 @@ func resolveRoot(root string) (string, error) {
 		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
 			return control, nil
 		}
-		if info, err := os.Stat(filepath.Join(dir, ".templates", "workspaces")); err == nil && info.IsDir() {
+		if hasWorkspaceTemplates(dir) {
 			return control, nil
 		}
 		parent := filepath.Dir(dir)
@@ -772,6 +772,18 @@ func resolveRoot(root string) (string, error) {
 		dir = parent
 	}
 	return root, nil
+}
+
+func hasWorkspaceTemplates(dir string) bool {
+	for _, rel := range []string{
+		filepath.Join(".templates", "workspaces"),
+		filepath.Join("templates", "workspaces"),
+	} {
+		if info, err := os.Stat(filepath.Join(dir, rel)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {

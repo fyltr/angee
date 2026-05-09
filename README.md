@@ -29,8 +29,8 @@ install somewhere other than `/usr/local/bin`.
 ## Quick Start
 
 Angee needs an `angee.yaml` in the selected `ANGEE_ROOT`. By default the CLI
-uses the current directory, or `./.angee` when that directory contains a
-manifest.
+walks upward from the current directory, or uses the checkout's `.angee` for
+dev checkouts that contain `templates/workspaces`.
 
 ```sh
 angee doctor

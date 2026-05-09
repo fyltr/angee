@@ -5,10 +5,15 @@ This page documents the CLI surface implemented in this repository.
 Global flags:
 
 ```sh
---root string       ANGEE_ROOT containing angee.yaml (default ".")
+--root string       ANGEE_ROOT containing angee.yaml (default: auto-discover)
 --operator string   operator URL for HTTP mode
 --json              write JSON output
 ```
+
+Without `--root`, the CLI walks upward from the current directory, preferring
+`angee.yaml`, then `.angee/angee.yaml`. In dev checkouts that expose workspace
+templates at `templates/workspaces` or legacy `.templates/workspaces`, it uses
+`.angee` so workspace state stays out of the source root.
 
 ## Stack
 
