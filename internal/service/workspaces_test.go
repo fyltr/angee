@@ -69,6 +69,27 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	if _, err := os.Stat(filepath.Join(root, "workspaces", "feature-a", "app", ".angee", "angee.yaml")); err != nil {
 		t.Fatalf("chained stack manifest was not rendered: %v", err)
 	}
+	linkPath := filepath.Join(root, "workspaces", "feature-a", "app")
+	linkTarget, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink(workspace local source) error = %v", err)
+	}
+	if filepath.IsAbs(linkTarget) {
+		t.Fatalf("workspace local source symlink target = %q, want relative path", linkTarget)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(linkPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workspace local source) error = %v", err)
+	}
+	if resolvedTarget != sourceRoot {
+		canonicalSourceRoot, err := filepath.EvalSymlinks(sourceRoot)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(sourceRoot) error = %v", err)
+		}
+		if resolvedTarget != canonicalSourceRoot {
+			t.Fatalf("workspace local source symlink resolves to %q, want %q", resolvedTarget, canonicalSourceRoot)
+		}
+	}
 }
 
 func TestWorkspaceDestroyRefusesUnpushedGitSource(t *testing.T) {

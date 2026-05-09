@@ -946,10 +946,22 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 		}
 		return git.New().CloneRef(ctx, source.Repo, dest, ref)
 	case "local":
-		return os.Symlink(p.sourcePath(sourceName, source), dest)
+		target, err := workspaceLocalSymlinkTarget(p.sourcePath(sourceName, source), dest)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(target, dest)
 	default:
 		return fmt.Errorf("workspace source kind %q is not implemented", source.Kind)
 	}
+}
+
+func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
+	target, err := filepath.Rel(filepath.Dir(dest), sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("local source symlink target: %w", err)
+	}
+	return target, nil
 }
 
 func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath string, metadata copierx.Metadata, inputs map[string]string, workspaceName string, alloc map[string]int) ([]string, string, error) {
