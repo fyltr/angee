@@ -1,114 +1,132 @@
-# AGENTS.md — angee-go
+# AGENTS.md - angee-go
 
-This is the canonical agent-instructions file for `angee-go` (the angee CLI + operator + compose backend). It's read natively by Codex CLI, Cursor, Gemini CLI, and (via the `CLAUDE.md` symlink) Claude Code.
+This is the canonical agent-instructions file for `angee-go`, the Go CLI,
+operator, and runtime backend implementation for Angee.
 
-> ## ⚠ For new development work, start in `angee-examples`
+> ## For new development work, start in `angee-examples`
 >
-> If you're starting a fresh session and want to **make changes** to angee-go, do **not** clone or work directly in this repo. Instead:
+> If you are starting a fresh session and want to make changes to angee-go, use
+> the multi-repo workspace flow from `~/Work/fyltr/angee-examples` rather than
+> cloning or editing this repository directly:
 >
 > ```sh
 > cd ~/Work/fyltr/angee-examples
-> # create a sandboxed workspace that materialises angee-go + django-angee + angee-examples worktrees
 > angee workspace create dev-pr-multi --name fix-issue-123 --start
-> # in Claude Code: `/workspace fix-issue-123 --multi`
 > ```
 >
-> All slash commands and sub-agents (including `go-code-reviewer`) live in [`angee-examples/.agents/`](https://github.com/fyltr/angee-examples) and operate on the worktrees a workspace materialises. This repo no longer ships its own `.claude/` tooling.
->
-> The rest of this file (Go conventions, build commands, RuntimeBackend contract) still applies — Codex/Claude/Gemini walk parents and concatenate, so when you're inside a workspace at `<workspace>/angee-go/`, this file gets layered on top of `<host>/AGENTS.md`.
+> Shared slash commands and sub-agents live in `angee-examples/.agents/` and
+> operate on the worktrees materialized by that workspace.
 
-## What is angee
+## What Angee Is
 
-Self-managed agent containerization and orchestration engine. An extension of docker-compose where AI agents are first-class citizens. Users define services, MCP servers, and AI agents in a single `angee.yaml`, then run one command to get a fully operational platform.
+Angee is a self-managed stack manager for agent-native applications. It
+compiles one `angee.yaml` manifest into Docker Compose and process-compose
+runtime files, resolves secrets, manages services and jobs, provisions
+workspaces, and exposes the control plane through the CLI plus REST and GraphQL
+operator APIs.
 
-## Build & Development Commands
+Agents, application MCP servers, OAuth connectors, and PR creation are
+application-layer concerns. In this repository, the core primitives are stacks,
+services, jobs, sources, workspaces, secrets, ports, and runtime backends.
+
+## Build And Development Commands
 
 ```sh
-make build            # Build operator + CLI → dist/angee-operator, dist/angee
-make build-cli        # Build CLI only
-make build-operator   # Build operator only
+make build            # Build dist/angee and dist/angee-operator
+make build-cli        # Build the CLI only
+make build-operator   # Build the standalone operator only
 make test             # go test -v -race ./...
-make test-cover       # Tests with coverage report (opens HTML)
-make lint             # golangci-lint run ./...
-make fmt              # gofmt + goimports
+make fmt              # gofmt -w .
 make vet              # go vet ./...
-make check            # fmt + vet + lint + test (full pre-commit check)
-make run-operator     # Build and run operator against ~/.angee
-make dev ARGS="init"  # Build CLI and run with args
+make check            # fmt + vet + test
+make install          # Build and install local binaries via scripts/install.sh
+make clean            # Remove dist/ and coverage.out
 ```
 
-Run a single test: `go test -v -race -run TestName ./internal/compiler/`
+Run a focused test with:
 
-Requirements: Go 1.25+, Docker, git, golangci-lint (for linting)
+```sh
+go test -v -race -run TestName ./internal/service
+```
+
+Requirements: Go 1.25+, Docker, git, and process-compose for local-process
+runtime services.
 
 ## Architecture
 
-**Operator embedding:**
-- `cmd/angee/` — CLI tool. Calls `cli.Execute()` which sets up Cobra commands and includes a hidden `operator` subcommand for explicitly requested operator services.
-- `cmd/operator/` — standalone daemon wrapper for the same operator package when a separate service binary is useful.
+Local CLI commands instantiate `service.Platform` directly. Passing
+`--operator` or setting `ANGEE_OPERATOR_URL` routes supported operations to a
+running HTTP operator.
 
-**CLI → Operator → Backend flow:** The CLI never touches containers directly. Local commands instantiate the operator runtime in-process and dispatch through shared API request/response types without opening ports. `--operator`/`ANGEE_OPERATOR_URL` are explicit remote-service opt-ins. The operator compiles `angee.yaml` into backend files and delegates to a `RuntimeBackend`.
+```text
+CLI / HTTP operator
+        |
+        v
+service.Platform
+        |
+        +-- docker compose for container services
+        +-- process-compose for local services
+        +-- copier-go for stack and workspace templates
+        +-- git for source caches and worktrees
+        +-- env-file or OpenBao for secrets
+```
 
-**Key packages:**
+## Key Packages
 
 | Package | Purpose |
-|---------|---------|
-| `cli/` | Cobra command implementations. Each file = one command. `root.go` has global flags (`--root`, `--operator`, `--json`). |
-| `internal/config/` | YAML types. `angee.go` = `AngeeConfig` (the source of truth). `operator.go` = `OperatorConfig` (local runtime config). |
-| `internal/compiler/` | Translates `AngeeConfig` → `ComposeFile` (docker-compose YAML). Handles Traefik labels, lifecycle policies, agent env injection. |
-| `internal/runtime/` | `RuntimeBackend` interface. Only implementation: `compose/backend.go` (shells out to `docker compose`). Kubernetes backend planned for Phase 2. |
-| `internal/operator/` | HTTP server. `server.go` = setup/routing. `handlers.go` = all endpoint logic (deploy, rollback, status, logs, agent control). |
-| `internal/root/` | ANGEE_ROOT filesystem management (`~/.angee/`). Creates directory structure, reads/writes configs, manages git. |
-| `internal/git/` | Git CLI wrapper. Every deploy = git commit. Rollback = git revert/reset. |
-| `internal/tmpl/` | Target template resolver. Templates should be Copier templates with Angee `_angee` metadata, fetched from local paths, bundled refs, or remote refs. |
+|---|---|
+| `api/` | Shared request and response DTOs. |
+| `cmd/angee/` | CLI binary entrypoint. |
+| `cmd/operator/` | Standalone operator binary entrypoint. |
+| `internal/cli/` | Cobra commands and remote operator client. |
+| `internal/copierx/` | Copier integration and `_angee` metadata parsing. |
+| `internal/git/` | Thin git CLI wrapper. |
+| `internal/manifest/` | `angee.yaml` schema, strict loading, validation, and saving. |
+| `internal/mount/` | Mount URI parsing and workdir resolution. |
+| `internal/operator/` | HTTP routes, GraphQL schema, auth, and server lifecycle. |
+| `internal/ports/` | Port pool and lease helpers. |
+| `internal/runtime/` | Runtime backend interface. |
+| `internal/runtime/compose/` | Docker Compose backend. |
+| `internal/runtime/proccompose/` | process-compose backend. |
+| `internal/secrets/` | env-file and OpenBao secret backends. |
+| `internal/service/` | Business logic shared by CLI and operator. |
+| `internal/substitute/` | `${...}` substitution resolver and filters. |
 
-## Key Concepts
+## Current Concepts
 
-**Lifecycles** determine service behavior (restart policy, routing, scaling):
-- `platform` — web-facing, gets Traefik routing labels and domains
-- `sidecar` — internal service (DB, cache), always restarts
-- `worker` — background processing, always restarts
-- `system` — always-on agent, always restarts
-- `agent` — AI agent
-- `job` — one-shot or scheduled
-
-**ANGEE_ROOT** is the control directory for one stack, usually `.angee` in a project worktree. Target contents include:
-- `angee.yaml` — source of truth for sources, services, jobs, workflows, workspaces, agents, MCP servers, secrets, port leases, and backend settings
-- `state/` — file-backed observed state, locks, leases, and workflow records when using the file state source
-- `agents/<name>/` — rendered agent config, instructions, state, and workspace material
-- `workspaces/<name>/` — rendered workspace files, sources, state, and local runtime material
-- generated backend files such as `docker-compose.yaml` when the selected backend needs them
-
-**Connectors are application-managed.** Angee does not manage connectors (OAuth, API keys, IMAP, etc.) — the application layer (e.g., Django's `fyltr.connect`) handles connection management. Angee's role is limited to storing secrets via `${secret:name}` resolution.
-
-**RuntimeBackend interface** (`internal/runtime/backend.go`): All runtime interaction goes through this interface (Diff, Apply, Status, Logs, Scale, Stop, Down). Adding a new backend means implementing this interface.
-
-## Dependencies
-
-Core dependencies:
-
-- `github.com/spf13/cobra` — CLI framework.
-- `gopkg.in/yaml.v3` — config parsing for `angee.yaml` and rendered template metadata.
-
-Target additions should serve the unified operator path, not a separate mode:
-
-- Copier integration for rendering and updating stack, workspace, and agent templates.
-- `github.com/charmbracelet/{bubbletea,lipgloss,bubbles}` only for optional terminal UIs.
-
-Target refactor rules:
-
-- One manifest: `$ANGEE_ROOT/angee.yaml`.
-- No separate project/compose modes.
-- No legacy template metadata file.
-- No framework-specific CLI dispatch for Django, React, Vite, uv, pnpm, or `manage.py`.
-- Unused commands, flags, adapters, and compatibility paths should be removed from active code. Reference-only material can live under `deferred/`, but not as buildable/imported Go code.
-- `angee dev` runs the operator runtime for the lifetime of the dev command, reconciles declared services/jobs/workflows from `angee.yaml`, and stops local dev processes on exit.
-- `angee stack init`, `angee workspace init`, `angee agent init`, HTTP, MCP, and backend control planes must reuse the same operator provisioning code.
+- **Stack**: one `ANGEE_ROOT` containing `angee.yaml` plus generated runtime
+  files and materialized workspace/source directories.
+- **Service**: a long-running workload. `runtime: container` is rendered to
+  Docker Compose; `runtime: local` is rendered to process-compose.
+- **Job**: an explicitly invoked command with service-like env, mounts, and
+  workdir handling.
+- **Source**: reusable source material. Implemented materialization kinds are
+  `git` and `local`.
+- **Workspace**: a rendered Copier template under
+  `$ANGEE_ROOT/workspaces/<name>`, optionally with materialized sources and an
+  inner stack.
+- **Operator**: the REST and GraphQL control-plane server for one root.
 
 ## Patterns
 
-- Config structs use `yaml:"field"` and `json:"field"` tags consistently
-- The compiler outputs `map[string]any` for docker-compose compatibility (not typed structs)
-- CLI commands follow the pattern: parse flags, dispatch to the in-process operator runtime or an explicitly configured remote operator, format response (or `--json` for raw)
-- Operator handlers follow: parse request, load `angee.yaml`, resolve templates/sources/secrets/ports, reconcile through backend, respond
-- Templates use Copier with `copier.yml`; Angee-specific template metadata lives under `_angee`
+- Config structs use matching `yaml:"field"` and `json:"field"` tags.
+- Runtime interaction goes through `internal/runtime.Backend`.
+- CLI, REST, and GraphQL should dispatch through `service.Platform`; avoid
+  implementing business logic in adapters.
+- Generated runtime files are `docker-compose.yaml` and
+  `process-compose.yaml`.
+- Resolved OpenBao secrets are written to `run/secrets.env`; env-file secrets
+  use the configured `secrets_backend.path`.
+- Templates use Copier with `copier.yml`; Angee metadata lives under `_angee`.
+
+## Documentation
+
+Current docs live in:
+
+- `README.md`
+- `docs/COMMANDS.md`
+- `docs/MANIFEST.md`
+- `docs/OPERATOR-API.md`
+- `docs/TEMPLATES.md`
+- `docs/DEVELOPMENT.md`
+- `CHANGELOG.md`

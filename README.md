@@ -1,41 +1,55 @@
 # Angee
 
-Angee is a self-managed stack orchestration engine for agent-native applications. It compiles one declarative `angee.yaml` into runtime files, resolves secrets, manages services and jobs, provisions workspaces, and exposes the same control plane through the CLI plus REST and GraphQL operator APIs.
+Angee is a self-managed stack manager for agent-native applications. It
+compiles one `angee.yaml` into runtime files, resolves secrets, manages
+container and local-process services, runs jobs, provisions workspaces, and
+exposes the same control plane through the CLI plus REST and GraphQL operator
+APIs.
 
-This branch is the v1 prototype. The old v0 line is preserved on `main-v0`; the prototype history is preserved on `prototype-v1`.
+This repository contains the current Go prototype.
 
 ## Install
+
+From a release:
 
 ```sh
 curl -fsSL https://angee.ai/install.sh | sh
 ```
 
-From a checkout:
+From this checkout:
 
 ```sh
-make init
+make install
 ```
 
-`make init` builds `dist/angee` and `dist/angee-operator`, then runs `scripts/install.sh` against those local binaries. Set `ANGEE_INSTALL_DIR` to install somewhere other than `/usr/local/bin`.
+`make install` builds `dist/angee` and `dist/angee-operator`, then runs
+`scripts/install.sh` against those local binaries. Set `ANGEE_INSTALL_DIR` to
+install somewhere other than `/usr/local/bin`.
 
 ## Quick Start
 
+Angee needs an `angee.yaml` in the selected `ANGEE_ROOT`. By default the CLI
+uses the current directory, or `./.angee` when that directory contains a
+manifest.
+
 ```sh
 angee doctor
-angee init --dev --yes
+angee status
+angee up
 angee dev
 ```
 
-`angee doctor` checks local prerequisites, the selected `ANGEE_ROOT`, manifest validity, source paths, ports, git ignore hygiene, and nearby templates. `angee init --dev` renders the local dev stack template into `.angee/`. `angee dev` prepares declared runtime files, starts container sidecars and local processes, and stays in the foreground.
+`angee init --dev --yes` is supported when a `dev` stack template is available
+through the template search paths.
 
 ## Core Commands
 
 ```sh
 # Stack
 angee doctor
-angee init --dev [path]
 angee stack init <template> [path] [--input key=value ...]
 angee stack update
+angee stack destroy [--purge]
 angee status
 
 # Runtime
@@ -43,23 +57,35 @@ angee build [service...]
 angee up [service...] [--build]
 angee dev [--build]
 angee down
-angee logs [service...]
+angee start <service>...
+angee stop <service>...
+angee restart <service>...
+angee logs [service...] [--follow]
 
 # Services and jobs
 angee service init <name> [--runtime container|local] [--image image] [--command arg ...]
+angee service update <name>
+angee service destroy <name> [--stop=false]
 angee service list
 angee job list
-angee job run <name>
+angee job run <name> [--input key=value ...]
 
 # Sources and workspaces
 angee source list
 angee source fetch <name>
-angee workspace create <template> [--name name] [--input key=value ...]
+angee source status <name>
+angee source pull <name>
+angee source push <name> [--ref ref]
+angee workspace create <template> [--name name] [--ttl duration] [--input key=value ...] [--start]
 angee workspace list
+angee workspace get <name>
+angee workspace status <name>
 angee workspace git <name>
+angee workspace push <name> [--ref ref]
+angee workspace destroy <name> [--purge]
 
 # Operator
-angee operator --root .angee --bind 127.0.0.1 --port 9000
+angee operator --root . --bind 127.0.0.1 --port 9000
 angee --operator http://127.0.0.1:9000 status
 curl -s http://127.0.0.1:9000/graphql \
   -H 'Content-Type: application/json' \
@@ -81,7 +107,9 @@ service.Platform
         +-- env-file or OpenBao for secrets
 ```
 
-The CLI runs in-process by default. Passing `--operator` or setting `ANGEE_OPERATOR_URL` dispatches supported operations to a running HTTP operator.
+Local CLI commands instantiate `service.Platform` directly. Passing
+`--operator` or setting `ANGEE_OPERATOR_URL` dispatches supported operations to
+a running HTTP operator.
 
 ## Project Layout
 
@@ -91,11 +119,21 @@ The CLI runs in-process by default. Passing `--operator` or setting `ANGEE_OPERA
 | `cmd/angee/` | CLI entrypoint. |
 | `cmd/operator/` | Standalone operator entrypoint. |
 | `internal/cli/` | Cobra command implementation and HTTP operator client. |
-| `internal/operator/` | HTTP operator server and routes. |
+| `internal/manifest/` | `angee.yaml` schema, validation, and load/save helpers. |
+| `internal/operator/` | HTTP operator server, REST routes, and GraphQL schema. |
+| `internal/runtime/` | Runtime backend interface plus compose and process-compose backends. |
 | `internal/service/` | Shared business logic for stacks, services, sources, jobs, and workspaces. |
-| `templates/` | Bundled prototype stack and workspace templates. |
-| `docs/` | Refactor notes, deferred items, and example v2 template sketches. |
-| `scripts/install.sh` | Website installer script. |
+| `scripts/install.sh` | Release/local binary installer. |
+| `docs/` | Current user and developer reference docs. |
+
+## Documentation
+
+- [Commands](docs/COMMANDS.md)
+- [Manifest](docs/MANIFEST.md)
+- [Operator API](docs/OPERATOR-API.md)
+- [Templates](docs/TEMPLATES.md)
+- [Development](docs/DEVELOPMENT.md)
+- [Changelog](CHANGELOG.md)
 
 ## Development
 
@@ -103,10 +141,3 @@ The CLI runs in-process by default. Passing `--operator` or setting `ANGEE_OPERA
 make test
 make build
 ```
-
-Useful references:
-
-- `docs/OVERVIEW-v2.md`
-- `docs/PLAN.md`
-- `docs/DEFERRED.md`
-- `docs/API-GAPS.md`
