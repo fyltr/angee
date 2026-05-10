@@ -110,6 +110,7 @@ angee workspace stop <name>
 angee workspace restart <name>
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
+angee workspace sync-base [name] [--merge|--rebase]
 angee workspace open <name> [--editor vscode|idea|gh-desktop]
 angee workspace destroy <name> [--purge]
 ```
@@ -117,7 +118,17 @@ angee workspace destroy <name> [--purge]
 Workspaces are rendered from Copier templates with `_angee` metadata. A
 workspace can also render and control an inner stack when the template declares
 a chain root. When run from inside `$ANGEE_ROOT/workspaces/<name>/...`,
-`angee workspace status` may omit the name.
+`angee workspace status` and `angee workspace sync-base` may omit the name.
+
+For git worktree sources, the branch recorded in the workspace manifest is the
+workspace identity. `sync-base` updates that branch from its base ref (normally
+`origin/main`) without switching to another branch; workspace lifecycle and push
+commands refuse sources whose current branch does not match the manifest branch.
+The same contract is exposed through the operator REST and GraphQL APIs:
+workspace status includes `sources[].branch`, `sources[].current_ref` /
+`currentRef`, `sources[].state`, and top-level `state: discrepancy` when any
+source is on the wrong branch. The operator also exposes `POST
+/workspaces/{name}/sync-base` and GraphQL `workspaceSyncBase`.
 
 ## Operator
 

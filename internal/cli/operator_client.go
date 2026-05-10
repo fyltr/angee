@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,11 +56,37 @@ type platformClient interface {
 	WorkspaceStop(context.Context, string) error
 	WorkspaceGitStatus(context.Context, string) ([]api.SourceState, error)
 	WorkspacePush(context.Context, string, string) ([]api.SourceState, error)
+	WorkspaceSyncBase(context.Context, string, string) ([]api.SourceState, error)
 }
 
 type remotePlatform struct {
 	baseURL string
 	client  *http.Client
+}
+
+type RemoteError struct {
+	Status int
+	Body   api.ErrorResponse
+}
+
+func (e *RemoteError) Error() string {
+	message := e.Body.Error
+	if message == "" {
+		message = http.StatusText(e.Status)
+	}
+	return fmt.Sprintf("operator returned HTTP %d: %s", e.Status, message)
+}
+
+type RemoteNotFound struct {
+	RemoteError
+}
+
+type RemoteConflict struct {
+	RemoteError
+}
+
+type RemoteInvalidInput struct {
+	RemoteError
 }
 
 func newRemotePlatform(baseURL string) *remotePlatform {
@@ -189,9 +216,7 @@ func (p *remotePlatform) JobList(ctx context.Context) ([]api.JobState, error) {
 }
 
 func (p *remotePlatform) JobRun(ctx context.Context, name string, inputs map[string]string) ([]byte, error) {
-	return p.doBytes(ctx, http.MethodPost, "/jobs/"+url.PathEscape(name)+"/run", nil, struct {
-		Inputs map[string]string `json:"inputs"`
-	}{Inputs: inputs})
+	return p.doBytes(ctx, http.MethodPost, "/jobs/"+url.PathEscape(name)+"/run", nil, api.JobRunRequest{Inputs: inputs})
 }
 
 func (p *remotePlatform) SourceList(ctx context.Context) ([]api.SourceState, error) {
@@ -268,10 +293,7 @@ func (p *remotePlatform) WorkspaceStatus(ctx context.Context, name string) (api.
 
 func (p *remotePlatform) WorkspaceUpdate(ctx context.Context, name string, inputs map[string]string, ttl string) (api.WorkspaceRef, error) {
 	var ref api.WorkspaceRef
-	req := struct {
-		Inputs map[string]string `json:"inputs"`
-		TTL    string            `json:"ttl"`
-	}{Inputs: inputs, TTL: ttl}
+	req := api.WorkspaceUpdateRequest{Inputs: inputs, TTL: ttl}
 	if err := p.doJSON(ctx, http.MethodPatch, "/workspaces/"+url.PathEscape(name), nil, req, &ref); err != nil {
 		return api.WorkspaceRef{}, err
 	}
@@ -309,6 +331,15 @@ func (p *remotePlatform) WorkspaceGitStatus(ctx context.Context, name string) ([
 func (p *remotePlatform) WorkspacePush(ctx context.Context, name string, ref string) ([]api.SourceState, error) {
 	var states []api.SourceState
 	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/push", nil, api.SourceOperationRequest{Ref: ref}, &states); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+func (p *remotePlatform) WorkspaceSyncBase(ctx context.Context, name string, method string) ([]api.SourceState, error) {
+	var states []api.SourceState
+	req := api.WorkspaceSyncBaseRequest{Method: method}
+	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/sync-base", nil, req, &states); err != nil {
 		return nil, err
 	}
 	return states, nil
@@ -420,15 +451,31 @@ func jsonBody(value any) (io.Reader, error) {
 }
 
 func operatorHTTPError(status int, data []byte) error {
-	var body struct {
-		Error string `json:"error"`
-	}
+	var body api.ErrorResponse
 	if err := json.Unmarshal(data, &body); err == nil && body.Error != "" {
-		return fmt.Errorf("operator error: %s", body.Error)
+		base := RemoteError{Status: status, Body: body}
+		switch status {
+		case http.StatusNotFound:
+			return &RemoteNotFound{RemoteError: base}
+		case http.StatusConflict:
+			return &RemoteConflict{RemoteError: base}
+		case http.StatusBadRequest:
+			return &RemoteInvalidInput{RemoteError: base}
+		default:
+			return &base
+		}
 	}
 	text := strings.TrimSpace(string(data))
 	if text == "" {
 		text = http.StatusText(status)
 	}
-	return fmt.Errorf("operator returned HTTP %d: %s", status, text)
+	return &RemoteError{Status: status, Body: api.ErrorResponse{Error: text}}
+}
+
+func remoteConflict(err error, kind string) (*RemoteConflict, bool) {
+	var conflict *RemoteConflict
+	if !errors.As(err, &conflict) {
+		return nil, false
+	}
+	return conflict, kind == "" || conflict.Body.Kind == kind
 }

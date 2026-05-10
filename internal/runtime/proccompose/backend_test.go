@@ -76,11 +76,24 @@ func (r *recordingRunner) Run(_ context.Context, _ string, _ []string, name stri
 func TestBackendUpCommand(t *testing.T) {
 	runner := &recordingRunner{}
 	backend := Backend{Runner: runner}
-	err := backend.Up(context.Background(), runtime.Target{Root: "/stack", Services: []string{"web"}})
+	err := backend.Up(context.Background(), runtime.Target{Root: "/stack", Services: []string{"web"}, ControlPort: 10002})
 	if err != nil {
 		t.Fatalf("Up() error = %v", err)
 	}
-	want := []string{"-f", "/stack/process-compose.yaml", "up", "-d", "--tui=false", "web"}
+	want := []string{"-f", "/stack/process-compose.yaml", "--address", "127.0.0.1", "--port", "10002", "up", "-d", "--tui=false", "web"}
+	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
+		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
+	}
+}
+
+func TestBackendDownUsesControlPort(t *testing.T) {
+	runner := &recordingRunner{}
+	backend := Backend{Runner: runner}
+	err := backend.Down(context.Background(), runtime.Target{Root: "/stack", ControlPort: 10003})
+	if err != nil {
+		t.Fatalf("Down() error = %v", err)
+	}
+	want := []string{"--address", "127.0.0.1", "--port", "10003", "down"}
 	if runner.name != "process-compose" || !reflect.DeepEqual(runner.args, want) {
 		t.Fatalf("command = %s %v, want process-compose %v", runner.name, runner.args, want)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/operator"
 	"github.com/fyltr/angee/internal/service"
+	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 
@@ -621,9 +622,12 @@ func parseKeyValues(values []string) (map[string]string, error) {
 }
 
 func stackInitError(template string, err error) error {
-	var exists *service.StackRootExistsError
-	if errors.As(err, &exists) {
-		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(exists.Root))
+	var conflict *service.ConflictError
+	if errors.As(err, &conflict) && conflict.Kind == "stack-root" {
+		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(conflict.Name))
+	}
+	if remote, ok := remoteConflict(err, "stack-root"); ok {
+		return fmt.Errorf("stack template %s already exists as %s; use --force to overwrite or `angee stack update` to update", template, displayPath(remote.Body.Name))
 	}
 	return err
 }
@@ -736,54 +740,13 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (p
 	}
 	selected := *root
 	if resolveControlRoot {
-		resolved, err := resolveRoot(selected)
+		resolved, err := stackroot.Resolve(selected)
 		if err != nil {
 			return nil, err
 		}
 		selected = resolved
 	}
 	return service.New(selected)
-}
-
-func resolveRoot(root string) (string, error) {
-	if root == "" {
-		root = "."
-	}
-	start, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	dir := start
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
-			return dir, nil
-		}
-		control := filepath.Join(dir, ".angee")
-		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
-			return control, nil
-		}
-		if hasWorkspaceTemplates(dir) {
-			return control, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return root, nil
-}
-
-func hasWorkspaceTemplates(dir string) bool {
-	for _, rel := range []string{
-		filepath.Join(".templates", "workspaces"),
-		filepath.Join("templates", "workspaces"),
-	} {
-		if info, err := os.Stat(filepath.Join(dir, rel)); err == nil && info.IsDir() {
-			return true
-		}
-	}
-	return false
 }
 
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
@@ -895,6 +858,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspaceLogsCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceGitCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceSyncBaseCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "start"))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "stop"))
@@ -937,15 +901,15 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 func workspaceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
 	cmd := &cobra.Command{
-		Use:   "logs <name>",
+		Use:   "logs [name]",
 		Short: "Show workspace logs",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, err := localPlatform(root, operatorURL)
+			platform, name, err := workspaceTarget(args, root, operatorURL, "logs")
 			if err != nil {
 				return err
 			}
-			logs, err := platform.WorkspaceLogs(cmd.Context(), args[0], follow)
+			logs, err := platform.WorkspaceLogs(cmd.Context(), name, follow)
 			if err != nil {
 				return err
 			}
@@ -979,11 +943,21 @@ func workspaceGitCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 				return writeJSON(stdout, states)
 			}
 			for _, state := range states {
-				dirty := "clean"
-				if state.Dirty {
-					dirty = "dirty"
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
 				}
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, state.Ref, dirty, state.Path); err != nil {
+				stateText := state.State
+				if stateText == "" {
+					stateText = "clean"
+					if state.Dirty {
+						stateText = "dirty"
+					}
+				}
+				if state.UnpushedReason != "" {
+					stateText += " " + state.UnpushedReason
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
 			}
@@ -1011,7 +985,11 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 				return writeJSON(stdout, states)
 			}
 			for _, state := range states {
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", state.Slot, state.Ref, state.Path); err != nil {
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", state.Slot, ref, state.Path); err != nil {
 					return err
 				}
 			}
@@ -1019,6 +997,49 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 		},
 	}
 	cmd.Flags().StringVar(&ref, "ref", "", "ref to push")
+	return cmd
+}
+
+func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
+	var merge bool
+	var rebase bool
+	cmd := &cobra.Command{
+		Use:   "sync-base [name]",
+		Short: "Update workspace git sources from their base ref without changing branches",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if merge && rebase {
+				return fmt.Errorf("choose only one of --merge or --rebase")
+			}
+			method := "merge"
+			if rebase {
+				method = "rebase"
+			}
+			platform, name, err := workspaceTarget(args, root, operatorURL, "sync-base")
+			if err != nil {
+				return err
+			}
+			states, err := platform.WorkspaceSyncBase(cmd.Context(), name, method)
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return writeJSON(stdout, states)
+			}
+			for _, state := range states {
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
+	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
 	return cmd
 }
 
@@ -1131,12 +1152,16 @@ func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 }
 
 func workspaceStatusTarget(args []string, root, operatorURL *string) (platformClient, string, error) {
+	return workspaceTarget(args, root, operatorURL, "status")
+}
+
+func workspaceTarget(args []string, root, operatorURL *string, command string) (platformClient, string, error) {
 	if len(args) == 1 {
 		platform, err := localPlatform(root, operatorURL)
 		return platform, args[0], err
 	}
 	if operatorURL != nil && *operatorURL != "" {
-		return nil, "", fmt.Errorf("workspace status requires a workspace name in remote operator mode")
+		return nil, "", fmt.Errorf("workspace %s requires a workspace name in remote operator mode", command)
 	}
 	currentRoot, name, ok, err := enclosingWorkspace()
 	if err != nil {
@@ -1146,7 +1171,7 @@ func workspaceStatusTarget(args []string, root, operatorURL *string) (platformCl
 		platform, err := service.New(currentRoot)
 		return platform, name, err
 	}
-	return nil, "", fmt.Errorf("workspace status requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>")
+	return nil, "", fmt.Errorf("workspace %s requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>", command)
 }
 
 func enclosingWorkspace() (root string, name string, ok bool, err error) {
@@ -1204,6 +1229,21 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 	}
 	if status.TTLExpiresAt != nil {
 		if _, err := fmt.Fprintf(stdout, "ttl_expires_at\t%s\n", status.TTLExpiresAt.Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	if status.ProcessComposePort > 0 {
+		if _, err := fmt.Fprintf(stdout, "process_compose_port\t%d\n", status.ProcessComposePort); err != nil {
+			return err
+		}
+	}
+	if status.PlaywrightMCPName != "" {
+		if _, err := fmt.Fprintf(stdout, "playwright_mcp_name\t%s\n", status.PlaywrightMCPName); err != nil {
+			return err
+		}
+	}
+	if status.PlaywrightMCPURL != "" {
+		if _, err := fmt.Fprintf(stdout, "playwright_mcp_url\t%s\n", status.PlaywrightMCPURL); err != nil {
 			return err
 		}
 	}
@@ -1278,28 +1318,28 @@ func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra
 
 func workspaceLifecycleCommand(stdout io.Writer, root, operatorURL *string, action string) *cobra.Command {
 	return &cobra.Command{
-		Use:   action + " <name>",
+		Use:   action + " [name]",
 		Short: action + " workspace",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, err := localPlatform(root, operatorURL)
+			platform, name, err := workspaceTarget(args, root, operatorURL, action)
 			if err != nil {
 				return err
 			}
 			switch action {
 			case "start":
-				err = platform.WorkspaceStart(cmd.Context(), args[0])
+				err = platform.WorkspaceStart(cmd.Context(), name)
 			case "stop":
-				err = platform.WorkspaceStop(cmd.Context(), args[0])
+				err = platform.WorkspaceStop(cmd.Context(), name)
 			case "restart":
-				if err = platform.WorkspaceStop(cmd.Context(), args[0]); err == nil {
-					err = platform.WorkspaceStart(cmd.Context(), args[0])
+				if err = platform.WorkspaceStop(cmd.Context(), name); err == nil {
+					err = platform.WorkspaceStart(cmd.Context(), name)
 				}
 			}
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(stdout, "workspace %s %s\n", args[0], actionPast(action))
+			_, err = fmt.Fprintf(stdout, "workspace %s %s\n", name, actionPast(action))
 			return err
 		},
 	}

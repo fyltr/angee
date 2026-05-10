@@ -10,14 +10,13 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fyltr/angee/api"
 	"github.com/fyltr/angee/internal/service"
+	"github.com/fyltr/angee/internal/stackroot"
 	"github.com/spf13/cobra"
 )
 
@@ -72,7 +71,7 @@ func NewServer(config Config) (*Server, error) {
 	if !isLoopback(config.Bind) && config.Token == "" {
 		return nil, errors.New("non-loopback operator binds require --token")
 	}
-	root, err := resolveRoot(config.Root)
+	root, err := stackroot.Resolve(config.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -129,6 +128,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /workspaces/{name}/destroy", s.auth(http.HandlerFunc(s.workspaceDestroy)))
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
+	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
 	mux.Handle("GET /events", s.auth(http.HandlerFunc(s.events)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
@@ -291,14 +291,8 @@ func (s *Server) jobList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jobRun(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Inputs map[string]string `json:"inputs"`
-	}
-	if decoded, err := decode[struct {
-		Inputs map[string]string `json:"inputs"`
-	}](r); err == nil {
-		req = decoded
-	} else {
+	req, err := decode[api.JobRunRequest](r)
+	if err != nil {
 		writeBadRequest(w, err)
 		return
 	}
@@ -313,7 +307,7 @@ func (s *Server) jobRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "job logs are returned by job run"})
+	writeJSON(w, http.StatusNotImplemented, api.ErrorResponse{Error: "job logs are returned by job run"})
 }
 
 func (s *Server) serviceInit(w http.ResponseWriter, r *http.Request) {
@@ -482,19 +476,11 @@ func (s *Server) workspaceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceUpdate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Inputs map[string]string `json:"inputs"`
-		TTL    string            `json:"ttl"`
-	}
-	decoded, err := decode[struct {
-		Inputs map[string]string `json:"inputs"`
-		TTL    string            `json:"ttl"`
-	}](r)
+	req, err := decode[api.WorkspaceUpdateRequest](r)
 	if err != nil {
 		writeBadRequest(w, err)
 		return
 	}
-	req = decoded
 	ref, err := s.platform.WorkspaceUpdate(r.Context(), r.PathValue("name"), req.Inputs, req.TTL)
 	if err != nil {
 		writeError(w, err)
@@ -573,6 +559,20 @@ func (s *Server) workspacePush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, states)
 }
 
+func (s *Server) workspaceSyncBase(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.WorkspaceSyncBaseRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	states, err := s.platform.WorkspaceSyncBase(r.Context(), r.PathValue("name"), req.Method)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, states)
+}
+
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -593,7 +593,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		got := sha256.Sum256([]byte(token))
 		want := sha256.Sum256([]byte(s.config.Token))
 		if !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeJSON(w, http.StatusUnauthorized, api.ErrorResponse{Error: "unauthorized"})
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -601,11 +601,11 @@ func (s *Server) auth(next http.Handler) http.Handler {
 }
 
 func writeError(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	writeServiceError(w, err)
 }
 
 func writeBadRequest(w http.ResponseWriter, err error) {
-	writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	writeJSON(w, http.StatusBadRequest, api.ErrorResponse{Error: err.Error()})
 }
 
 func decode[T any](r *http.Request) (T, error) {
@@ -640,30 +640,4 @@ func isLoopback(bind string) bool {
 		return bind == "localhost"
 	}
 	return ip.IsLoopback()
-}
-
-func resolveRoot(root string) (string, error) {
-	if root == "" {
-		root = "."
-	}
-	start, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	dir := start
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "angee.yaml")); err == nil {
-			return dir, nil
-		}
-		control := filepath.Join(dir, ".angee")
-		if _, err := os.Stat(filepath.Join(control, "angee.yaml")); err == nil {
-			return control, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return root, nil
 }

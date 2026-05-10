@@ -82,6 +82,7 @@ angee workspace get <name>
 angee workspace status [name]
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
+angee workspace sync-base [name] [--merge|--rebase]
 angee workspace destroy <name> [--purge]
 
 # Operator
@@ -124,16 +125,29 @@ a running HTTP operator.
 | `internal/runtime/` | Runtime backend interface plus compose and process-compose backends. |
 | `internal/service/` | Shared business logic for stacks, services, sources, jobs, and workspaces. |
 | `scripts/install.sh` | Release/local binary installer. |
-| `docs/` | Current user and developer reference docs. |
+| `docs/` | VitePress source for [docs.angee.ai](https://docs.angee.ai). |
 
 ## Documentation
 
-- [Commands](docs/COMMANDS.md)
-- [Manifest](docs/MANIFEST.md)
-- [Operator API](docs/OPERATOR-API.md)
-- [Templates](docs/TEMPLATES.md)
-- [Development](docs/DEVELOPMENT.md)
+The published documentation lives at [docs.angee.ai](https://docs.angee.ai).
+Source markdown for the site is in `docs/`:
+
+- [Getting started](docs/guide/getting-started.md)
+- [Commands](docs/guide/commands.md)
+- [Manifest](docs/guide/manifest.md)
+- [Templates](docs/guide/templates.md)
+- [Development](docs/guide/development.md)
+- [Operator API](docs/reference/operator-api.md)
+- [Surface parity](docs/reference/surfaces.md)
 - [Changelog](CHANGELOG.md)
+
+To run the docs site locally:
+
+```sh
+cd docs
+npm install
+npm run dev
+```
 
 ## Development
 

@@ -52,7 +52,7 @@ func (b Backend) Build(context.Context, runtime.Target) error {
 }
 
 func (b Backend) Up(ctx context.Context, target runtime.Target) error {
-	args := b.baseArgs(target.Root)
+	args := b.baseArgs(target.Root, target.ControlPort)
 	// `-d` daemonises; `--tui=false` prevents the supervisor from trying
 	// to attach a TUI on a process that has no controlling terminal
 	// (which is the normal case for `angee workspace start` running
@@ -64,44 +64,50 @@ func (b Backend) Up(ctx context.Context, target runtime.Target) error {
 }
 
 func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout io.Writer, stderr io.Writer) error {
-	args := b.baseArgs(target.Root)
+	args := b.baseArgs(target.Root, target.ControlPort)
 	args = append(args, "up", "--tui=false")
 	args = append(args, target.Services...)
 	return b.runForeground(ctx, target.Root, target.EnvFile, stdout, stderr, args...)
 }
 
-func (b Backend) Down(ctx context.Context, root string) error {
+func (b Backend) Down(ctx context.Context, target runtime.Target) error {
 	// `down` is a CLIENT command in process-compose v2 — it connects to
 	// the running supervisor and asks it to terminate. Do NOT pass -f
 	// (config-file flag is for `up`, the server command); doing so makes
 	// process-compose print --help and exit 0.
-	_, err := b.run(ctx, root, "", "down")
+	args := b.clientArgs(target.ControlPort)
+	args = append(args, "down")
+	_, err := b.run(ctx, target.Root, "", args...)
 	return err
 }
 
 func (b Backend) Start(ctx context.Context, target runtime.Target) error {
-	args := []string{"process", "start"}
+	args := b.clientArgs(target.ControlPort)
+	args = append(args, "process", "start")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Stop(ctx context.Context, target runtime.Target) error {
-	args := []string{"process", "stop"}
+	args := b.clientArgs(target.ControlPort)
+	args = append(args, "process", "stop")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Restart(ctx context.Context, target runtime.Target) error {
-	args := []string{"process", "restart"}
+	args := b.clientArgs(target.ControlPort)
+	args = append(args, "process", "restart")
 	args = append(args, target.Services...)
 	_, err := b.run(ctx, target.Root, target.EnvFile, args...)
 	return err
 }
 
 func (b Backend) Logs(ctx context.Context, req runtime.LogsRequest) (<-chan string, error) {
-	args := []string{"process", "logs"}
+	args := b.clientArgs(req.ControlPort)
+	args = append(args, "process", "logs")
 	if req.Follow {
 		args = append(args, "--follow")
 	}
@@ -358,8 +364,16 @@ func (b *limitedBuffer) Bytes() []byte {
 	return out
 }
 
-func (b Backend) baseArgs(root string) []string {
-	return []string{"-f", filepath.Join(root, "process-compose.yaml")}
+func (b Backend) baseArgs(root string, controlPort int) []string {
+	args := []string{"-f", filepath.Join(root, "process-compose.yaml")}
+	return append(args, b.clientArgs(controlPort)...)
+}
+
+func (b Backend) clientArgs(controlPort int) []string {
+	if controlPort <= 0 {
+		controlPort = 8080
+	}
+	return []string{"--address", "127.0.0.1", "--port", strconv.Itoa(controlPort)}
 }
 
 func readEnvFile(path string) ([]string, error) {

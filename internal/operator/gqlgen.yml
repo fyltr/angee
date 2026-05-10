@@ -1,0 +1,89 @@
+schema:
+  - schema.graphql
+
+exec:
+  package: gql
+  layout: single-file
+  filename: gql/generated.go
+
+model:
+  filename: gql/model/models_gen.go
+  package: model
+
+resolver:
+  package: gql
+  layout: follow-schema
+  dir: gql
+  filename_template: "{name}.resolvers.go"
+
+skip_mod_tidy: true
+
+models:
+  JSON:
+    model:
+      - github.com/99designs/gqlgen/graphql.Map
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int
+  ServiceState:
+    model:
+      - github.com/fyltr/angee/api.ServiceState
+  JobState:
+    model:
+      - github.com/fyltr/angee/api.JobState
+  SourceState:
+    model:
+      - github.com/fyltr/angee/api.SourceState
+  WorkspaceSourceStatus:
+    model:
+      - github.com/fyltr/angee/api.WorkspaceSourceStatus
+  WorkspaceMountRef:
+    model:
+      - github.com/fyltr/angee/api.WorkspaceMountRef
+  GitOpsLink:
+    model:
+      - github.com/fyltr/angee/api.GitOpsLink
+  GitOpsSummary:
+    model:
+      - github.com/fyltr/angee/api.GitOpsSummary
+  GitOpsTopology:
+    model:
+      - github.com/fyltr/angee/api.GitOpsTopologyResponse
+  WorkspaceRef:
+    model:
+      - github.com/fyltr/angee/api.WorkspaceRef
+    fields:
+      ttlExpiresAt:
+        resolver: true
+  WorkspaceStatus:
+    model:
+      - github.com/fyltr/angee/api.WorkspaceStatusResponse
+    fields:
+      inputs:
+        resolver: true
+      allocations:
+        resolver: true
+      persistPaths:
+        resolver: true
+      ttlExpiresAt:
+        resolver: true
+  StackStatus:
+    model:
+      - github.com/fyltr/angee/api.StackStatusResponse
+    fields:
+      services:
+        resolver: true
+      jobs:
+        resolver: true
+      workspaces:
+        resolver: true
+  CompiledStack:
+    model:
+      - github.com/fyltr/angee/internal/service.CompiledStack
+    fields:
+      compose:
+        resolver: true
+      processCompose:
+        resolver: true
+      secretEnvVars:
+        resolver: true

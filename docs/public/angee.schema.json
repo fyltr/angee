@@ -1,0 +1,528 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.angee.ai/angee.schema.json/stack",
+  "$ref": "#/$defs/Stack",
+  "$defs": {
+    "Job": {
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "container",
+            "local"
+          ]
+        },
+        "image": {
+          "type": "string"
+        },
+        "build": true,
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "env_file": {
+          "type": "string"
+        },
+        "mounts": {
+          "$ref": "#/$defs/StringList"
+        },
+        "workdir": {
+          "type": "string"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "run_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "runtime"
+      ]
+    },
+    "Operator": {
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "token_secret": {
+          "type": "string"
+        },
+        "port_pool": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PortPool"
+          },
+          "type": "object"
+        },
+        "template_paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PersistPath": {
+      "properties": {
+        "subpath": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "subpath",
+        "scope"
+      ]
+    },
+    "Port": {
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "export_env": {
+          "type": "string"
+        },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "value"
+      ]
+    },
+    "PortLease": {
+      "properties": {
+        "port": {
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port",
+        "owner",
+        "created_at"
+      ]
+    },
+    "PortPool": {
+      "properties": {
+        "range": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "range"
+      ]
+    },
+    "Secret": {
+      "properties": {
+        "generated": {
+          "type": "boolean"
+        },
+        "length": {
+          "type": "integer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "import": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SecretsBackend": {
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "env-file",
+            "openbao"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "mount": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Service": {
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "container",
+            "local"
+          ]
+        },
+        "image": {
+          "type": "string"
+        },
+        "build": true,
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "env_file": {
+          "type": "string"
+        },
+        "ports": {
+          "$ref": "#/$defs/StringList"
+        },
+        "mounts": {
+          "$ref": "#/$defs/StringList"
+        },
+        "workdir": {
+          "type": "string"
+        },
+        "after": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "runtime"
+      ]
+    },
+    "Source": {
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git",
+            "local"
+          ]
+        },
+        "repo": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "default_ref": {
+          "type": "string"
+        },
+        "cache_path": {
+          "type": "string"
+        },
+        "auth": {
+          "$ref": "#/$defs/SourceAuth"
+        },
+        "git": {
+          "$ref": "#/$defs/SourceGit"
+        },
+        "checksum": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind"
+      ]
+    },
+    "SourceAuth": {
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "ssh_key_secret": {
+          "type": "string"
+        },
+        "token_secret": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "SourceGit": {
+      "properties": {
+        "user_name": {
+          "type": "string"
+        },
+        "user_email": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Stack": {
+      "properties": {
+        "version": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "stack"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/Template"
+        },
+        "operator": {
+          "$ref": "#/$defs/Operator"
+        },
+        "secrets_backend": {
+          "$ref": "#/$defs/SecretsBackend"
+        },
+        "secrets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Secret"
+          },
+          "type": "object"
+        },
+        "ports": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Port"
+          },
+          "type": "object"
+        },
+        "volumes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Volume"
+          },
+          "type": "object"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Source"
+          },
+          "type": "object"
+        },
+        "workspaces": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Workspace"
+          },
+          "type": "object"
+        },
+        "services": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Service"
+          },
+          "type": "object"
+        },
+        "jobs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Job"
+          },
+          "type": "object"
+        },
+        "port_leases": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/PortLease"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "version",
+        "kind",
+        "name"
+      ]
+    },
+    "StringList": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "Template": {
+      "properties": {
+        "active": {
+          "type": "string"
+        },
+        "answers_file": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Volume": {
+      "properties": {
+        "driver": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Workspace": {
+      "properties": {
+        "template": {
+          "type": "string"
+        },
+        "inputs": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkspaceSource"
+          },
+          "type": "object"
+        },
+        "resolved": {
+          "$ref": "#/$defs/WorkspaceResolved"
+        },
+        "ttl": {
+          "type": "string"
+        },
+        "ttl_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "template"
+      ]
+    },
+    "WorkspaceResolved": {
+      "properties": {
+        "chain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "chain_root": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "type": "string"
+        },
+        "allocations": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "persist_paths": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PersistPath"
+          },
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "WorkspaceSource": {
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "subpath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "source"
+      ]
+    }
+  }
+}

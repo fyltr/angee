@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -116,6 +117,29 @@ func TestOperatorCommandForwardsDaemonFlags(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "Run the Angee operator") || !strings.Contains(output, "--bind") {
 		t.Fatalf("operator help output did not come from daemon parser:\n%s", output)
+	}
+}
+
+func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
+	body, err := json.Marshal(api.ErrorResponse{
+		Kind:  "workspace",
+		Name:  "missing",
+		Error: `workspace "missing" is not declared`,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(ErrorResponse) error = %v", err)
+	}
+
+	err = operatorHTTPError(http.StatusNotFound, body)
+	var notFound *RemoteNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("operatorHTTPError() = %T, want RemoteNotFound", err)
+	}
+	if notFound.Status != http.StatusNotFound || notFound.Body.Kind != "workspace" || notFound.Body.Name != "missing" {
+		t.Fatalf("RemoteNotFound = %#v", notFound)
+	}
+	if got := err.Error(); !strings.Contains(got, "HTTP 404") || !strings.Contains(got, `workspace "missing" is not declared`) {
+		t.Fatalf("error string = %q, want status and message", got)
 	}
 }
 
@@ -249,6 +273,38 @@ func TestWorkspaceStatusInfersCurrentWorkspace(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "workspace\t"+workspaceName+"\tready") {
 		t.Fatalf("workspace status output = %q, want inferred workspace %q", got, workspaceName)
+	}
+}
+
+func TestWorkspaceSyncBaseInfersCurrentWorkspace(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	nested := filepath.Join(root, "workspaces", workspaceName, "angee-go", "internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "parent-root",
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {Template: "workspaces/dev-pr"},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	t.Chdir(nested)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"workspace", "sync-base", "--merge"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Fatalf("workspace sync-base output = %q, want empty output for workspace without git sources", got)
 	}
 }
 

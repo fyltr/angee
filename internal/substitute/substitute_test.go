@@ -36,6 +36,19 @@ func TestResolveSecretEnvPlaceholder(t *testing.T) {
 	}
 }
 
+func TestResolveCurrentWorkspacePath(t *testing.T) {
+	got, err := Resolve("${workspace.path}/.angee/data", Context{
+		WorkspacePath: "/tmp/workspaces/feature-a",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	want := "/tmp/workspaces/feature-a/.angee/data"
+	if got != want {
+		t.Fatalf("Resolve() = %q, want %q", got, want)
+	}
+}
+
 func TestRequiredFilterRejectsEmpty(t *testing.T) {
 	_, err := Resolve("${name | required('name required')}", Context{})
 	if err == nil {

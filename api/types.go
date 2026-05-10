@@ -19,6 +19,14 @@ type Operation struct {
 	EndedAt   *time.Time      `json:"ended_at,omitempty"`
 }
 
+type ErrorResponse struct {
+	Kind   string `json:"kind,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Field  string `json:"field,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error"`
+}
+
 type StackInitRequest struct {
 	Template string            `json:"template"`
 	Path     string            `json:"path,omitempty"`
@@ -55,37 +63,47 @@ type JobState struct {
 	Runtime string `json:"runtime"`
 }
 
+type JobRunRequest struct {
+	Inputs map[string]string `json:"inputs,omitempty"`
+}
+
 type WorkspaceRef struct {
-	Name         string         `json:"name"`
-	Path         string         `json:"path"`
-	Template     string         `json:"template"`
-	ChainRoot    string         `json:"chain_root,omitempty"`
-	Lifecycle    string         `json:"lifecycle,omitempty"`
-	Allocations  map[string]int `json:"allocations,omitempty"`
-	TTL          string         `json:"ttl,omitempty"`
-	TTLExpiresAt *time.Time     `json:"ttl_expires_at,omitempty"`
+	Name               string         `json:"name"`
+	Path               string         `json:"path"`
+	Template           string         `json:"template"`
+	ChainRoot          string         `json:"chain_root,omitempty"`
+	Lifecycle          string         `json:"lifecycle,omitempty"`
+	Allocations        map[string]int `json:"allocations,omitempty"`
+	ProcessComposePort int            `json:"process_compose_port,omitempty"`
+	PlaywrightMCPName  string         `json:"playwright_mcp_name,omitempty"`
+	PlaywrightMCPURL   string         `json:"playwright_mcp_url,omitempty"`
+	TTL                string         `json:"ttl,omitempty"`
+	TTLExpiresAt       *time.Time     `json:"ttl_expires_at,omitempty"`
 }
 
 type WorkspaceStatusResponse struct {
-	Name         string                          `json:"name"`
-	Path         string                          `json:"path"`
-	Exists       bool                            `json:"exists"`
-	State        string                          `json:"state"`
-	Error        string                          `json:"error,omitempty"`
-	Template     string                          `json:"template"`
-	Inputs       map[string]string               `json:"inputs,omitempty"`
-	Sources      []WorkspaceSourceStatus         `json:"sources,omitempty"`
-	Chain        []string                        `json:"chain,omitempty"`
-	ChainRoot    string                          `json:"chain_root,omitempty"`
-	Lifecycle    string                          `json:"lifecycle,omitempty"`
-	Allocations  map[string]int                  `json:"allocations,omitempty"`
-	PersistPaths map[string]WorkspacePersistPath `json:"persist_paths,omitempty"`
-	TTL          string                          `json:"ttl,omitempty"`
-	TTLExpiresAt *time.Time                      `json:"ttl_expires_at,omitempty"`
-	Expired      bool                            `json:"expired"`
-	MountedBy    []WorkspaceMountRef             `json:"mounted_by,omitempty"`
-	InnerStack   *StackStatusResponse            `json:"inner_stack,omitempty"`
-	InnerError   string                          `json:"inner_error,omitempty"`
+	Name               string                          `json:"name"`
+	Path               string                          `json:"path"`
+	Exists             bool                            `json:"exists"`
+	State              string                          `json:"state"`
+	Error              string                          `json:"error,omitempty"`
+	Template           string                          `json:"template"`
+	Inputs             map[string]string               `json:"inputs,omitempty"`
+	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
+	Chain              []string                        `json:"chain,omitempty"`
+	ChainRoot          string                          `json:"chain_root,omitempty"`
+	Lifecycle          string                          `json:"lifecycle,omitempty"`
+	Allocations        map[string]int                  `json:"allocations,omitempty"`
+	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
+	PlaywrightMCPName  string                          `json:"playwright_mcp_name,omitempty"`
+	PlaywrightMCPURL   string                          `json:"playwright_mcp_url,omitempty"`
+	PersistPaths       map[string]WorkspacePersistPath `json:"persist_paths,omitempty"`
+	TTL                string                          `json:"ttl,omitempty"`
+	TTLExpiresAt       *time.Time                      `json:"ttl_expires_at,omitempty"`
+	Expired            bool                            `json:"expired"`
+	MountedBy          []WorkspaceMountRef             `json:"mounted_by,omitempty"`
+	InnerStack         *StackStatusResponse            `json:"inner_stack,omitempty"`
+	InnerError         string                          `json:"inner_error,omitempty"`
 }
 
 type WorkspaceSourceStatus struct {
@@ -153,17 +171,18 @@ type GitOpsLink struct {
 }
 
 type GitOpsSummary struct {
-	Sources    int `json:"sources"`
-	Workspaces int `json:"workspaces"`
-	Worktrees  int `json:"worktrees"`
-	Clean      int `json:"clean"`
-	Dirty      int `json:"dirty"`
-	Ahead      int `json:"ahead"`
-	Behind     int `json:"behind"`
-	Diverged   int `json:"diverged"`
-	Missing    int `json:"missing"`
-	Error      int `json:"error"`
-	Unpushed   int `json:"unpushed"`
+	Sources        int `json:"sources"`
+	Workspaces     int `json:"workspaces"`
+	Worktrees      int `json:"worktrees"`
+	Clean          int `json:"clean"`
+	Dirty          int `json:"dirty"`
+	Ahead          int `json:"ahead"`
+	Behind         int `json:"behind"`
+	Diverged       int `json:"diverged"`
+	BranchMismatch int `json:"branch_mismatch"`
+	Missing        int `json:"missing"`
+	Error          int `json:"error"`
+	Unpushed       int `json:"unpushed"`
 }
 
 type ServiceInitRequest struct {
@@ -186,9 +205,18 @@ type WorkspaceCreateRequest struct {
 	Start    bool              `json:"start,omitempty"`
 }
 
+type WorkspaceUpdateRequest struct {
+	Inputs map[string]string `json:"inputs,omitempty"`
+	TTL    string            `json:"ttl,omitempty"`
+}
+
 type SourceOperationRequest struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref,omitempty"`
+}
+
+type WorkspaceSyncBaseRequest struct {
+	Method string `json:"method,omitempty"`
 }
 
 type SourceState struct {
@@ -198,6 +226,7 @@ type SourceState struct {
 	Path           string `json:"path"`
 	Exists         bool   `json:"exists"`
 	State          string `json:"state,omitempty"`
+	Branch         string `json:"branch,omitempty"`
 	Ref            string `json:"ref,omitempty"`
 	CurrentRef     string `json:"current_ref,omitempty"`
 	Dirty          bool   `json:"dirty,omitempty"`
