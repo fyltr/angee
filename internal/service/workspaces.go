@@ -630,9 +630,6 @@ func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
 	if !ok {
 		return &NotFoundError{Kind: "workspace", Name: name}
 	}
-	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
-		return err
-	}
 	if workspace.Resolved.ChainRoot == "" {
 		return nil
 	}

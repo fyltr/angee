@@ -1,12 +1,10 @@
 // Package git provides a hybrid git client.
 //
-// Read-only queries (status, refs, config, ahead/behind) are implemented with
-// go-git so they avoid spawning a process per call. Write and network
-// operations (clone, fetch, pull, push, merge, rebase, worktree add) shell out
-// to the git CLI so they inherit the user's credential helpers, SSH config,
-// and submodule handling, and so worktree creation performs comparably with
-// upstream git on large repos (go-git lacks parallel checkout — see
-// go-git/go-git#1956).
+// Read-only queries (status, refs) are implemented with go-git where possible
+// so they avoid spawning a process per call. Config, ahead/behind, and write or
+// network operations (clone, fetch, pull, push, merge, rebase, worktree add)
+// shell out to the git CLI so they inherit the user's credential helpers, SSH
+// config, config includes, and upstream git's precedence and graph semantics.
 package git
 
 import (
@@ -19,7 +17,6 @@ import (
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 type Client struct {
@@ -280,95 +277,11 @@ func (c Client) AheadCount(ctx context.Context, dir, base string) (int, error) {
 }
 
 func (c Client) AheadBehind(ctx context.Context, dir, base string) (ahead int, behind int, err error) {
-	repo, err := openRepo(dir)
-	if err != nil {
-		return c.aheadBehindCLI(ctx, dir, base)
-	}
-	headRef, err := repo.Head()
-	if err != nil {
-		return c.aheadBehindCLI(ctx, dir, base)
-	}
-	baseHash, err := repo.ResolveRevision(plumbing.Revision(base))
-	if err != nil || baseHash == nil {
-		return c.aheadBehindCLI(ctx, dir, base)
-	}
-	headHash := headRef.Hash()
-	baseCommit, err := repo.CommitObject(*baseHash)
-	if err != nil {
-		return 0, 0, fmt.Errorf("base commit %s: %w", baseHash.String(), err)
-	}
-	headCommit, err := repo.CommitObject(headHash)
-	if err != nil {
-		return 0, 0, fmt.Errorf("head commit %s: %w", headHash.String(), err)
-	}
-	mergeBases, err := headCommit.MergeBase(baseCommit)
-	if err != nil {
-		return 0, 0, fmt.Errorf("merge-base of %s and %s: %w", headHash.String(), baseHash.String(), err)
-	}
-	if len(mergeBases) == 0 {
-		return 0, 0, fmt.Errorf("no merge base between %s and %s", base, headHash.String())
-	}
-	mb := mergeBases[0].Hash
-	ahead, err = countAncestors(repo, headHash, mb)
-	if err != nil {
-		return 0, 0, err
-	}
-	behind, err = countAncestors(repo, *baseHash, mb)
-	if err != nil {
-		return 0, 0, err
-	}
-	return ahead, behind, nil
-}
-
-// countAncestors returns the number of commits reachable from start up to
-// (but not including) stop. Mirrors `git rev-list --count stop..start`.
-func countAncestors(repo *gogit.Repository, start, stop plumbing.Hash) (int, error) {
-	if start == stop {
-		return 0, nil
-	}
-	iter, err := repo.Log(&gogit.LogOptions{From: start})
-	if err != nil {
-		return 0, fmt.Errorf("git log from %s: %w", start.String(), err)
-	}
-	defer iter.Close()
-	count := 0
-	stopErr := errors.New("stop")
-	if err := iter.ForEach(func(c *object.Commit) error {
-		if c.Hash == stop {
-			return stopErr
-		}
-		count++
-		return nil
-	}); err != nil && !errors.Is(err, stopErr) {
-		return 0, fmt.Errorf("walk commits from %s: %w", start.String(), err)
-	}
-	return count, nil
+	return c.aheadBehindCLI(ctx, dir, base)
 }
 
 func (c Client) Config(ctx context.Context, dir, key string) (string, bool, error) {
-	repo, err := openRepo(dir)
-	if err != nil {
-		return c.configCLI(ctx, dir, key)
-	}
-	cfg, err := repo.Config()
-	if err != nil {
-		return c.configCLI(ctx, dir, key)
-	}
-	section, subsection, name, ok := splitConfigKey(key)
-	if !ok {
-		return "", false, nil
-	}
-	var raw string
-	if subsection == "" {
-		raw = cfg.Raw.Section(section).Option(name)
-	} else {
-		raw = cfg.Raw.Section(section).Subsection(subsection).Option(name)
-	}
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", false, nil
-	}
-	return value, true, nil
+	return c.configCLI(ctx, dir, key)
 }
 
 func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, error) {
@@ -377,21 +290,6 @@ func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, e
 		return "", false, nil
 	}
 	return value, true, nil
-}
-
-// splitConfigKey parses git-style "section.subsection.key" or "section.key"
-// into its components. Subsection may itself contain dots; everything between
-// the first and last dot is treated as the subsection.
-func splitConfigKey(key string) (section, subsection, name string, ok bool) {
-	first := strings.Index(key, ".")
-	last := strings.LastIndex(key, ".")
-	if first < 0 || first == len(key)-1 {
-		return "", "", "", false
-	}
-	if first == last {
-		return key[:first], "", key[first+1:], true
-	}
-	return key[:first], key[first+1 : last], key[last+1:], true
 }
 
 func (c Client) Remotes(ctx context.Context, dir string) ([]string, error) {

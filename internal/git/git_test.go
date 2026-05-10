@@ -10,6 +10,7 @@ import (
 )
 
 func TestPushRemoteResolution(t *testing.T) {
+	isolateGitConfig(t)
 	ctx := context.Background()
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
@@ -56,6 +57,90 @@ func TestPushRemoteResolution(t *testing.T) {
 	if _, err := client.PushRemote(ctx, repo); err == nil || !strings.Contains(err.Error(), "multiple git remotes") {
 		t.Fatalf("PushRemote() with ambiguous remotes error = %v, want multiple remotes error", err)
 	}
+}
+
+func TestPushRemoteUsesNativeGitConfigFallbacks(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+
+	t.Run("global push default", func(t *testing.T) {
+		isolateGitConfig(t)
+		repo := filepath.Join(base, "global-config-repo")
+		runGit(t, "", "init", repo)
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test User")
+		mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+		runGit(t, repo, "add", "README.md")
+		runGit(t, repo, "commit", "-m", "initial")
+		runGit(t, repo, "branch", "-M", "main")
+		runGit(t, repo, "remote", "add", "origin", filepath.Join(base, "origin.git"))
+		runGit(t, repo, "remote", "add", "fork", filepath.Join(base, "fork.git"))
+
+		globalConfig := filepath.Join(base, "global.gitconfig")
+		mustWriteFile(t, globalConfig, "[remote]\n\tpushDefault = fork\n")
+		t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+		client := New()
+		if got := pushRemote(t, client, ctx, repo); got != "fork" {
+			t.Fatalf("PushRemote() with global remote.pushDefault = %q, want fork", got)
+		}
+	})
+
+	t.Run("environment config overrides repo config", func(t *testing.T) {
+		isolateGitConfig(t)
+		repo := filepath.Join(base, "env-config-repo")
+		runGit(t, "", "init", repo)
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test User")
+		mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+		runGit(t, repo, "add", "README.md")
+		runGit(t, repo, "commit", "-m", "initial")
+		runGit(t, repo, "branch", "-M", "main")
+		runGit(t, repo, "remote", "add", "origin", filepath.Join(base, "origin.git"))
+		runGit(t, repo, "remote", "add", "fork", filepath.Join(base, "fork.git"))
+		runGit(t, repo, "config", "remote.pushDefault", "origin")
+
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "remote.pushDefault")
+		t.Setenv("GIT_CONFIG_VALUE_0", "fork")
+
+		client := New()
+		if got := pushRemote(t, client, ctx, repo); got != "fork" {
+			t.Fatalf("PushRemote() with env remote.pushDefault = %q, want fork", got)
+		}
+	})
+
+	t.Run("worktree branch push remote", func(t *testing.T) {
+		isolateGitConfig(t)
+		repo := filepath.Join(base, "worktree-config-repo")
+		wt := filepath.Join(base, "worktree-config-wt")
+		runGit(t, "", "init", repo)
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test User")
+		mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+		runGit(t, repo, "add", "README.md")
+		runGit(t, repo, "commit", "-m", "initial")
+		runGit(t, repo, "branch", "-M", "main")
+		runGit(t, repo, "remote", "add", "origin", filepath.Join(base, "origin.git"))
+		runGit(t, repo, "remote", "add", "fork", filepath.Join(base, "fork.git"))
+		runGit(t, repo, "worktree", "add", "-q", "-b", "workspace/feature", wt)
+		runGit(t, wt, "config", "extensions.worktreeConfig", "true")
+		runGit(t, wt, "config", "--worktree", "branch.workspace/feature.pushRemote", "fork")
+
+		client := New()
+		if got := pushRemote(t, client, ctx, wt); got != "fork" {
+			t.Fatalf("PushRemote() with worktree branch pushRemote = %q, want fork", got)
+		}
+	})
+}
+
+func isolateGitConfig(t *testing.T) {
+	t.Helper()
+	globalConfig := filepath.Join(t.TempDir(), "global.gitconfig")
+	mustWriteFile(t, globalConfig, "")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 }
 
 func TestSyncBaseRefPrefersRemoteForSlashBranchNames(t *testing.T) {
