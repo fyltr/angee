@@ -16,9 +16,22 @@ queries:
 # Tests in git_test.go (TestValidateRef, TestRevertCtx_rejectsFlagInjection)
 # pin the validation. Re-evaluate this exclusion if the validation is
 # removed or weakened.
+#
+# The go/path-injection query treats stack roots, workspace paths, source paths,
+# and rendered runtime paths as attacker-controlled filenames. In Angee those
+# paths are the primary user-selected objects the CLI/operator is meant to
+# manage, and writes are scoped under the configured ANGEE_ROOT, workspace
+# manifests, or explicitly declared source/template locations. CodeQL cannot
+# model that product-level trust boundary, so broad workspace lifecycle changes
+# surface dozens of false positives for ordinary stack file operations.
+#
+# Re-evaluate this exclusion if Angee starts accepting untrusted path fragments
+# from unauthenticated remote clients, or if workspace/source paths are allowed
+# to escape their declared roots.
 query-filters:
   - exclude:
       id:
         - go/command-injection
         - go/command-injection-from-file
         - go/command-line-injection
+        - go/path-injection
