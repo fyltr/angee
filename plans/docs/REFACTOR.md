@@ -159,14 +159,18 @@ Progress in this session:
 - Git read-only status calls now fall back to native git CLI when go-git cannot
   read a worktree config extension, so branch-mismatch is based on actual
   `current_ref != branch` state.
-
-Remaining:
-
-- Render `ports.process_compose.value` from the dev stack template and pass
-  `${alloc.custom}` from workspace templates.
-- Add the `data_root` stack input and render workspace-local
-  `<workspace>/.angee/data` for `ANGEE_DATA` and Playwright user data.
-- Implement demo asset ledger adoption/idempotency in the application repo.
+- The `angee-django` dev stack template now renders
+  `ports.process_compose.value`, defaults root stacks to `8080`, and receives
+  `${alloc.custom}` from `dev-pr` and `dev-pr-multi` workspace templates.
+- The dev stack now accepts `data_root`; workspace templates render it as the
+  absolute `${workspace.path}/.angee/data` path and use it for `ANGEE_DATA` plus
+  the Playwright `--user-data-dir`.
+- The application asset loader now adopts an existing target row when exactly
+  one matching unique field exists and creates the missing ledger row instead
+  of attempting a duplicate insert.
+- Verification covered the Django asset tests, full Django suite, direct stack
+  render, fresh chained workspace render, isolated lifecycle start/stop on the
+  workspace process-compose control port, and the Go suite.
 
 ---
 
@@ -187,7 +191,7 @@ separate handwritten code from generated code.
 | R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | **DONE**   | Low-Medium  | Medium  | 0 / 0                         |
 | R8 | Split defaulting from validation, then adopt `validator` + schema  | **DONE**   | Medium      | Low     | +50 / +1 schema file          |
 | R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
-| R10 | Workspace runtime/lifecycle isolation fixes                       | Partial    | High        | Medium  | TBD                           |
+| R10 | Workspace runtime/lifecycle isolation fixes                       | **DONE**   | High        | Medium  | TBD                           |
 
 ---
 
