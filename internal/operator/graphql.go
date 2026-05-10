@@ -94,14 +94,21 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 	sourceStateType := gql.NewObject(gql.ObjectConfig{
 		Name: "SourceState",
 		Fields: gql.Fields{
-			"name":   &gql.Field{Type: gql.NewNonNull(gql.String)},
-			"slot":   &gql.Field{Type: gql.String},
-			"kind":   &gql.Field{Type: gql.NewNonNull(gql.String)},
-			"path":   &gql.Field{Type: gql.NewNonNull(gql.String)},
-			"exists": &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
-			"ref":    &gql.Field{Type: gql.String},
-			"dirty":  &gql.Field{Type: gql.Boolean},
-			"error":  &gql.Field{Type: gql.String},
+			"name":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"slot":           &gql.Field{Type: gql.String},
+			"kind":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"path":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"exists":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"state":          &gql.Field{Type: gql.String},
+			"ref":            &gql.Field{Type: gql.String},
+			"currentRef":     &gql.Field{Type: gql.String},
+			"dirty":          &gql.Field{Type: gql.Boolean},
+			"upstream":       &gql.Field{Type: gql.String},
+			"ahead":          &gql.Field{Type: gql.Int},
+			"behind":         &gql.Field{Type: gql.Int},
+			"pushed":         &gql.Field{Type: gql.Boolean},
+			"unpushedReason": &gql.Field{Type: gql.String},
+			"error":          &gql.Field{Type: gql.String},
 		},
 	})
 
@@ -139,6 +146,48 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 		},
 	})
 
+	gitOpsLinkType := gql.NewObject(gql.ObjectConfig{
+		Name: "GitOpsLink",
+		Fields: gql.Fields{
+			"id":             &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"source":         &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"workspace":      &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"slot":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"kind":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"mode":           &gql.Field{Type: gql.String},
+			"branch":         &gql.Field{Type: gql.String},
+			"ref":            &gql.Field{Type: gql.String},
+			"path":           &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"exists":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"state":          &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"currentRef":     &gql.Field{Type: gql.String},
+			"dirty":          &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"upstream":       &gql.Field{Type: gql.String},
+			"ahead":          &gql.Field{Type: gql.Int},
+			"behind":         &gql.Field{Type: gql.Int},
+			"pushed":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
+			"unpushedReason": &gql.Field{Type: gql.String},
+			"error":          &gql.Field{Type: gql.String},
+		},
+	})
+
+	gitOpsSummaryType := gql.NewObject(gql.ObjectConfig{
+		Name: "GitOpsSummary",
+		Fields: gql.Fields{
+			"sources":    &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"workspaces": &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"worktrees":  &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"clean":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"dirty":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"ahead":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"behind":     &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"diverged":   &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"missing":    &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"error":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"unpushed":   &gql.Field{Type: gql.NewNonNull(gql.Int)},
+		},
+	})
+
 	stackStatusType := gql.NewObject(gql.ObjectConfig{
 		Name: "StackStatus",
 		Fields: gql.Fields{
@@ -147,9 +196,9 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 			"services": &gql.Field{
 				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(serviceStateType))),
 				Resolve: func(p gql.ResolveParams) (any, error) {
-					status, ok := p.Source.(api.StackStatusResponse)
+					status, ok := stackStatusSource(p.Source)
 					if !ok {
-						return nil, nil
+						return []api.ServiceState{}, nil
 					}
 					return sortedServiceStates(status.Services), nil
 				},
@@ -157,9 +206,9 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 			"jobs": &gql.Field{
 				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(jobStateType))),
 				Resolve: func(p gql.ResolveParams) (any, error) {
-					status, ok := p.Source.(api.StackStatusResponse)
+					status, ok := stackStatusSource(p.Source)
 					if !ok {
-						return nil, nil
+						return []api.JobState{}, nil
 					}
 					return sortedJobStates(status.Jobs), nil
 				},
@@ -167,9 +216,9 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 			"workspaces": &gql.Field{
 				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(workspaceRefType))),
 				Resolve: func(p gql.ResolveParams) (any, error) {
-					status, ok := p.Source.(api.StackStatusResponse)
+					status, ok := stackStatusSource(p.Source)
 					if !ok {
-						return nil, nil
+						return []api.WorkspaceRef{}, nil
 					}
 					return sortedWorkspaceRefs(status.Workspaces), nil
 				},
@@ -210,6 +259,24 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 			"mountedBy":  &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(workspaceMountRefType)))},
 			"innerStack": &gql.Field{Type: stackStatusType},
 			"innerError": &gql.Field{Type: gql.String},
+		},
+	})
+
+	gitOpsTopologyType := gql.NewObject(gql.ObjectConfig{
+		Name: "GitOpsTopology",
+		Fields: gql.Fields{
+			"root": &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"name": &gql.Field{Type: gql.NewNonNull(gql.String)},
+			"sources": &gql.Field{
+				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(sourceStateType))),
+			},
+			"workspaces": &gql.Field{
+				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(workspaceStatusType))),
+			},
+			"links": &gql.Field{
+				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(gitOpsLinkType))),
+			},
+			"summary": &gql.Field{Type: gql.NewNonNull(gitOpsSummaryType)},
 		},
 	})
 
@@ -400,6 +467,12 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 				},
 				Resolve: func(p gql.ResolveParams) (any, error) {
 					return s.platform.WorkspaceGitStatus(p.Context, stringArg(p.Args, "name"))
+				},
+			},
+			"gitOpsTopology": &gql.Field{
+				Type: gitOpsTopologyType,
+				Resolve: func(p gql.ResolveParams) (any, error) {
+					return s.platform.GitOpsTopology(p.Context)
 				},
 			},
 			"stackLogs": &gql.Field{
@@ -645,6 +718,24 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 					return s.platform.WorkspacePush(p.Context, stringArg(p.Args, "name"), stringArg(p.Args, "ref"))
 				},
 			},
+			"workspaceSourceFetch": workspaceSourceMutation(workspaceSourceStatusType, s.platform.WorkspaceSourceFetch),
+			"workspaceSourcePull":  workspaceSourceMutation(workspaceSourceStatusType, s.platform.WorkspaceSourcePull),
+			"workspaceSourcePush": &gql.Field{
+				Type: workspaceSourceStatusType,
+				Args: gql.FieldConfigArgument{
+					"workspace": &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+					"slot":      &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+					"ref":       &gql.ArgumentConfig{Type: gql.String},
+				},
+				Resolve: func(p gql.ResolveParams) (any, error) {
+					return s.platform.WorkspaceSourcePush(
+						p.Context,
+						stringArg(p.Args, "workspace"),
+						stringArg(p.Args, "slot"),
+						stringArg(p.Args, "ref"),
+					)
+				},
+			},
 		},
 	})
 
@@ -798,6 +889,19 @@ func sourceMutation(sourceStateType *gql.Object, run func(gql.ResolveParams, str
 		},
 		Resolve: func(p gql.ResolveParams) (any, error) {
 			return run(p, stringArg(p.Args, "name"))
+		},
+	}
+}
+
+func workspaceSourceMutation(workspaceSourceStatusType *gql.Object, run func(context.Context, string, string) (api.WorkspaceSourceStatus, error)) *gql.Field {
+	return &gql.Field{
+		Type: workspaceSourceStatusType,
+		Args: gql.FieldConfigArgument{
+			"workspace": &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+			"slot":      &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+		},
+		Resolve: func(p gql.ResolveParams) (any, error) {
+			return run(p.Context, stringArg(p.Args, "workspace"), stringArg(p.Args, "slot"))
 		},
 	}
 }
@@ -1092,6 +1196,20 @@ func sortedServiceStates(values map[string]api.ServiceState) []api.ServiceState 
 		out = append(out, values[key])
 	}
 	return out
+}
+
+func stackStatusSource(source any) (api.StackStatusResponse, bool) {
+	switch status := source.(type) {
+	case api.StackStatusResponse:
+		return status, true
+	case *api.StackStatusResponse:
+		if status == nil {
+			return api.StackStatusResponse{}, false
+		}
+		return *status, true
+	default:
+		return api.StackStatusResponse{}, false
+	}
 }
 
 func sortedJobStates(values map[string]api.JobState) []api.JobState {

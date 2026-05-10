@@ -66,7 +66,7 @@ func (p *Platform) SourceList(ctx context.Context) ([]api.SourceState, error) {
 	for _, name := range sortedKeys(stack.Sources) {
 		state, err := p.sourceState(ctx, name, stack.Sources[name])
 		if err != nil {
-			state = api.SourceState{Name: name, Kind: stack.Sources[name].Kind, Path: p.sourcePath(name, stack.Sources[name]), Error: err.Error()}
+			state = api.SourceState{Name: name, Kind: stack.Sources[name].Kind, Path: p.sourcePath(name, stack.Sources[name]), State: "error", Error: err.Error()}
 		}
 		states = append(states, state)
 	}
@@ -171,7 +171,7 @@ func (p *Platform) materializeSource(ctx context.Context, name string, source ma
 
 func (p *Platform) sourceState(ctx context.Context, name string, source manifest.Source) (api.SourceState, error) {
 	path := p.sourcePath(name, source)
-	state := api.SourceState{Name: name, Kind: source.Kind, Path: path}
+	state := api.SourceState{Name: name, Kind: source.Kind, Path: path, State: "missing", Pushed: true}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return state, nil
@@ -179,18 +179,66 @@ func (p *Platform) sourceState(ctx context.Context, name string, source manifest
 		return state, err
 	}
 	state.Exists = true
-	if source.Kind == "git" {
-		client := git.New()
-		ref, err := client.CurrentRef(ctx, path)
-		if err != nil {
-			return state, err
+	state.Pushed = true
+	if source.Kind != "git" {
+		state.State = "ready"
+		return state, nil
+	}
+	client := git.New()
+	ref, err := client.CurrentRef(ctx, path)
+	if err != nil {
+		return state, err
+	}
+	dirty, err := client.Dirty(ctx, path)
+	if err != nil {
+		return state, err
+	}
+	state.Ref = ref
+	state.CurrentRef = ref
+	state.Dirty = dirty
+	if dirty {
+		state.State = "dirty"
+		state.Pushed = false
+		state.UnpushedReason = "uncommitted changes"
+		return state, nil
+	}
+	base, hasUpstream, err := client.Upstream(ctx, path)
+	if err != nil {
+		return state, err
+	}
+	if hasUpstream {
+		state.Upstream = base
+	}
+	if base == "" {
+		base = source.DefaultRef
+	}
+	if base == "" {
+		state.State = "clean"
+		return state, nil
+	}
+	ahead, behind, err := client.AheadBehind(ctx, path, base)
+	if err != nil {
+		return state, err
+	}
+	state.Ahead = ahead
+	state.Behind = behind
+	switch {
+	case ahead > 0 && behind > 0:
+		state.State = "diverged"
+		state.Pushed = false
+		state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
+	case ahead > 0:
+		state.State = "ahead"
+		state.Pushed = false
+		if hasUpstream {
+			state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of %s", ahead, base)
+		} else {
+			state.UnpushedReason = fmt.Sprintf("%d commit(s) ahead of base ref %s with no upstream", ahead, base)
 		}
-		dirty, err := client.Dirty(ctx, path)
-		if err != nil {
-			return state, err
-		}
-		state.Ref = ref
-		state.Dirty = dirty
+	case behind > 0:
+		state.State = "behind"
+	default:
+		state.State = "clean"
 	}
 	return state, nil
 }

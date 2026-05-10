@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fyltr/angee/internal/manifest"
@@ -153,6 +155,131 @@ services:
 	ref := mountedBy[0].(map[string]any)
 	if ref["kind"] != "service" || ref["name"] != "worker" || ref["field"] != "mounts" {
 		t.Fatalf("mountedBy = %#v, want worker mounts ref", ref)
+	}
+}
+
+func TestGraphQLGitOpsTopologyAndWorkspaceSourcePush(t *testing.T) {
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	cache := filepath.Join(base, "cache")
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	workspaceSourcePath := filepath.Join(root, "workspaces", workspaceName, "app")
+
+	runTestGit(t, "", "init", "--bare", remote)
+	runTestGit(t, "", "clone", remote, cache)
+	runTestGit(t, cache, "remote", "rename", "origin", "fork")
+	runTestGit(t, cache, "config", "user.email", "test@example.com")
+	runTestGit(t, cache, "config", "user.name", "Test User")
+	writeTestFile(t, filepath.Join(cache, "README.md"), "hello\n")
+	runTestGit(t, cache, "add", "README.md")
+	runTestGit(t, cache, "commit", "-m", "initial")
+	runTestGit(t, cache, "branch", "-M", "main")
+	runTestGit(t, cache, "push", "-u", "fork", "main")
+	runTestGit(t, cache, "worktree", "add", "-b", workspaceName, workspaceSourcePath, "main")
+	runTestGit(t, workspaceSourcePath, "config", "user.email", "test@example.com")
+	runTestGit(t, workspaceSourcePath, "config", "user.name", "Test User")
+	writeTestFile(t, filepath.Join(workspaceSourcePath, "change.txt"), "change\n")
+	writeTestStack(t, workspaceSourcePath, `version: 1
+kind: stack
+name: inner
+`)
+	runTestGit(t, workspaceSourcePath, "add", "change.txt", "angee.yaml")
+	runTestGit(t, workspaceSourcePath, "commit", "-m", "workspace change")
+
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Sources: map[string]manifest.Source{
+			"app": {
+				Kind:       "git",
+				Repo:       remote,
+				DefaultRef: "main",
+				CachePath:  cache,
+			},
+		},
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {
+				Template: "workspaces/dev-pr",
+				Sources: map[string]manifest.WorkspaceSource{
+					"app": {
+						Source:  "app",
+						Mode:    "worktree",
+						Branch:  workspaceName,
+						Ref:     "main",
+						Subpath: "app",
+					},
+				},
+				Resolved: manifest.WorkspaceResolved{
+					ChainRoot: "app",
+				},
+			},
+		},
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{
+			gitOpsTopology {
+				name
+				summary { sources workspaces worktrees ahead unpushed }
+				sources { name state ref pushed }
+				links { id workspace slot source state ahead pushed currentRef }
+				workspaces {
+					name
+					sources { slot state ahead pushed }
+					innerStack { name services { name } jobs { name } workspaces { name } }
+				}
+			}
+		}`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL errors = %#v", resp.Errors)
+	}
+	topology := resp.Data["gitOpsTopology"].(map[string]any)
+	summary := topology["summary"].(map[string]any)
+	if summary["sources"] != float64(1) || summary["workspaces"] != float64(1) || summary["worktrees"] != float64(1) {
+		t.Fatalf("summary = %#v, want one source, workspace, and worktree", summary)
+	}
+	if summary["ahead"] != float64(1) || summary["unpushed"] != float64(1) {
+		t.Fatalf("summary = %#v, want one ahead unpushed worktree", summary)
+	}
+	links := topology["links"].([]any)
+	if len(links) != 1 {
+		t.Fatalf("links length = %d, want 1", len(links))
+	}
+	link := links[0].(map[string]any)
+	if link["workspace"] != workspaceName || link["slot"] != "app" || link["state"] != "ahead" || link["ahead"] != float64(1) || link["pushed"] != false {
+		t.Fatalf("link = %#v, want ahead unpushed app worktree", link)
+	}
+
+	resp = doGraphQL(t, server, map[string]any{
+		"query": `mutation {
+			workspaceSourcePush(workspace: "feature-a", slot: "app") {
+				slot
+				state
+				pushed
+				upstream
+				ahead
+			}
+		}`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL push errors = %#v", resp.Errors)
+	}
+	pushed := resp.Data["workspaceSourcePush"].(map[string]any)
+	if pushed["slot"] != "app" || pushed["state"] != "clean" || pushed["pushed"] != true || pushed["upstream"] != "fork/"+workspaceName {
+		t.Fatalf("workspaceSourcePush = %#v, want clean pushed fork upstream", pushed)
 	}
 }
 
@@ -344,6 +471,34 @@ func writeTestStack(t *testing.T, root, data string) {
 	if err := os.WriteFile(filepath.Join(root, "angee.yaml"), []byte(data), 0o644); err != nil {
 		t.Fatalf("WriteFile(angee.yaml) error = %v", err)
 	}
+}
+
+func writeTestFile(t *testing.T, path string, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	gitArgs := append([]string{
+		"-c", "commit.gpgsign=false",
+		"-c", "core.hooksPath=/dev/null",
+	}, args...)
+	cmd := exec.Command("git", gitArgs...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s failed: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 type graphQLTestResponse struct {
