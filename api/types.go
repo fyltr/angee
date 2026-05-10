@@ -121,6 +121,51 @@ type WorkspaceMountRef struct {
 	Value string `json:"value"`
 }
 
+type GitOpsTopologyResponse struct {
+	Root       string                    `json:"root"`
+	Name       string                    `json:"name"`
+	Sources    []SourceState             `json:"sources"`
+	Workspaces []WorkspaceStatusResponse `json:"workspaces"`
+	Links      []GitOpsLink              `json:"links"`
+	Summary    GitOpsSummary             `json:"summary"`
+}
+
+type GitOpsLink struct {
+	ID             string `json:"id"`
+	Source         string `json:"source"`
+	Workspace      string `json:"workspace"`
+	Slot           string `json:"slot"`
+	Kind           string `json:"kind"`
+	Mode           string `json:"mode,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	Path           string `json:"path"`
+	Exists         bool   `json:"exists"`
+	State          string `json:"state"`
+	CurrentRef     string `json:"current_ref,omitempty"`
+	Dirty          bool   `json:"dirty"`
+	Upstream       string `json:"upstream,omitempty"`
+	Ahead          int    `json:"ahead,omitempty"`
+	Behind         int    `json:"behind,omitempty"`
+	Pushed         bool   `json:"pushed"`
+	UnpushedReason string `json:"unpushed_reason,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+type GitOpsSummary struct {
+	Sources    int `json:"sources"`
+	Workspaces int `json:"workspaces"`
+	Worktrees  int `json:"worktrees"`
+	Clean      int `json:"clean"`
+	Dirty      int `json:"dirty"`
+	Ahead      int `json:"ahead"`
+	Behind     int `json:"behind"`
+	Diverged   int `json:"diverged"`
+	Missing    int `json:"missing"`
+	Error      int `json:"error"`
+	Unpushed   int `json:"unpushed"`
+}
+
 type ServiceInitRequest struct {
 	Name    string            `json:"name"`
 	Runtime string            `json:"runtime,omitempty"`
@@ -147,12 +192,19 @@ type SourceOperationRequest struct {
 }
 
 type SourceState struct {
-	Name   string `json:"name"`
-	Slot   string `json:"slot,omitempty"`
-	Kind   string `json:"kind"`
-	Path   string `json:"path"`
-	Exists bool   `json:"exists"`
-	Ref    string `json:"ref,omitempty"`
-	Dirty  bool   `json:"dirty,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Name           string `json:"name"`
+	Slot           string `json:"slot,omitempty"`
+	Kind           string `json:"kind"`
+	Path           string `json:"path"`
+	Exists         bool   `json:"exists"`
+	State          string `json:"state,omitempty"`
+	Ref            string `json:"ref,omitempty"`
+	CurrentRef     string `json:"current_ref,omitempty"`
+	Dirty          bool   `json:"dirty,omitempty"`
+	Upstream       string `json:"upstream,omitempty"`
+	Ahead          int    `json:"ahead,omitempty"`
+	Behind         int    `json:"behind,omitempty"`
+	Pushed         bool   `json:"pushed"`
+	UnpushedReason string `json:"unpushed_reason,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
