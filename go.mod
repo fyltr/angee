@@ -13,6 +13,8 @@ require (
 require (
 	github.com/99designs/gqlgen v0.17.90
 	github.com/go-git/go-git/v5 v5.19.0
+	github.com/go-playground/validator/v10 v10.30.2
+	github.com/invopop/jsonschema v0.14.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 )
 
@@ -46,7 +48,6 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.30.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
@@ -56,7 +57,6 @@ require (
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
