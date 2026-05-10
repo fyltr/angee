@@ -35,8 +35,8 @@ go test -v -race ./...
 `make check-generated` runs generation and fails if `internal/operator/gql/`
 is not committed fresh.
 
-`make schema` refreshes `docs/angee.schema.json` from the manifest structs for
-editor integration and YAML language-server completion.
+`make schema` refreshes `docs/public/angee.schema.json` from the manifest
+structs for editor integration and YAML language-server completion.
 `make check-schema` regenerates the schema and fails if it is not committed
 fresh.
 

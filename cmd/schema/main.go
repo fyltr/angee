@@ -15,7 +15,7 @@ func main() {
 	flag.Parse()
 
 	reflector := jsonschema.Reflector{
-		BaseSchemaID: jsonschema.ID("https://fyltr.dev/schemas/angee.schema.json"),
+		BaseSchemaID: jsonschema.ID("https://docs.angee.ai/angee.schema.json"),
 	}
 	schema := reflector.Reflect(&manifest.Stack{})
 	data, err := json.MarshalIndent(schema, "", "  ")

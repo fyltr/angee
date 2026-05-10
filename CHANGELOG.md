@@ -8,15 +8,27 @@ latest tag.
 
 ### Documentation
 
+- Stood up a VitePress site under `docs/` published at
+  [docs.angee.ai](https://docs.angee.ai) via GitHub Pages
+  (`.github/workflows/docs.yml`). Existing markdown moved to
+  `docs/guide/` and `docs/reference/`; internal design notes moved to
+  `.agents/notes/`.
+- Added prebuild scripts that render `internal/operator/schema.graphql`
+  into `docs/reference/graphql/` and `docs/public/angee.schema.json` into
+  `docs/reference/manifest-schema.md` on every site build.
+- Moved the canonical manifest schema to `docs/public/angee.schema.json`
+  so it is served at <https://docs.angee.ai/angee.schema.json>;
+  `cmd/schema` now stamps `$id` accordingly.
 - Reworked repository documentation to describe current implemented behavior.
 - Moved changelog material to this root `CHANGELOG.md`.
 - Documented the current CLI surface, manifest schema, operator API, template
   resolver, and development commands.
-- Added `docs/SURFACES.md` enumerating every `service.Platform` method and its
-  CLI / REST / GraphQL exposure (R5).
-- Generated `docs/angee.schema.json` from the manifest types and documented
-  editor LSP integration via `# yaml-language-server: $schema=...` (R8).
-- Added `make schema` to `docs/DEVELOPMENT.md` (R8).
+- Added `docs/reference/surfaces.md` enumerating every `service.Platform`
+  method and its CLI / REST / GraphQL exposure (R5).
+- Generated `docs/public/angee.schema.json` from the manifest types and
+  documented editor LSP integration via `# yaml-language-server: $schema=...`
+  (R8).
+- Added `make schema` to `docs/guide/development.md` (R8).
 
 ### Operator API
 

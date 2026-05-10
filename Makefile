@@ -21,10 +21,10 @@ check-generated: generate
 	git diff --exit-code -- internal/operator/gql
 
 schema:
-	go run ./cmd/schema -o docs/angee.schema.json
+	go run ./cmd/schema -o docs/public/angee.schema.json
 
 check-schema: schema
-	git diff --exit-code -- docs/angee.schema.json
+	git diff --exit-code -- docs/public/angee.schema.json
 
 test:
 	go test -v -race ./...

@@ -15,9 +15,10 @@ func TestSurfaceMatrixMentionsEveryExportedPlatformMethod(t *testing.T) {
 		t.Fatal("runtime.Caller() failed")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	data, err := os.ReadFile(filepath.Join(repoRoot, "docs", "SURFACES.md"))
+	docPath := filepath.Join(repoRoot, "docs", "reference", "surfaces.md")
+	data, err := os.ReadFile(docPath)
 	if err != nil {
-		t.Fatalf("ReadFile(docs/SURFACES.md) error = %v", err)
+		t.Fatalf("ReadFile(%s) error = %v", docPath, err)
 	}
 	doc := string(data)
 
@@ -25,7 +26,7 @@ func TestSurfaceMatrixMentionsEveryExportedPlatformMethod(t *testing.T) {
 	for i := 0; i < platformType.NumMethod(); i++ {
 		name := platformType.Method(i).Name
 		if !strings.Contains(doc, "| `"+name+"` |") {
-			t.Fatalf("docs/SURFACES.md does not classify Platform.%s", name)
+			t.Fatalf("%s does not classify Platform.%s", docPath, name)
 		}
 	}
 }

@@ -13,7 +13,7 @@ Authorization: Bearer <token>
 ```
 
 Surface parity between `service.Platform`, CLI, REST, and GraphQL is tracked in
-[`SURFACES.md`](SURFACES.md).
+[Surface parity](/reference/surfaces).
 
 ## REST
 

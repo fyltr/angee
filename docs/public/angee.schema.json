@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fyltr.dev/schemas/angee.schema.json/stack",
+  "$id": "https://docs.angee.ai/angee.schema.json/stack",
   "$ref": "#/$defs/Stack",
   "$defs": {
     "Job": {

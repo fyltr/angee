@@ -18,8 +18,8 @@ _angee:
   name: pr
 ```
 
-`angee stack init <template>` resolves stack templates. `angee workspace create
-<template>` resolves workspace templates.
+`angee stack init <template>` resolves stack templates.
+`angee workspace create <template>` resolves workspace templates.
 
 ## Local Resolution
 
