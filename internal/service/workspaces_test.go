@@ -92,6 +92,49 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	}
 }
 
+func TestWorkspaceStatusIncludesRuntimeFacts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".angee")
+	if err := os.MkdirAll(filepath.Join(root, "workspaces", "feature-storage"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Workspaces: map[string]manifest.Workspace{
+			"feature-storage": {
+				Template: "workspace",
+				Resolved: manifest.WorkspaceResolved{
+					Allocations: map[string]int{
+						"custom":     10002,
+						"playwright": 9225,
+					},
+				},
+			},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	status, err := platform.WorkspaceStatus(context.Background(), "feature-storage")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if status.ProcessComposePort != 10002 {
+		t.Fatalf("ProcessComposePort = %d, want 10002", status.ProcessComposePort)
+	}
+	if status.PlaywrightMCPName != "playwright-feature-storage" {
+		t.Fatalf("PlaywrightMCPName = %q, want playwright-feature-storage", status.PlaywrightMCPName)
+	}
+	if status.PlaywrightMCPURL != "http://127.0.0.1:9225/mcp" {
+		t.Fatalf("PlaywrightMCPURL = %q, want http://127.0.0.1:9225/mcp", status.PlaywrightMCPURL)
+	}
+}
+
 func TestWorkspaceDestroyRefusesUnpushedGitSource(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()

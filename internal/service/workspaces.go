@@ -208,23 +208,27 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 	if expired {
 		state = "expired"
 	}
+	processComposePort, playwrightMCPName, playwrightMCPURL := workspaceRuntimeFacts(name, workspace)
 	status := api.WorkspaceStatusResponse{
-		Name:         name,
-		Path:         path,
-		Exists:       exists,
-		State:        state,
-		Template:     workspace.Template,
-		Inputs:       copyStringMap(workspace.Inputs),
-		Sources:      []api.WorkspaceSourceStatus{},
-		Chain:        append([]string{}, workspace.Resolved.Chain...),
-		ChainRoot:    workspace.Resolved.ChainRoot,
-		Lifecycle:    workspace.Resolved.Lifecycle,
-		Allocations:  copyIntMap(workspace.Resolved.Allocations),
-		PersistPaths: workspacePersistPaths(workspace.Resolved.PersistPaths),
-		TTL:          workspace.TTL,
-		TTLExpiresAt: workspace.TTLExpiresAt,
-		Expired:      expired,
-		MountedBy:    workspaceMountedBy(stack, name),
+		Name:               name,
+		Path:               path,
+		Exists:             exists,
+		State:              state,
+		Template:           workspace.Template,
+		Inputs:             copyStringMap(workspace.Inputs),
+		Sources:            []api.WorkspaceSourceStatus{},
+		Chain:              append([]string{}, workspace.Resolved.Chain...),
+		ChainRoot:          workspace.Resolved.ChainRoot,
+		Lifecycle:          workspace.Resolved.Lifecycle,
+		Allocations:        copyIntMap(workspace.Resolved.Allocations),
+		ProcessComposePort: processComposePort,
+		PlaywrightMCPName:  playwrightMCPName,
+		PlaywrightMCPURL:   playwrightMCPURL,
+		PersistPaths:       workspacePersistPaths(workspace.Resolved.PersistPaths),
+		TTL:                workspace.TTL,
+		TTLExpiresAt:       workspace.TTLExpiresAt,
+		Expired:            expired,
+		MountedBy:          workspaceMountedBy(stack, name),
 	}
 	if statErr != nil && !os.IsNotExist(statErr) {
 		status.Error = statErr.Error()
@@ -680,16 +684,56 @@ func materializePersistPaths(workspacePath string, persist map[string]manifest.P
 }
 
 func workspaceRef(name, path string, ws manifest.Workspace) api.WorkspaceRef {
+	processComposePort, playwrightMCPName, playwrightMCPURL := workspaceRuntimeFacts(name, ws)
 	return api.WorkspaceRef{
-		Name:         name,
-		Path:         path,
-		Template:     ws.Template,
-		ChainRoot:    ws.Resolved.ChainRoot,
-		Lifecycle:    ws.Resolved.Lifecycle,
-		Allocations:  copyIntMap(ws.Resolved.Allocations),
-		TTL:          ws.TTL,
-		TTLExpiresAt: ws.TTLExpiresAt,
+		Name:               name,
+		Path:               path,
+		Template:           ws.Template,
+		ChainRoot:          ws.Resolved.ChainRoot,
+		Lifecycle:          ws.Resolved.Lifecycle,
+		Allocations:        copyIntMap(ws.Resolved.Allocations),
+		ProcessComposePort: processComposePort,
+		PlaywrightMCPName:  playwrightMCPName,
+		PlaywrightMCPURL:   playwrightMCPURL,
+		TTL:                ws.TTL,
+		TTLExpiresAt:       ws.TTLExpiresAt,
 	}
+}
+
+func workspaceRuntimeFacts(name string, ws manifest.Workspace) (int, string, string) {
+	processComposePort := firstPositiveAllocation(ws.Resolved.Allocations, "process_compose", "custom")
+	if processComposePort == 0 {
+		processComposePort = firstPositiveInputPort(ws.Inputs, "process_compose_port")
+	}
+	playwrightPort := firstPositiveAllocation(ws.Resolved.Allocations, "playwright_mcp", "playwright", "browser_mcp", "mcp")
+	if playwrightPort == 0 {
+		playwrightPort = firstPositiveInputPort(ws.Inputs, "playwright_mcp_port", "playwright_port")
+	}
+	if playwrightPort == 0 {
+		return processComposePort, "", ""
+	}
+	mcpName := "playwright-" + name
+	mcpURL := fmt.Sprintf("http://127.0.0.1:%d/mcp", playwrightPort)
+	return processComposePort, mcpName, mcpURL
+}
+
+func firstPositiveAllocation(alloc map[string]int, keys ...string) int {
+	for _, key := range keys {
+		if value := alloc[key]; value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstPositiveInputPort(inputs map[string]string, keys ...string) int {
+	for _, key := range keys {
+		value, err := strconv.Atoi(strings.TrimSpace(inputs[key]))
+		if err == nil && value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func copyIntMap(in map[string]int) map[string]int {

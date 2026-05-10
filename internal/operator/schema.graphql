@@ -20,6 +20,9 @@ type WorkspaceRef {
   name: String!
   path: String!
   template: String!
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
   ttl: String
   ttlExpiresAt: String
 }
@@ -129,6 +132,9 @@ type WorkspaceStatus {
   chainRoot: String
   lifecycle: String
   allocations: JSON
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
   persistPaths: JSON
   ttl: String
   ttlExpiresAt: String

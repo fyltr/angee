@@ -10,6 +10,8 @@ import (
 	"github.com/fyltr/angee/internal/runtime"
 )
 
+const defaultProcessComposeControlPort = 8080
+
 func (p *Platform) StackBuild(ctx context.Context, services []string) error {
 	stack, err := p.LoadStack()
 	if err != nil {
@@ -94,7 +96,7 @@ func (p *Platform) StackDev(ctx context.Context, build bool) error {
 		}
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 {
-		if err := p.procBackend.Up(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
+		if err := p.procBackend.Up(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}); err != nil {
 			return err
 		}
 	}
@@ -119,7 +121,7 @@ func (p *Platform) StackDevForeground(ctx context.Context, build bool, stdout io
 		}
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 {
-		return p.procBackend.UpForeground(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}, stdout, stderr)
+		return p.procBackend.UpForeground(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}, stdout, stderr)
 	}
 	logs, err := p.StackLogs(ctx, nil, true)
 	if err != nil {
@@ -154,12 +156,12 @@ func (p *Platform) StackDown(ctx context.Context) error {
 		}
 	}
 	if hasContainers {
-		if err := p.composeBackend.Down(ctx, p.root); err != nil {
+		if err := p.composeBackend.Down(ctx, runtime.Target{Root: p.root, EnvFile: p.runtimeEnvFile(stack)}); err != nil {
 			return err
 		}
 	}
 	if hasLocal {
-		return p.procBackend.Down(ctx, p.root)
+		return p.procBackend.Down(ctx, runtime.Target{Root: p.root, ControlPort: processComposeControlPort(stack)})
 	}
 	return nil
 }
@@ -215,7 +217,7 @@ func (p *Platform) StackLogsLimited(ctx context.Context, services []string, foll
 		channels = append(channels, ch)
 	}
 	if len(compiled.ProcessCompose.Processes) > 0 && len(local) > 0 {
-		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, MaxBytes: maxBytes})
+		ch, err := p.procBackend.Logs(ctx, runtime.LogsRequest{Root: p.root, Services: local, Follow: follow, EnvFile: p.runtimeEnvFile(stack), MaxBytes: maxBytes, ControlPort: processComposeControlPort(stack)})
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +256,7 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 		return err
 	}
 	containerTarget := runtime.Target{Root: p.root, Services: container, EnvFile: p.runtimeEnvFile(stack)}
-	localTarget := runtime.Target{Root: p.root, Services: local, EnvFile: p.runtimeEnvFile(stack)}
+	localTarget := runtime.Target{Root: p.root, Services: local, EnvFile: p.runtimeEnvFile(stack), ControlPort: processComposeControlPort(stack)}
 	switch action {
 	case "start":
 		if len(container) > 0 {
@@ -289,6 +291,19 @@ func (p *Platform) serviceRuntimeAction(ctx context.Context, action string, name
 	default:
 		return fmt.Errorf("unknown service runtime action %q", action)
 	}
+}
+
+func processComposeControlPort(stack *manifest.Stack) int {
+	if stack == nil {
+		return defaultProcessComposeControlPort
+	}
+	if port, ok := stack.Ports["process_compose"]; ok && port.Value > 0 {
+		return port.Value
+	}
+	if port, ok := stack.Ports["process-compose"]; ok && port.Value > 0 {
+		return port.Value
+	}
+	return defaultProcessComposeControlPort
 }
 
 func splitRuntimeServices(stack *manifest.Stack, names []string) ([]string, []string, error) {

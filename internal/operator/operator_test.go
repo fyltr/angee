@@ -120,6 +120,10 @@ workspaces:
         branch: workspace/feat
         ref: main
         subpath: app
+    resolved:
+      allocations:
+        custom: 10002
+        playwright: 9225
 services:
   worker:
     runtime: local
@@ -132,7 +136,7 @@ services:
 	}
 
 	resp := doGraphQL(t, server, map[string]any{
-		"query": `{ workspaceStatus(name: "feat") { name state exists inputs sources { slot source kind mode state pushed } mountedBy { kind name field } } }`,
+		"query": `{ workspaceStatus(name: "feat") { name state exists inputs processComposePort playwrightMcpName playwrightMcpUrl sources { slot source kind mode state pushed } mountedBy { kind name field } } }`,
 	})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("GraphQL errors = %#v", resp.Errors)
@@ -140,6 +144,9 @@ services:
 	status := resp.Data["workspaceStatus"].(map[string]any)
 	if status["name"] != "feat" || status["state"] != "missing" || status["exists"] != false {
 		t.Fatalf("workspaceStatus = %#v, want missing feat", status)
+	}
+	if status["processComposePort"] != float64(10002) || status["playwrightMcpName"] != "playwright-feat" || status["playwrightMcpUrl"] != "http://127.0.0.1:9225/mcp" {
+		t.Fatalf("workspace runtime facts = %#v, want control/MCP facts", status)
 	}
 	sources := status["sources"].([]any)
 	if len(sources) != 1 {

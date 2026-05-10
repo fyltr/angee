@@ -93,6 +93,49 @@ func TestSyncBaseRefPrefersRemoteForSlashBranchNames(t *testing.T) {
 	}
 }
 
+func TestReadOnlyQueriesFallbackForWorktreeConfigExtension(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	wt := filepath.Join(base, "wt")
+	runGit(t, "", "init", "-q", repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(repo, "file.txt"), "hello\n")
+	runGit(t, repo, "add", "file.txt")
+	runGit(t, repo, "commit", "-q", "-m", "initial")
+
+	client := New()
+	ref, err := client.CurrentRef(ctx, repo)
+	if err != nil {
+		t.Fatalf("base CurrentRef() error = %v", err)
+	}
+	runGit(t, repo, "worktree", "add", "-q", "-b", "workspace/feature", wt)
+	runGit(t, wt, "config", "extensions.worktreeConfig", "true")
+
+	current, err := client.CurrentRef(ctx, wt)
+	if err != nil {
+		t.Fatalf("CurrentRef() error = %v", err)
+	}
+	if current != "workspace/feature" {
+		t.Fatalf("CurrentRef() = %q, want workspace/feature", current)
+	}
+	dirty, err := client.Dirty(ctx, wt)
+	if err != nil {
+		t.Fatalf("Dirty() error = %v", err)
+	}
+	if dirty {
+		t.Fatal("Dirty() = true, want false")
+	}
+	ahead, behind, err := client.AheadBehind(ctx, wt, ref)
+	if err != nil {
+		t.Fatalf("AheadBehind() error = %v", err)
+	}
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("AheadBehind() = (%d, %d), want (0, 0)", ahead, behind)
+	}
+}
+
 func pushRemote(t *testing.T, client Client, ctx context.Context, repo string) string {
 	t.Helper()
 	remote, err := client.PushRemote(ctx, repo)

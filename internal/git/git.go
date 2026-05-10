@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -46,6 +47,14 @@ func (c Client) Run(ctx context.Context, dir string, args ...string) ([]byte, er
 		return out, fmt.Errorf("git %v: %w: %s", args, err, out)
 	}
 	return out, nil
+}
+
+func (c Client) runText(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := c.Run(ctx, dir, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // open returns the go-git repository at dir. Discovers the repo via parent
@@ -150,7 +159,8 @@ func (c Client) RefExists(ctx context.Context, dir, ref string) bool {
 	}
 	repo, err := openRepo(dir)
 	if err != nil {
-		return false
+		_, err := c.Run(ctx, dir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+		return err == nil
 	}
 	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
 	if err != nil || hash == nil {
@@ -209,11 +219,11 @@ func remoteQualifiedRef(ref string, remotes []string) bool {
 func (c Client) CurrentRef(ctx context.Context, dir string) (string, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return "", err
+		return c.currentRefCLI(ctx, dir)
 	}
 	head, err := repo.Head()
 	if err != nil {
-		return "", fmt.Errorf("git head at %s: %w", dir, err)
+		return c.currentRefCLI(ctx, dir)
 	}
 	if head.Name().IsBranch() {
 		return head.Name().Short(), nil
@@ -224,7 +234,7 @@ func (c Client) CurrentRef(ctx context.Context, dir string) (string, error) {
 func (c Client) CurrentBranch(ctx context.Context, dir string) (string, bool, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return "", false, err
+		return c.currentBranchCLI(ctx, dir)
 	}
 	head, err := repo.Head()
 	if err != nil {
@@ -232,7 +242,7 @@ func (c Client) CurrentBranch(ctx context.Context, dir string) (string, bool, er
 		if errors.Is(err, plumbing.ErrReferenceNotFound) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("git head at %s: %w", dir, err)
+		return c.currentBranchCLI(ctx, dir)
 	}
 	if !head.Name().IsBranch() {
 		return "", false, nil
@@ -250,11 +260,11 @@ func (c Client) Upstream(ctx context.Context, dir string) (string, bool, error) 
 	}
 	repo, err := openRepo(dir)
 	if err != nil {
-		return "", false, err
+		return c.upstreamCLI(ctx, dir)
 	}
 	cfg, err := repo.Config()
 	if err != nil {
-		return "", false, fmt.Errorf("git config at %s: %w", dir, err)
+		return c.upstreamCLI(ctx, dir)
 	}
 	br, ok := cfg.Branches[branch]
 	if !ok || br.Remote == "" || br.Merge == "" {
@@ -272,15 +282,15 @@ func (c Client) AheadCount(ctx context.Context, dir, base string) (int, error) {
 func (c Client) AheadBehind(ctx context.Context, dir, base string) (ahead int, behind int, err error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return 0, 0, err
+		return c.aheadBehindCLI(ctx, dir, base)
 	}
 	headRef, err := repo.Head()
 	if err != nil {
-		return 0, 0, fmt.Errorf("git head at %s: %w", dir, err)
+		return c.aheadBehindCLI(ctx, dir, base)
 	}
 	baseHash, err := repo.ResolveRevision(plumbing.Revision(base))
 	if err != nil || baseHash == nil {
-		return 0, 0, fmt.Errorf("resolve base %q at %s: %w", base, dir, err)
+		return c.aheadBehindCLI(ctx, dir, base)
 	}
 	headHash := headRef.Hash()
 	baseCommit, err := repo.CommitObject(*baseHash)
@@ -338,11 +348,11 @@ func countAncestors(repo *gogit.Repository, start, stop plumbing.Hash) (int, err
 func (c Client) Config(ctx context.Context, dir, key string) (string, bool, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return "", false, nil
+		return c.configCLI(ctx, dir, key)
 	}
 	cfg, err := repo.Config()
 	if err != nil {
-		return "", false, nil
+		return c.configCLI(ctx, dir, key)
 	}
 	section, subsection, name, ok := splitConfigKey(key)
 	if !ok {
@@ -356,6 +366,14 @@ func (c Client) Config(ctx context.Context, dir, key string) (string, bool, erro
 	}
 	value := strings.TrimSpace(raw)
 	if value == "" {
+		return "", false, nil
+	}
+	return value, true, nil
+}
+
+func (c Client) configCLI(ctx context.Context, dir, key string) (string, bool, error) {
+	value, err := c.runText(ctx, dir, "config", "--get", key)
+	if err != nil || value == "" {
 		return "", false, nil
 	}
 	return value, true, nil
@@ -379,11 +397,11 @@ func splitConfigKey(key string) (section, subsection, name string, ok bool) {
 func (c Client) Remotes(ctx context.Context, dir string) ([]string, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return nil, err
+		return c.remotesCLI(ctx, dir)
 	}
 	remotes, err := repo.Remotes()
 	if err != nil {
-		return nil, fmt.Errorf("list remotes at %s: %w", dir, err)
+		return c.remotesCLI(ctx, dir)
 	}
 	names := make([]string, 0, len(remotes))
 	for _, r := range remotes {
@@ -440,17 +458,91 @@ func (c Client) PushRemote(ctx context.Context, dir string) (string, error) {
 func (c Client) Dirty(ctx context.Context, dir string) (bool, error) {
 	repo, err := openRepo(dir)
 	if err != nil {
-		return false, err
+		return c.dirtyCLI(ctx, dir)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
-		return false, fmt.Errorf("worktree at %s: %w", dir, err)
+		return c.dirtyCLI(ctx, dir)
 	}
 	st, err := wt.Status()
 	if err != nil {
-		return false, fmt.Errorf("status at %s: %w", dir, err)
+		return c.dirtyCLI(ctx, dir)
 	}
 	return !st.IsClean(), nil
+}
+
+func (c Client) currentRefCLI(ctx context.Context, dir string) (string, error) {
+	branch, err := c.runText(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err == nil && branch != "" {
+		return branch, nil
+	}
+	hash, err := c.runText(ctx, dir, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return hash, nil
+}
+
+func (c Client) currentBranchCLI(ctx context.Context, dir string) (string, bool, error) {
+	branch, err := c.runText(ctx, dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err == nil && branch != "" {
+		return branch, true, nil
+	}
+	if _, repoErr := c.runText(ctx, dir, "rev-parse", "--git-dir"); repoErr != nil {
+		return "", false, err
+	}
+	return "", false, nil
+}
+
+func (c Client) upstreamCLI(ctx context.Context, dir string) (string, bool, error) {
+	_, ok, err := c.CurrentBranch(ctx, dir)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	upstream, err := c.runText(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil || upstream == "" {
+		return "", false, nil
+	}
+	return upstream, true, nil
+}
+
+func (c Client) aheadBehindCLI(ctx context.Context, dir, base string) (int, int, error) {
+	out, err := c.runText(ctx, dir, "rev-list", "--left-right", "--count", base+"...HEAD")
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("git rev-list count returned %q", out)
+	}
+	behind, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse behind count %q: %w", fields[0], err)
+	}
+	ahead, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse ahead count %q: %w", fields[1], err)
+	}
+	return ahead, behind, nil
+}
+
+func (c Client) remotesCLI(ctx context.Context, dir string) ([]string, error) {
+	out, err := c.runText(ctx, dir, "remote")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Fields(out), nil
+}
+
+func (c Client) dirtyCLI(ctx context.Context, dir string) (bool, error) {
+	out, err := c.runText(ctx, dir, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return out != "", nil
 }
 
 func shortHash(h string) string {

@@ -68,36 +68,42 @@ type JobRunRequest struct {
 }
 
 type WorkspaceRef struct {
-	Name         string         `json:"name"`
-	Path         string         `json:"path"`
-	Template     string         `json:"template"`
-	ChainRoot    string         `json:"chain_root,omitempty"`
-	Lifecycle    string         `json:"lifecycle,omitempty"`
-	Allocations  map[string]int `json:"allocations,omitempty"`
-	TTL          string         `json:"ttl,omitempty"`
-	TTLExpiresAt *time.Time     `json:"ttl_expires_at,omitempty"`
+	Name               string         `json:"name"`
+	Path               string         `json:"path"`
+	Template           string         `json:"template"`
+	ChainRoot          string         `json:"chain_root,omitempty"`
+	Lifecycle          string         `json:"lifecycle,omitempty"`
+	Allocations        map[string]int `json:"allocations,omitempty"`
+	ProcessComposePort int            `json:"process_compose_port,omitempty"`
+	PlaywrightMCPName  string         `json:"playwright_mcp_name,omitempty"`
+	PlaywrightMCPURL   string         `json:"playwright_mcp_url,omitempty"`
+	TTL                string         `json:"ttl,omitempty"`
+	TTLExpiresAt       *time.Time     `json:"ttl_expires_at,omitempty"`
 }
 
 type WorkspaceStatusResponse struct {
-	Name         string                          `json:"name"`
-	Path         string                          `json:"path"`
-	Exists       bool                            `json:"exists"`
-	State        string                          `json:"state"`
-	Error        string                          `json:"error,omitempty"`
-	Template     string                          `json:"template"`
-	Inputs       map[string]string               `json:"inputs,omitempty"`
-	Sources      []WorkspaceSourceStatus         `json:"sources,omitempty"`
-	Chain        []string                        `json:"chain,omitempty"`
-	ChainRoot    string                          `json:"chain_root,omitempty"`
-	Lifecycle    string                          `json:"lifecycle,omitempty"`
-	Allocations  map[string]int                  `json:"allocations,omitempty"`
-	PersistPaths map[string]WorkspacePersistPath `json:"persist_paths,omitempty"`
-	TTL          string                          `json:"ttl,omitempty"`
-	TTLExpiresAt *time.Time                      `json:"ttl_expires_at,omitempty"`
-	Expired      bool                            `json:"expired"`
-	MountedBy    []WorkspaceMountRef             `json:"mounted_by,omitempty"`
-	InnerStack   *StackStatusResponse            `json:"inner_stack,omitempty"`
-	InnerError   string                          `json:"inner_error,omitempty"`
+	Name               string                          `json:"name"`
+	Path               string                          `json:"path"`
+	Exists             bool                            `json:"exists"`
+	State              string                          `json:"state"`
+	Error              string                          `json:"error,omitempty"`
+	Template           string                          `json:"template"`
+	Inputs             map[string]string               `json:"inputs,omitempty"`
+	Sources            []WorkspaceSourceStatus         `json:"sources,omitempty"`
+	Chain              []string                        `json:"chain,omitempty"`
+	ChainRoot          string                          `json:"chain_root,omitempty"`
+	Lifecycle          string                          `json:"lifecycle,omitempty"`
+	Allocations        map[string]int                  `json:"allocations,omitempty"`
+	ProcessComposePort int                             `json:"process_compose_port,omitempty"`
+	PlaywrightMCPName  string                          `json:"playwright_mcp_name,omitempty"`
+	PlaywrightMCPURL   string                          `json:"playwright_mcp_url,omitempty"`
+	PersistPaths       map[string]WorkspacePersistPath `json:"persist_paths,omitempty"`
+	TTL                string                          `json:"ttl,omitempty"`
+	TTLExpiresAt       *time.Time                      `json:"ttl_expires_at,omitempty"`
+	Expired            bool                            `json:"expired"`
+	MountedBy          []WorkspaceMountRef             `json:"mounted_by,omitempty"`
+	InnerStack         *StackStatusResponse            `json:"inner_stack,omitempty"`
+	InnerError         string                          `json:"inner_error,omitempty"`
 }
 
 type WorkspaceSourceStatus struct {

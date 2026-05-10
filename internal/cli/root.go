@@ -901,15 +901,15 @@ func workspaceUpdateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 func workspaceLogsCommand(stdout io.Writer, root, operatorURL *string) *cobra.Command {
 	var follow bool
 	cmd := &cobra.Command{
-		Use:   "logs <name>",
+		Use:   "logs [name]",
 		Short: "Show workspace logs",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, err := localPlatform(root, operatorURL)
+			platform, name, err := workspaceTarget(args, root, operatorURL, "logs")
 			if err != nil {
 				return err
 			}
-			logs, err := platform.WorkspaceLogs(cmd.Context(), args[0], follow)
+			logs, err := platform.WorkspaceLogs(cmd.Context(), name, follow)
 			if err != nil {
 				return err
 			}
@@ -1232,6 +1232,21 @@ func writeWorkspaceStatus(stdout io.Writer, status api.WorkspaceStatusResponse) 
 			return err
 		}
 	}
+	if status.ProcessComposePort > 0 {
+		if _, err := fmt.Fprintf(stdout, "process_compose_port\t%d\n", status.ProcessComposePort); err != nil {
+			return err
+		}
+	}
+	if status.PlaywrightMCPName != "" {
+		if _, err := fmt.Fprintf(stdout, "playwright_mcp_name\t%s\n", status.PlaywrightMCPName); err != nil {
+			return err
+		}
+	}
+	if status.PlaywrightMCPURL != "" {
+		if _, err := fmt.Fprintf(stdout, "playwright_mcp_url\t%s\n", status.PlaywrightMCPURL); err != nil {
+			return err
+		}
+	}
 	if len(status.Sources) > 0 {
 		if _, err := fmt.Fprintln(stdout, "sources"); err != nil {
 			return err
@@ -1303,28 +1318,28 @@ func workspaceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra
 
 func workspaceLifecycleCommand(stdout io.Writer, root, operatorURL *string, action string) *cobra.Command {
 	return &cobra.Command{
-		Use:   action + " <name>",
+		Use:   action + " [name]",
 		Short: action + " workspace",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			platform, err := localPlatform(root, operatorURL)
+			platform, name, err := workspaceTarget(args, root, operatorURL, action)
 			if err != nil {
 				return err
 			}
 			switch action {
 			case "start":
-				err = platform.WorkspaceStart(cmd.Context(), args[0])
+				err = platform.WorkspaceStart(cmd.Context(), name)
 			case "stop":
-				err = platform.WorkspaceStop(cmd.Context(), args[0])
+				err = platform.WorkspaceStop(cmd.Context(), name)
 			case "restart":
-				if err = platform.WorkspaceStop(cmd.Context(), args[0]); err == nil {
-					err = platform.WorkspaceStart(cmd.Context(), args[0])
+				if err = platform.WorkspaceStop(cmd.Context(), name); err == nil {
+					err = platform.WorkspaceStart(cmd.Context(), name)
 				}
 			}
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(stdout, "workspace %s %s\n", args[0], actionPast(action))
+			_, err = fmt.Fprintf(stdout, "workspace %s %s\n", name, actionPast(action))
 			return err
 		},
 	}

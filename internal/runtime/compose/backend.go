@@ -67,10 +67,10 @@ func (b Backend) UpForeground(ctx context.Context, target runtime.Target, stdout
 	return b.runForeground(ctx, target.Root, stdout, stderr, args...)
 }
 
-func (b Backend) Down(ctx context.Context, root string) error {
-	args := b.baseArgs(root, "")
+func (b Backend) Down(ctx context.Context, target runtime.Target) error {
+	args := b.baseArgs(target.Root, target.EnvFile)
 	args = append(args, "down")
-	_, err := b.run(ctx, root, args...)
+	_, err := b.run(ctx, target.Root, args...)
 	return err
 }
 

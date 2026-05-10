@@ -207,11 +207,14 @@ type ComplexityRoot struct {
 	}
 
 	WorkspaceRef struct {
-		Name         func(childComplexity int) int
-		Path         func(childComplexity int) int
-		TTL          func(childComplexity int) int
-		TTLExpiresAt func(childComplexity int) int
-		Template     func(childComplexity int) int
+		Name               func(childComplexity int) int
+		Path               func(childComplexity int) int
+		PlaywrightMCPName  func(childComplexity int) int
+		PlaywrightMCPURL   func(childComplexity int) int
+		ProcessComposePort func(childComplexity int) int
+		TTL                func(childComplexity int) int
+		TTLExpiresAt       func(childComplexity int) int
+		Template           func(childComplexity int) int
 	}
 
 	WorkspaceSourceStatus struct {
@@ -236,25 +239,28 @@ type ComplexityRoot struct {
 	}
 
 	WorkspaceStatus struct {
-		Allocations  func(childComplexity int) int
-		Chain        func(childComplexity int) int
-		ChainRoot    func(childComplexity int) int
-		Error        func(childComplexity int) int
-		Exists       func(childComplexity int) int
-		Expired      func(childComplexity int) int
-		InnerError   func(childComplexity int) int
-		InnerStack   func(childComplexity int) int
-		Inputs       func(childComplexity int) int
-		Lifecycle    func(childComplexity int) int
-		MountedBy    func(childComplexity int) int
-		Name         func(childComplexity int) int
-		Path         func(childComplexity int) int
-		PersistPaths func(childComplexity int) int
-		Sources      func(childComplexity int) int
-		State        func(childComplexity int) int
-		TTL          func(childComplexity int) int
-		TTLExpiresAt func(childComplexity int) int
-		Template     func(childComplexity int) int
+		Allocations        func(childComplexity int) int
+		Chain              func(childComplexity int) int
+		ChainRoot          func(childComplexity int) int
+		Error              func(childComplexity int) int
+		Exists             func(childComplexity int) int
+		Expired            func(childComplexity int) int
+		InnerError         func(childComplexity int) int
+		InnerStack         func(childComplexity int) int
+		Inputs             func(childComplexity int) int
+		Lifecycle          func(childComplexity int) int
+		MountedBy          func(childComplexity int) int
+		Name               func(childComplexity int) int
+		Path               func(childComplexity int) int
+		PersistPaths       func(childComplexity int) int
+		PlaywrightMCPName  func(childComplexity int) int
+		PlaywrightMCPURL   func(childComplexity int) int
+		ProcessComposePort func(childComplexity int) int
+		Sources            func(childComplexity int) int
+		State              func(childComplexity int) int
+		TTL                func(childComplexity int) int
+		TTLExpiresAt       func(childComplexity int) int
+		Template           func(childComplexity int) int
 	}
 }
 
@@ -323,6 +329,7 @@ type WorkspaceStatusResolver interface {
 	Inputs(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
 
 	Allocations(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
+
 	PersistPaths(ctx context.Context, obj *api.WorkspaceStatusResponse) (map[string]any, error)
 
 	TTLExpiresAt(ctx context.Context, obj *api.WorkspaceStatusResponse) (*string, error)
@@ -1266,6 +1273,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceRef.Path(childComplexity), true
+	case "WorkspaceRef.playwrightMcpName":
+		if e.ComplexityRoot.WorkspaceRef.PlaywrightMCPName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRef.PlaywrightMCPName(childComplexity), true
+	case "WorkspaceRef.playwrightMcpUrl":
+		if e.ComplexityRoot.WorkspaceRef.PlaywrightMCPURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRef.PlaywrightMCPURL(childComplexity), true
+	case "WorkspaceRef.processComposePort":
+		if e.ComplexityRoot.WorkspaceRef.ProcessComposePort == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceRef.ProcessComposePort(childComplexity), true
 	case "WorkspaceRef.ttl":
 		if e.ComplexityRoot.WorkspaceRef.TTL == nil {
 			break
@@ -1478,6 +1503,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.WorkspaceStatus.PersistPaths(childComplexity), true
+	case "WorkspaceStatus.playwrightMcpName":
+		if e.ComplexityRoot.WorkspaceStatus.PlaywrightMCPName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.PlaywrightMCPName(childComplexity), true
+	case "WorkspaceStatus.playwrightMcpUrl":
+		if e.ComplexityRoot.WorkspaceStatus.PlaywrightMCPURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.PlaywrightMCPURL(childComplexity), true
+	case "WorkspaceStatus.processComposePort":
+		if e.ComplexityRoot.WorkspaceStatus.ProcessComposePort == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WorkspaceStatus.ProcessComposePort(childComplexity), true
 	case "WorkspaceStatus.sources":
 		if e.ComplexityRoot.WorkspaceStatus.Sources == nil {
 			break
@@ -1620,6 +1663,9 @@ type WorkspaceRef {
   name: String!
   path: String!
   template: String!
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
   ttl: String
   ttlExpiresAt: String
 }
@@ -1729,6 +1775,9 @@ type WorkspaceStatus {
   chainRoot: String
   lifecycle: String
   allocations: JSON
+  processComposePort: Int
+  playwrightMcpName: String
+  playwrightMcpUrl: String
   persistPaths: JSON
   ttl: String
   ttlExpiresAt: String
@@ -2100,6 +2149,12 @@ func (ec *executionContext) childFields_WorkspaceRef(ctx context.Context, field 
 		return ec.fieldContext_WorkspaceRef_path(ctx, field)
 	case "template":
 		return ec.fieldContext_WorkspaceRef_template(ctx, field)
+	case "processComposePort":
+		return ec.fieldContext_WorkspaceRef_processComposePort(ctx, field)
+	case "playwrightMcpName":
+		return ec.fieldContext_WorkspaceRef_playwrightMcpName(ctx, field)
+	case "playwrightMcpUrl":
+		return ec.fieldContext_WorkspaceRef_playwrightMcpUrl(ctx, field)
 	case "ttl":
 		return ec.fieldContext_WorkspaceRef_ttl(ctx, field)
 	case "ttlExpiresAt":
@@ -2176,6 +2231,12 @@ func (ec *executionContext) childFields_WorkspaceStatus(ctx context.Context, fie
 		return ec.fieldContext_WorkspaceStatus_lifecycle(ctx, field)
 	case "allocations":
 		return ec.fieldContext_WorkspaceStatus_allocations(ctx, field)
+	case "processComposePort":
+		return ec.fieldContext_WorkspaceStatus_processComposePort(ctx, field)
+	case "playwrightMcpName":
+		return ec.fieldContext_WorkspaceStatus_playwrightMcpName(ctx, field)
+	case "playwrightMcpUrl":
+		return ec.fieldContext_WorkspaceStatus_playwrightMcpUrl(ctx, field)
 	case "persistPaths":
 		return ec.fieldContext_WorkspaceStatus_persistPaths(ctx, field)
 	case "ttl":
@@ -6768,6 +6829,75 @@ func (ec *executionContext) fieldContext_WorkspaceRef_template(_ context.Context
 	return graphql.NewScalarFieldContext("WorkspaceRef", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _WorkspaceRef_processComposePort(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRef_processComposePort(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ProcessComposePort, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalOInt2int(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRef_processComposePort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRef", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRef_playwrightMcpName(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRef_playwrightMcpName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PlaywrightMCPName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRef_playwrightMcpName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceRef_playwrightMcpUrl(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRef) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceRef_playwrightMcpUrl(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PlaywrightMCPURL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceRef_playwrightMcpUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceRef", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _WorkspaceRef_ttl(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceRef) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7511,6 +7641,75 @@ func (ec *executionContext) _WorkspaceStatus_allocations(ctx context.Context, fi
 }
 func (ec *executionContext) fieldContext_WorkspaceStatus_allocations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("WorkspaceStatus", field, true, true, errors.New("field of type JSON does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceStatus_processComposePort(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatus_processComposePort(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ProcessComposePort, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalOInt2int(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatus_processComposePort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceStatus_playwrightMcpName(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatus_playwrightMcpName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PlaywrightMCPName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatus_playwrightMcpName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WorkspaceStatus_playwrightMcpUrl(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WorkspaceStatus_playwrightMcpUrl(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PlaywrightMCPURL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalOString2string(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WorkspaceStatus_playwrightMcpUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WorkspaceStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _WorkspaceStatus_persistPaths(ctx context.Context, field graphql.CollectedField, obj *api.WorkspaceStatusResponse) (ret graphql.Marshaler) {
@@ -10526,6 +10725,12 @@ func (ec *executionContext) _WorkspaceRef(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "processComposePort":
+			out.Values[i] = ec._WorkspaceRef_processComposePort(ctx, field, obj)
+		case "playwrightMcpName":
+			out.Values[i] = ec._WorkspaceRef_playwrightMcpName(ctx, field, obj)
+		case "playwrightMcpUrl":
+			out.Values[i] = ec._WorkspaceRef_playwrightMcpUrl(ctx, field, obj)
 		case "ttl":
 			out.Values[i] = ec._WorkspaceRef_ttl(ctx, field, obj)
 		case "ttlExpiresAt":
@@ -10796,6 +11001,12 @@ func (ec *executionContext) _WorkspaceStatus(ctx context.Context, sel ast.Select
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "processComposePort":
+			out.Values[i] = ec._WorkspaceStatus_processComposePort(ctx, field, obj)
+		case "playwrightMcpName":
+			out.Values[i] = ec._WorkspaceStatus_playwrightMcpName(ctx, field, obj)
+		case "playwrightMcpUrl":
+			out.Values[i] = ec._WorkspaceStatus_playwrightMcpUrl(ctx, field, obj)
 		case "persistPaths":
 			field := field
 

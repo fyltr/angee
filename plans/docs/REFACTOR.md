@@ -69,6 +69,105 @@ solves a different problem), `internal/runtime/compose/` and
 `internal/runtime/proccompose/` (correct to shell out to `docker compose` and
 `process-compose` for execution).
 
+### Workspace runtime / lifecycle isolation
+
+The current workspace incident is **not** branch-identity confusion:
+`feature-storage` is on `workspace/feature-storage`, and `feature-knowledge` is
+on `workspace/feature-knowledge`. The failure mode is runtime/lifecycle
+isolation.
+
+What went wrong:
+
+- The root stack owns process-compose control port `8080`.
+- Workspace manifests have allocated control ports (`feature-storage` `10002`,
+  `feature-knowledge` `10003`), but `angee-go` does not pass those ports to
+  process-compose.
+- Agents manually started pieces of the stack, creating orphaned services
+  outside the workspace lifecycle.
+- `angee workspace status --json` is failing source status because go-git cannot
+  read worktrees with `extensions.worktreeConfig`, masking the real branch
+  state.
+- Demo asset loading is not idempotent when `auth.User(admin)` already exists
+  but the asset ledger row does not, so `web`/`ui` dependencies get stuck.
+
+Immediate recovery:
+
+- First preserve changes without altering worktrees: capture
+  `git status --short --branch`, `git diff --stat`, `git diff --binary`, cached
+  diff, and untracked file lists for both workspaces into
+  `/private/tmp/angee-workspace-recovery/<timestamp>/`.
+- Do not run `git reset`, `git clean`, branch switching, or stash unless
+  explicitly requested later.
+- Stop only workspace-local orphaned services. Target ports for
+  `feature-storage`: `10002`, `9003`, `9225`, `5276`, `8103`, `5176`. Target
+  ports for `feature-knowledge`: `10003`, `9004`, `9226`, `5277`, `8104`,
+  `5177`.
+- Also terminate processes whose cwd/path is under those workspace directories,
+  including the stale `.orphaned-*` ruff process.
+- Leave the root stack alone: `8080`, `8100`, `5173`, `9000`, `9223`.
+- After code fixes land, restart using only `angee workspace start
+  feature-storage` and `angee workspace start feature-knowledge`.
+- Register isolated MCP entries:
+  `playwright-feature-storage -> http://127.0.0.1:9225/mcp` and
+  `playwright-feature-knowledge -> http://127.0.0.1:9226/mcp`. Do not use the
+  global Playwright MCP as a fallback.
+
+Implementation changes:
+
+- Make process-compose control ports first-class: render a `process_compose`
+  port for the dev stack, defaulting to `8080` for the root stack; pass
+  `${alloc.custom}` from workspace templates so each workspace renders its own
+  control port; update the process-compose backend so `up`, `down`, `start`,
+  `stop`, `restart`, and `logs` all pass `--address 127.0.0.1 --port
+  <process_compose_port>`; `angee workspace start|stop|restart|logs` must use
+  the rendered inner stack port, never implicit `8080`.
+- Fix workspace data paths: add a stack input for `data_root`; for workspaces,
+  render it as absolute `<workspace>/.angee/data`; use that for `ANGEE_DATA` and
+  Playwright `--user-data-dir`.
+- Fix status authority: replace or fallback the go-git read-only calls used by
+  workspace status/guards with native git CLI calls for worktrees;
+  `angee workspace status --json` must report `branch-mismatch` only when
+  `current_ref != branch`, not when go-git cannot parse worktree config. Do not
+  add `workspace-check.sh`; `angee workspace status --json` remains the source
+  of truth.
+- Expose the same interface everywhere: add runtime/MCP facts to workspace JSON
+  (`process-compose` control port, Playwright MCP name, Playwright MCP URL),
+  expose the same fields through operator REST and GraphQL, and print the
+  control port and MCP URL clearly in CLI text output.
+- Make single-workspace CLI commands accept optional `[name]` when run inside a
+  workspace: `status`, `sync-base`, `start`, `stop`, `restart`, and `logs`.
+- Fix asset idempotency: when loading assets and no Assets ledger row exists,
+  adopt an existing target row if exactly one matching unique field is present
+  and exactly one row matches, for example `auth.User.username`; create the
+  missing ledger row instead of attempting a duplicate insert, then continue.
+
+Progress in this session:
+
+- Process-compose runtime targets now carry a control port, and the
+  process-compose backend passes `--address 127.0.0.1 --port <port>` for
+  `up`, `down`, `start`, `stop`, `restart`, and `logs`. Root stacks default to
+  `8080`; rendered stacks can declare `ports.process_compose.value`.
+- Workspace lifecycle/log commands now inherit the rendered inner stack
+  process-compose port because `workspace start|stop|restart|logs` dispatch
+  through the inner stack platform.
+- Workspace JSON, REST responses, GraphQL, and CLI text status now expose
+  `process_compose_port`, `playwright_mcp_name`, and `playwright_mcp_url`
+  where the workspace allocation/input data is available.
+- `angee workspace start|stop|restart|logs` now accept optional `[name]` when
+  run from inside `ANGEE_ROOT/workspaces/<name>`, matching `status` and
+  `sync-base`.
+- Git read-only status calls now fall back to native git CLI when go-git cannot
+  read a worktree config extension, so branch-mismatch is based on actual
+  `current_ref != branch` state.
+
+Remaining:
+
+- Render `ports.process_compose.value` from the dev stack template and pass
+  `${alloc.custom}` from workspace templates.
+- Add the `data_root` stack input and render workspace-local
+  `<workspace>/.angee/data` for `ANGEE_DATA` and Playwright user data.
+- Implement demo asset ledger adoption/idempotency in the application repo.
+
 ---
 
 ## Refactor backlog
@@ -88,6 +187,7 @@ separate handwritten code from generated code.
 | R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
 | R8 | Split defaulting from validation, then adopt `validator` + schema  | Partial    | Medium      | Low     | +50 / +1 schema file          |
 | R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
+| R10 | Workspace runtime/lifecycle isolation fixes                       | Partial    | High        | Medium  | TBD                           |
 
 ---
 

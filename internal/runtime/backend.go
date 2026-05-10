@@ -6,18 +6,20 @@ import (
 )
 
 type Target struct {
-	Root     string
-	Services []string
-	Build    bool
-	EnvFile  string
+	Root        string
+	Services    []string
+	Build       bool
+	EnvFile     string
+	ControlPort int
 }
 
 type LogsRequest struct {
-	Root     string
-	Services []string
-	Follow   bool
-	EnvFile  string
-	MaxBytes int
+	Root        string
+	Services    []string
+	Follow      bool
+	EnvFile     string
+	MaxBytes    int
+	ControlPort int
 }
 
 type ServiceStatus struct {
@@ -30,7 +32,7 @@ type Backend interface {
 	Build(ctx context.Context, target Target) error
 	Up(ctx context.Context, target Target) error
 	UpForeground(ctx context.Context, target Target, stdout io.Writer, stderr io.Writer) error
-	Down(ctx context.Context, root string) error
+	Down(ctx context.Context, target Target) error
 	Start(ctx context.Context, target Target) error
 	Stop(ctx context.Context, target Target) error
 	Restart(ctx context.Context, target Target) error
