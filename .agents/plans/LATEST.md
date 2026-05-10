@@ -60,10 +60,15 @@ the custom client speaks.
    and defaults (`mount=secret`, `path=angee`). The official client also reads
    `VAULT_ADDR`/`BAO_ADDR` automatically — keep our explicit precedence so
    behavior does not silently change.
-5. Update tests. The current test surface uses a mock HTTP server; switch the
-   mocks to satisfy the OpenBao client's expected request/response shape (path
-   prefix unchanged: `/v1/<mount>/data/<path>`). Add coverage for the new
-   `List` implementation.
+5. Add tests. There is currently **no** OpenBao test file in
+   `internal/secrets/` (only `envfile_test.go`), so this migration introduces
+   `openbao_test.go` from scratch. Stand up an `httptest.Server` whose handlers
+   match the official client's request shape (path prefix unchanged:
+   `/v1/<mount>/data/<path>` for KVv2 data, `/v1/<mount>/metadata/<path>` for
+   list). Cover `Get` (hit + 404), `Set`, `Delete`, and the newly-implemented
+   `List`. Verify env-var precedence: explicit `OpenBaoConfig.Address` wins
+   over `OPENBAO_ADDR`, and neither is silently overridden by the client's
+   built-in `VAULT_ADDR`/`BAO_ADDR` lookup.
 
 ### Acceptance
 
@@ -86,29 +91,35 @@ implementation **before** expanding the surface to dispatch tools. Doing this
 now (while it's a stub) is near-free; doing it after building 18 tools by hand
 means rewriting protocol framing and transport.
 
-**Verified-on 2026-05-10:**
-- `github.com/modelcontextprotocol/go-sdk` v1.6.0 (May 2026), Apache-2.0,
-  4.5k★. Official, Anthropic + Google co-maintained. Stdio transport, tool
-  registration, schema validation built-in.
-- `github.com/mark3labs/mcp-go` v0.49.0 (April 2026), MIT, 8.6k★. Stdio +
-  SSE + streamable-HTTP, per-session state, hooks/middleware. Better fit for
-  an HTTP-native operator.
+**SDK comparison: REVERIFY before implementing.** The earlier draft's version
+and feature claims drifted from upstream:
+- The official `modelcontextprotocol/go-sdk` now ships
+  `NewStreamableHTTPHandler`, so the "stdio-first" framing is no longer
+  accurate; HTTP transport parity has likely closed.
+- Versions cited in this plan (official v1.6.0, mark3labs v0.49.0) do not
+  match what is currently published — public metadata at the time of this
+  revision shows official v1.5.0 and mark3labs/mcp-go server package v0.52.0
+  (May 2026). Pin actual current versions before `go get`.
 
-### Decision: which SDK
+Before starting Migration 2, do a fresh side-by-side that captures, for each
+SDK at its current release: (a) HTTP transport surface (streamable HTTP,
+SSE), (b) per-session state model, (c) tool registration + JSON Schema
+ergonomics, (d) license, (e) maintenance signal. Record the result in this
+plan and pick the SDK from that table — do not inherit the previous
+recommendation.
 
-Recommend **`mark3labs/mcp-go`** for angee. Reasons:
-
-- The operator is HTTP-native; mcp-go's streamable-HTTP transport drops in,
-  whereas the official SDK leans stdio-first today.
-- Per-session state matches the per-stack control-plane model.
-- The MIT license matches the rest of the dependency set.
-
-If the official SDK reaches transport parity in the next minor, revisit. The
-public-facing MCP tool surface is small and a future swap is cheap.
+The public-facing MCP tool surface is small, so a future swap remains cheap;
+the goal of the comparison is to start on the SDK that minimises rework, not
+to lock in forever.
 
 ### Files
 
 - Rewrite: `internal/operator/mcp.go` (16 lines → real handler)
+- Rewrite or delete: `internal/operator/gql/helpers.go:236-249` —
+  `mcpDescriptor()` is duplicated verbatim in the GraphQL package. Decide
+  explicitly: either route GraphQL through the same source-of-truth tool
+  list as the new MCP server, or drop the GraphQL copy if it is no longer
+  reachable. Do not leave the duplicate behind.
 - Touch: `internal/operator/operator.go` (mount the MCP HTTP handler on the
   existing mux)
 - Tools dispatch through `service.Platform`, matching the REST/GraphQL
@@ -121,29 +132,59 @@ Services: `services.list`, `services.create`, `services.logs`, `services.restart
 Workspaces: `workspaces.list`, `workspaces.create`, `workspaces.sync_base`.
 Sources: `sources.list`, `sources.fetch`, `sources.pull`.
 Jobs: `jobs.run`.
-Secrets: `secrets.list`, `secrets.set`, `secrets.delete`.
+Secrets *(see prerequisite below)*: `secrets.list`, `secrets.set`,
+`secrets.delete`.
 
 Each tool is a thin `func(ctx, args) (result, error)` that calls a
 `service.Platform` method. Input/output schemas come from `api/` request/
 response DTOs — generate JSON Schemas via the existing `invopop/jsonschema`
 dependency to avoid hand-writing them.
 
+**Prerequisite for the `secrets.*` tools — these do not exist yet.**
+`service.Platform` currently exposes no `SecretGet/SecretSet/SecretList/
+SecretDelete`, and the operator has no `/secrets` REST routes; the only
+secret-adjacent surface today is the read-only `CompiledStack.SecretEnvVars`
+field. Before the secrets MCP tools can be "thin wrappers", land a
+preparatory change that:
+
+1. Adds `Secret{List,Set,Delete}` (and any required `Get`) to
+   `service.Platform`, delegating to the configured `secrets.Backend`.
+   Implementing `Backend.List` for OpenBao is part of Migration 1, so
+   sequence Migration 1 before this step.
+2. Exposes the same operations as REST routes under `/secrets` (and the
+   matching GraphQL fields) so the architectural rule "MCP, REST, GraphQL
+   all share `Platform`" actually holds.
+3. Decides the access-control story for write/delete on secrets — the rest
+   of the operator API is currently unauthenticated within a stack, but
+   exposing `secrets.set`/`secrets.delete` over HTTP raises the blast
+   radius. Resolve this in the prerequisite, not in the MCP wiring.
+
+If that prerequisite slips, ship Migration 2 with only the read/coordination
+tools (Stack/Services/Workspaces/Sources/Jobs) and add the `secrets.*` tools
+in a follow-up.
+
 ### Steps
 
-1. `go get github.com/mark3labs/mcp-go@latest`.
-2. In `internal/operator/mcp.go`, build a `*server.MCPServer` configured with
-   server name `"angee-operator"` and the operator's existing version string.
-3. Register each tool by calling `mcp.NewTool(name, mcp.WithDescription(...),
-   mcp.WithInputSchema(...))` and pairing it with a handler that unmarshals
-   args, calls the matching `Platform` method, and marshals the result.
-4. Mount the HTTP transport: `server.NewStreamableHTTPServer(mcpServer)` and
-   register on the operator's existing mux at `/mcp` (replacing the stub
-   descriptor route).
-5. Keep the descriptor JSON available at `/mcp/info` for older clients during
+1. Complete the SDK comparison above and pick the SDK; `go get` whichever
+   wins. The steps below assume `mark3labs/mcp-go` API shapes — adjust if
+   the comparison selects the official SDK.
+2. (If the secrets prerequisite has landed.) Otherwise drop the `secrets.*`
+   tools from this iteration's tool registration.
+3. In `internal/operator/mcp.go`, build the chosen SDK's server type
+   configured with server name `"angee-operator"` and the operator's
+   existing version string.
+4. Register each tool with a handler that unmarshals args, calls the
+   matching `Platform` method, and marshals the result.
+5. Mount the HTTP transport on the operator's existing mux at `/mcp`,
+   replacing the stub descriptor route.
+6. Replace `internal/operator/gql/helpers.go:236` `mcpDescriptor()` so it
+   reflects the live registered tool list (or remove it if no GraphQL
+   resolver still consumes it).
+7. Keep a descriptor JSON available at `/mcp/info` for older clients during
    the transition.
-6. Add an end-to-end test that opens an MCP session, calls `stack.status`,
-   and asserts the response matches the REST `/stack/status` payload — proving
-   surface parity per the architecture rule in `CLAUDE.md`.
+8. Add an end-to-end test that opens an MCP session, calls `stack.status`,
+   and asserts the response matches the REST `/stack/status` payload —
+   proving surface parity per the architecture rule in `CLAUDE.md`.
 
 ### Acceptance
 
