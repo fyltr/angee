@@ -149,3 +149,34 @@ as a VitePress site (`cd docs && npm run dev` for a local preview):
 
 Internal design notes that are not part of the published site live in
 `.agents/notes/`.
+
+## Agent Workspace Files
+
+The `.agents/` directory holds material that supports agentic development of
+this repo but is intentionally not part of the published documentation.
+Everything here is checked in.
+
+```text
+.agents/
+├── agents/   # Sub-agent prompts (markdown with YAML frontmatter)
+├── plans/    # Long-form implementation plans for in-flight refactors
+└── notes/    # Internal design notes and TODOs not yet promoted to issues
+```
+
+- `agents/` contains sub-agent definitions. They're surfaced to Claude Code
+  via the `.claude/agents` symlink (`.claude/agents` → `../.agents/agents`),
+  which is how Claude Code auto-discovers project-local agents. Other tools
+  with their own conventions (Codex, Gemini, etc.) can read the same files
+  directly. Today this contains `go-code-reviewer.md`, which should be
+  invoked proactively after any non-trivial Go change.
+- `plans/LATEST.md` is the active multi-step implementation plan. When a
+  plan is finished, summarise the outcome in `CHANGELOG.md` and either
+  archive the plan or replace it with the next one.
+- `notes/todo.md` tracks short follow-ups that aren't worth a full plan but
+  shouldn't be lost. `notes/ideas.md` and other note files are scratch
+  design material — they may be partially stale; prefer the manifest, the
+  code, and the published docs as sources of truth.
+
+Shared sub-agents and slash commands that operate across the whole Angee
+multi-repo workspace (Django- and React-flavoured ones, the workspace
+orchestrator skill, etc.) live in `angee-django/.agents/` rather than here.

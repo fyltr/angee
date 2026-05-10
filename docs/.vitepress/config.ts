@@ -31,6 +31,7 @@ export default defineConfig({
           text: 'Guide',
           items: [
             { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Concepts', link: '/guide/concepts' },
             { text: 'Commands', link: '/guide/commands' },
             { text: 'Manifest', link: '/guide/manifest' },
             { text: 'Templates', link: '/guide/templates' },
