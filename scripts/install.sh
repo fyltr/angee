@@ -10,18 +10,22 @@ INSTALL_DIR="${ANGEE_INSTALL_DIR:-/usr/local/bin}"
 install_bin() {
   src="$1"
   dst="$2"
-  # Remove the target before copying so a fresh inode is allocated.
-  # On macOS, overwriting a signed binary in place leaves the kernel's
-  # cached signature pages pointing at stale content, and AMFI then
-  # refuses to exec the new binary ("load code signature error 2").
+  # Stage a sibling file in the destination directory, then atomically
+  # rename it over the target. This allocates a fresh inode, which
+  # invalidates macOS's per-inode code-signature cache — overwriting a
+  # signed binary in place would otherwise trigger AMFI's "load code
+  # signature error 2" because the kernel keeps stale signature pages
+  # for the old contents. Staging in the same directory guarantees the
+  # rename is on a single filesystem and therefore atomic.
+  stage="${dst}.new.$$"
   if [ -w "$INSTALL_DIR" ]; then
-    rm -f "$dst"
-    cp "$src" "$dst"
-    chmod +x "$dst"
+    cp "$src" "$stage"
+    chmod +x "$stage"
+    mv -f "$stage" "$dst"
   else
-    sudo rm -f "$dst"
-    sudo cp "$src" "$dst"
-    sudo chmod +x "$dst"
+    sudo cp "$src" "$stage"
+    sudo chmod +x "$stage"
+    sudo mv -f "$stage" "$dst"
   fi
 }
 
