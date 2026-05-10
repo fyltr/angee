@@ -21,6 +21,7 @@ type Context struct {
 	Ports         map[string]int
 	Alloc         map[string]int
 	Workspaces    map[string]string
+	WorkspacePath string
 	Sources       map[string]string
 	Persist       map[string]string
 	Operator      Operator
@@ -163,6 +164,9 @@ func resolvePath(path string, ctx Context) (string, error) {
 		}
 		return strconv.Itoa(value), nil
 	case "workspace":
+		if rest == "path" && ctx.WorkspacePath != "" {
+			return ctx.WorkspacePath, nil
+		}
 		name, field, _ := strings.Cut(rest, ".")
 		value, ok := ctx.Workspaces[name]
 		if !ok {

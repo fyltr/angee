@@ -1166,7 +1166,12 @@ func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {
 func (p *Platform) renderWorkspaceChain(ctx context.Context, workspacePath string, metadata copierx.Metadata, inputs map[string]string, workspaceName string, alloc map[string]int) ([]string, string, error) {
 	chain := []string{}
 	chainRoot := ""
-	subCtx := substitute.Context{Inputs: inputs, Name: workspaceName, Alloc: alloc}
+	subCtx := substitute.Context{
+		Inputs:        inputs,
+		Name:          workspaceName,
+		Alloc:         alloc,
+		WorkspacePath: workspacePath,
+	}
 	if metadata.ChainRoot != "" {
 		resolved, err := substitute.Resolve(metadata.ChainRoot, subCtx)
 		if err != nil {
