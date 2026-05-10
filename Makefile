@@ -1,4 +1,4 @@
-.PHONY: init build build-cli build-operator generate check-generated test fmt vet check clean
+.PHONY: init build build-cli build-operator generate check-generated schema check-schema test fmt vet check clean
 
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/fyltr/angee/internal/cli.Version=$(VERSION)
@@ -19,6 +19,12 @@ generate:
 
 check-generated: generate
 	git diff --exit-code -- internal/operator/gql
+
+schema:
+	go run ./cmd/schema -o docs/angee.schema.json
+
+check-schema: schema
+	git diff --exit-code -- docs/angee.schema.json
 
 test:
 	go test -v -race ./...

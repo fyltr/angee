@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,8 +26,8 @@ const (
 )
 
 type Stack struct {
-	Version        int                    `yaml:"version" json:"version"`
-	Kind           string                 `yaml:"kind" json:"kind"`
+	Version        int                    `yaml:"version" json:"version" validate:"oneof=1" jsonschema:"required,enum=1"`
+	Kind           string                 `yaml:"kind" json:"kind" validate:"required,oneof=stack" jsonschema:"required,enum=stack"`
 	Name           string                 `yaml:"name" json:"name"`
 	Template       *Template              `yaml:"template,omitempty" json:"template,omitempty"`
 	Operator       Operator               `yaml:"operator,omitempty" json:"operator,omitempty"`
@@ -55,7 +56,7 @@ type Operator struct {
 }
 
 type PortPool struct {
-	Range string `yaml:"range" json:"range"`
+	Range string `yaml:"range" json:"range" validate:"required" jsonschema:"required"`
 }
 
 type PortLease struct {
@@ -65,7 +66,7 @@ type PortLease struct {
 }
 
 type SecretsBackend struct {
-	Type    string `yaml:"type,omitempty" json:"type,omitempty"`
+	Type    string `yaml:"type,omitempty" json:"type,omitempty" validate:"omitempty,oneof=env-file openbao" jsonschema:"enum=env-file,enum=openbao"`
 	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
 	Address string `yaml:"address,omitempty" json:"address,omitempty"`
 	Mount   string `yaml:"mount,omitempty" json:"mount,omitempty"`
@@ -80,7 +81,7 @@ type Secret struct {
 }
 
 type Port struct {
-	Value     int      `yaml:"value" json:"value"`
+	Value     int      `yaml:"value" json:"value" validate:"gte=0" jsonschema:"minimum=0"`
 	ExportEnv string   `yaml:"export_env,omitempty" json:"export_env,omitempty"`
 	Aliases   []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 }
@@ -91,7 +92,7 @@ type Volume struct {
 }
 
 type Source struct {
-	Kind       string     `yaml:"kind" json:"kind"`
+	Kind       string     `yaml:"kind" json:"kind" validate:"required,oneof=git local" jsonschema:"required,enum=git,enum=local"`
 	Repo       string     `yaml:"repo,omitempty" json:"repo,omitempty"`
 	URL        string     `yaml:"url,omitempty" json:"url,omitempty"`
 	Path       string     `yaml:"path,omitempty" json:"path,omitempty"`
@@ -114,7 +115,7 @@ type SourceGit struct {
 }
 
 type Workspace struct {
-	Template     string                     `yaml:"template" json:"template"`
+	Template     string                     `yaml:"template" json:"template" validate:"required" jsonschema:"required"`
 	Inputs       map[string]string          `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Sources      map[string]WorkspaceSource `yaml:"sources,omitempty" json:"sources,omitempty"`
 	Resolved     WorkspaceResolved          `yaml:"resolved,omitempty" json:"resolved,omitempty"`
@@ -123,7 +124,7 @@ type Workspace struct {
 }
 
 type WorkspaceSource struct {
-	Source  string `yaml:"source" json:"source"`
+	Source  string `yaml:"source" json:"source" validate:"required" jsonschema:"required"`
 	Mode    string `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
 	Ref     string `yaml:"ref,omitempty" json:"ref,omitempty"`
@@ -144,7 +145,7 @@ type PersistPath struct {
 }
 
 type Service struct {
-	Runtime   Runtime           `yaml:"runtime" json:"runtime"`
+	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
 	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
 	Command   []string          `yaml:"command,omitempty" json:"command,omitempty"`
@@ -158,7 +159,7 @@ type Service struct {
 }
 
 type Job struct {
-	Runtime   Runtime           `yaml:"runtime" json:"runtime"`
+	Runtime   Runtime           `yaml:"runtime" json:"runtime" validate:"required,oneof=container local" jsonschema:"required,enum=container,enum=local"`
 	Image     string            `yaml:"image,omitempty" json:"image,omitempty"`
 	Build     any               `yaml:"build,omitempty" json:"build,omitempty"`
 	Command   []string          `yaml:"command,omitempty" json:"command,omitempty"`
@@ -303,18 +304,24 @@ func (s *Stack) Defaults() {
 }
 
 func (s *Stack) Validate() error {
-	if s.Version != VersionCurrent {
-		return fmt.Errorf("unsupported manifest version %d", s.Version)
-	}
-	if s.Kind != KindStack {
-		return fmt.Errorf("unsupported manifest kind %q", s.Kind)
-	}
 	if strings.TrimSpace(s.Name) == "" {
 		return errors.New("manifest name is required")
 	}
-	if s.SecretsBackend.Type != "env-file" && s.SecretsBackend.Type != "openbao" {
-		return fmt.Errorf("unsupported secrets backend %q", s.SecretsBackend.Type)
+	if err := validateStruct(s); err != nil {
+		return err
 	}
+	return s.ValidateExtended()
+}
+
+func validateStruct(stack *Stack) error {
+	v := validator.New()
+	if err := v.Struct(stack); err != nil {
+		return fmt.Errorf("manifest validation: %w", err)
+	}
+	return nil
+}
+
+func (s *Stack) ValidateExtended() error {
 	for name, service := range s.Services {
 		if err := validateRunnable("service", name, service.Runtime, service.Image, service.Build, service.Command); err != nil {
 			return err

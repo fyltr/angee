@@ -185,7 +185,7 @@ separate handwritten code from generated code.
 | R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | **DONE**   | Medium-High | Low     | +200 / 0                      |
 | R6 | Typed domain errors + status preservation across CLI/REST/GraphQL  | **DONE**   | Medium      | Low     | +60 / 0                       |
 | R7 | Evaluate `compose-spec/compose-go v2` against local Compose model  | Pending    | Low-Medium  | Medium  | varies                        |
-| R8 | Split defaulting from validation, then adopt `validator` + schema  | Partial    | Medium      | Low     | +50 / +1 schema file          |
+| R8 | Split defaulting from validation, then adopt `validator` + schema  | **DONE**   | Medium      | Low     | +50 / +1 schema file          |
 | R9 | Collapse `sorted*` helpers in `graphql.go` (mooted by R2)          | **DONE**   | Low         | Low     | -40 / 0                       |
 | R10 | Workspace runtime/lifecycle isolation fixes                       | Partial    | High        | Medium  | TBD                           |
 
@@ -609,8 +609,9 @@ without proportional benefit today.
 
 ## R8. Split defaulting from validation, then adopt `validator` + JSON Schema
 
-**Status:** partially shipped. Step 0 is complete: `Defaults()` and pure
-`Validate()` are split. Validator and JSON Schema generation remain pending.
+**Status:** shipped. `Defaults()` and pure `Validate()` are split, manifest
+struct validation uses `validator/v10`, and `docs/angee.schema.json` is
+generated for editor integration.
 
 **Goal:** consolidate manifest validation rules and emit a JSON Schema for
 editor LSP integration.
@@ -678,11 +679,11 @@ know whether to update one place or two.
   byte-equal serializations).
 - [x] Existing valid manifests still validate; existing invalid manifests
   still fail with equivalent or better messages.
-- [ ] `docs/angee.schema.json` is generated and matches the structs.
-- [ ] `make schema` target documented in `docs/DEVELOPMENT.md`.
-- [ ] Decision recorded in `docs/MANIFEST.md` about how validator constraints
+- [x] `docs/angee.schema.json` is generated and matches the structs.
+- [x] `make schema` target documented in `docs/DEVELOPMENT.md`.
+- [x] Decision recorded in `docs/MANIFEST.md` about how validator constraints
   surface in the JSON Schema (duplicate tags, bridge, or accept partial).
-- [ ] Editors with `yaml-language-server` get autocompletion against the
+- [x] Editors with `yaml-language-server` get autocompletion against the
   schema (manual smoke test documented in `docs/MANIFEST.md`).
 
 ---

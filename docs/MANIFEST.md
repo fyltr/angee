@@ -2,6 +2,18 @@
 
 Angee reads one manifest at `$ANGEE_ROOT/angee.yaml`.
 
+Editor schema:
+
+```yaml
+# yaml-language-server: $schema=https://fyltr.dev/schemas/angee.schema.json
+```
+
+The checked-in schema lives at `docs/angee.schema.json` and is refreshed with
+`make schema`. The schema is intentionally a completion/type aid; runtime
+validation in `internal/manifest` remains authoritative for cross-field rules
+such as local services requiring `command` and container services requiring
+`image` or `build`.
+
 Minimal shape:
 
 ```yaml

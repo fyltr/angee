@@ -15,6 +15,8 @@ make build-cli
 make build-operator
 make generate
 make check-generated
+make schema
+make check-schema
 make test
 make fmt
 make vet
@@ -32,6 +34,11 @@ go test -v -race ./...
 `make generate` refreshes gqlgen output for the operator GraphQL schema.
 `make check-generated` runs generation and fails if `internal/operator/gql/`
 is not committed fresh.
+
+`make schema` refreshes `docs/angee.schema.json` from the manifest structs for
+editor integration and YAML language-server completion.
+`make check-schema` regenerates the schema and fails if it is not committed
+fresh.
 
 `make install` builds both binaries and runs `scripts/install.sh` with
 `ANGEE_DIST_DIR` pointing at this checkout's `dist/`.
