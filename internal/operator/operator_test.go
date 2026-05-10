@@ -283,6 +283,73 @@ name: inner
 	}
 }
 
+func TestOperatorWorkspaceBranchIdentityStatusAndSyncBase(t *testing.T) {
+	root, workspaceName, workspaceSourcePath, cache := setupOperatorGitWorkspace(t)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	runTestGit(t, workspaceSourcePath, "switch", "-c", "codex/feature-a")
+	req := httptest.NewRequest(http.MethodGet, "/workspaces/"+workspaceName+"/status", nil)
+	rr := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("REST workspace status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var restStatus map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &restStatus); err != nil {
+		t.Fatalf("Unmarshal REST status error = %v: %s", err, rr.Body.String())
+	}
+	if restStatus["state"] != "discrepancy" {
+		t.Fatalf("REST workspace state = %#v, want discrepancy", restStatus["state"])
+	}
+	restSource := restStatus["sources"].([]any)[0].(map[string]any)
+	if restSource["state"] != "branch-mismatch" || restSource["branch"] != workspaceName || restSource["current_ref"] != "codex/feature-a" {
+		t.Fatalf("REST source status = %#v, want branch mismatch with branch/current_ref", restSource)
+	}
+
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{ workspaceStatus(name: "feature-a") { state sources { slot state branch currentRef unpushedReason } } }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL status errors = %#v", resp.Errors)
+	}
+	gqlStatus := resp.Data["workspaceStatus"].(map[string]any)
+	gqlSource := gqlStatus["sources"].([]any)[0].(map[string]any)
+	if gqlStatus["state"] != "discrepancy" || gqlSource["state"] != "branch-mismatch" || gqlSource["branch"] != workspaceName || gqlSource["currentRef"] != "codex/feature-a" {
+		t.Fatalf("GraphQL status = %#v source = %#v, want same branch mismatch contract", gqlStatus, gqlSource)
+	}
+
+	resp = doGraphQL(t, server, map[string]any{
+		"query": `{ gitOpsTopology { summary { branchMismatch unpushed } } }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL topology errors = %#v", resp.Errors)
+	}
+	summary := resp.Data["gitOpsTopology"].(map[string]any)["summary"].(map[string]any)
+	if summary["branchMismatch"] != float64(1) || summary["unpushed"] != float64(1) {
+		t.Fatalf("GitOps summary = %#v, want one branch mismatch and unpushed worktree", summary)
+	}
+
+	runTestGit(t, workspaceSourcePath, "switch", workspaceName)
+	writeTestFile(t, filepath.Join(cache, "main.txt"), "main update\n")
+	runTestGit(t, cache, "add", "main.txt")
+	runTestGit(t, cache, "commit", "-m", "main update")
+	runTestGit(t, cache, "push", "fork", "main")
+
+	resp = doGraphQL(t, server, map[string]any{
+		"query": `mutation { workspaceSyncBase(name: "feature-a", method: "merge") { slot branch currentRef state } }`,
+	})
+	if len(resp.Errors) > 0 {
+		t.Fatalf("GraphQL sync-base errors = %#v", resp.Errors)
+	}
+	synced := resp.Data["workspaceSyncBase"].([]any)[0].(map[string]any)
+	if synced["slot"] != "app" || synced["branch"] != workspaceName || synced["currentRef"] != workspaceName || synced["state"] == "branch-mismatch" {
+		t.Fatalf("workspaceSyncBase = %#v, want synced source still on workspace branch", synced)
+	}
+}
+
 func TestGraphQLServiceInit(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1
@@ -481,6 +548,66 @@ func writeTestFile(t *testing.T, path string, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
+}
+
+func setupOperatorGitWorkspace(t *testing.T) (string, string, string, string) {
+	t.Helper()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	cache := filepath.Join(base, "cache")
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	workspaceSourcePath := filepath.Join(root, "workspaces", workspaceName, "app")
+
+	runTestGit(t, "", "init", "--bare", remote)
+	runTestGit(t, "", "clone", remote, cache)
+	runTestGit(t, cache, "remote", "rename", "origin", "fork")
+	runTestGit(t, cache, "config", "user.email", "test@example.com")
+	runTestGit(t, cache, "config", "user.name", "Test User")
+	writeTestFile(t, filepath.Join(cache, "README.md"), "hello\n")
+	runTestGit(t, cache, "add", "README.md")
+	runTestGit(t, cache, "commit", "-m", "initial")
+	runTestGit(t, cache, "branch", "-M", "main")
+	runTestGit(t, cache, "push", "-u", "fork", "main")
+
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	runTestGit(t, cache, "worktree", "add", "-b", workspaceName, workspaceSourcePath, "main")
+	runTestGit(t, workspaceSourcePath, "config", "user.email", "test@example.com")
+	runTestGit(t, workspaceSourcePath, "config", "user.name", "Test User")
+
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Sources: map[string]manifest.Source{
+			"app": {
+				Kind:       "git",
+				Repo:       remote,
+				DefaultRef: "main",
+				CachePath:  cache,
+			},
+		},
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {
+				Template: "workspaces/dev-pr",
+				Sources: map[string]manifest.WorkspaceSource{
+					"app": {
+						Source:  "app",
+						Mode:    "worktree",
+						Branch:  workspaceName,
+						Ref:     "main",
+						Subpath: "app",
+					},
+				},
+			},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	return root, workspaceName, workspaceSourcePath, cache
 }
 
 func runTestGit(t *testing.T, dir string, args ...string) string {

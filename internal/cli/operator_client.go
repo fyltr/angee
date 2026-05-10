@@ -55,6 +55,7 @@ type platformClient interface {
 	WorkspaceStop(context.Context, string) error
 	WorkspaceGitStatus(context.Context, string) ([]api.SourceState, error)
 	WorkspacePush(context.Context, string, string) ([]api.SourceState, error)
+	WorkspaceSyncBase(context.Context, string, string) ([]api.SourceState, error)
 }
 
 type remotePlatform struct {
@@ -309,6 +310,15 @@ func (p *remotePlatform) WorkspaceGitStatus(ctx context.Context, name string) ([
 func (p *remotePlatform) WorkspacePush(ctx context.Context, name string, ref string) ([]api.SourceState, error) {
 	var states []api.SourceState
 	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/push", nil, api.SourceOperationRequest{Ref: ref}, &states); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
+func (p *remotePlatform) WorkspaceSyncBase(ctx context.Context, name string, method string) ([]api.SourceState, error) {
+	var states []api.SourceState
+	req := api.WorkspaceSyncBaseRequest{Method: method}
+	if err := p.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(name)+"/sync-base", nil, req, &states); err != nil {
 		return nil, err
 	}
 	return states, nil

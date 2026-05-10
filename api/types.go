@@ -153,17 +153,18 @@ type GitOpsLink struct {
 }
 
 type GitOpsSummary struct {
-	Sources    int `json:"sources"`
-	Workspaces int `json:"workspaces"`
-	Worktrees  int `json:"worktrees"`
-	Clean      int `json:"clean"`
-	Dirty      int `json:"dirty"`
-	Ahead      int `json:"ahead"`
-	Behind     int `json:"behind"`
-	Diverged   int `json:"diverged"`
-	Missing    int `json:"missing"`
-	Error      int `json:"error"`
-	Unpushed   int `json:"unpushed"`
+	Sources        int `json:"sources"`
+	Workspaces     int `json:"workspaces"`
+	Worktrees      int `json:"worktrees"`
+	Clean          int `json:"clean"`
+	Dirty          int `json:"dirty"`
+	Ahead          int `json:"ahead"`
+	Behind         int `json:"behind"`
+	Diverged       int `json:"diverged"`
+	BranchMismatch int `json:"branch_mismatch"`
+	Missing        int `json:"missing"`
+	Error          int `json:"error"`
+	Unpushed       int `json:"unpushed"`
 }
 
 type ServiceInitRequest struct {
@@ -191,6 +192,10 @@ type SourceOperationRequest struct {
 	Ref  string `json:"ref,omitempty"`
 }
 
+type WorkspaceSyncBaseRequest struct {
+	Method string `json:"method,omitempty"`
+}
+
 type SourceState struct {
 	Name           string `json:"name"`
 	Slot           string `json:"slot,omitempty"`
@@ -198,6 +203,7 @@ type SourceState struct {
 	Path           string `json:"path"`
 	Exists         bool   `json:"exists"`
 	State          string `json:"state,omitempty"`
+	Branch         string `json:"branch,omitempty"`
 	Ref            string `json:"ref,omitempty"`
 	CurrentRef     string `json:"current_ref,omitempty"`
 	Dirty          bool   `json:"dirty,omitempty"`

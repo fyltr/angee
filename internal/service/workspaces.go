@@ -25,6 +25,12 @@ const (
 	chainLifecycleUp   = "up"
 )
 
+const (
+	workspaceSourceStateBranchMismatch = "branch-mismatch"
+	workspaceSyncBaseMerge             = "merge"
+	workspaceSyncBaseRebase            = "rebase"
+)
+
 func (p *Platform) WorkspaceCreate(ctx context.Context, req api.WorkspaceCreateRequest) (api.WorkspaceRef, error) {
 	if req.Template == "" {
 		return api.WorkspaceRef{}, fmt.Errorf("workspace template is required")
@@ -224,7 +230,11 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 		status.Error = statErr.Error()
 	}
 	for _, slot := range sortedKeys(workspace.Sources) {
-		status.Sources = append(status.Sources, p.workspaceSourceStatus(ctx, name, slot, workspace.Sources[slot], stack))
+		sourceStatus := p.workspaceSourceStatus(ctx, name, slot, workspace.Sources[slot], stack)
+		status.Sources = append(status.Sources, sourceStatus)
+		if sourceStatus.State == workspaceSourceStateBranchMismatch {
+			status.State = "discrepancy"
+		}
 	}
 	if workspace.Resolved.ChainRoot != "" {
 		innerRoot := filepath.Join(path, workspace.Resolved.ChainRoot)
@@ -295,6 +305,12 @@ func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slo
 		return status
 	}
 	status.Dirty = dirty
+	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
+		status.State = workspaceSourceStateBranchMismatch
+		status.Pushed = false
+		status.UnpushedReason = reason
+		return status
+	}
 	if dirty {
 		status.State = "dirty"
 		status.Pushed = false
@@ -363,6 +379,9 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
+	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+		return err
+	}
 	if err := p.ensureWorkspaceGitSourcesPushed(ctx, name, workspace, stack); err != nil {
 		return err
 	}
@@ -375,6 +394,52 @@ func (p *Platform) WorkspaceDestroy(ctx context.Context, name string, purge bool
 		return os.RemoveAll(filepath.Join(p.root, "workspaces", name))
 	}
 	return nil
+}
+
+func (p *Platform) ensureWorkspaceGitSourcesOnExpectedBranches(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		source, ok := stack.Sources[wsSource.Source]
+		if !ok {
+			return fmt.Errorf("workspace %q source %q references undeclared source %q", workspaceName, slot, wsSource.Source)
+		}
+		if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context, workspaceName, slot string, source manifest.Source, wsSource manifest.WorkspaceSource) error {
+	if source.Kind != "git" || !workspaceSourceRequiresBranch(wsSource) {
+		return nil
+	}
+	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	currentRef, err := git.New().CurrentRef(ctx, path)
+	if err != nil {
+		return err
+	}
+	if reason := workspaceGitBranchMismatchReason(currentRef, wsSource); reason != "" {
+		return fmt.Errorf("workspace %q source %q has branch mismatch: %s at %s", workspaceName, slot, reason, path)
+	}
+	return nil
+}
+
+func workspaceSourceRequiresBranch(wsSource manifest.WorkspaceSource) bool {
+	return wsSource.Mode == "worktree" && wsSource.Branch != ""
+}
+
+func workspaceGitBranchMismatchReason(currentRef string, wsSource manifest.WorkspaceSource) string {
+	if !workspaceSourceRequiresBranch(wsSource) || currentRef == wsSource.Branch {
+		return ""
+	}
+	return fmt.Sprintf("current branch/ref %q, expected workspace branch %q", currentRef, wsSource.Branch)
 }
 
 func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspaceName string, workspace manifest.Workspace, stack *manifest.Stack) error {
@@ -531,6 +596,9 @@ func (p *Platform) WorkspaceStart(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
 	}
+	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+		return err
+	}
 	if workspace.Resolved.ChainRoot == "" {
 		return nil
 	}
@@ -557,6 +625,9 @@ func (p *Platform) WorkspaceStop(ctx context.Context, name string) error {
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
 		return fmt.Errorf("workspace %q is not declared", name)
+	}
+	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+		return err
 	}
 	if workspace.Resolved.ChainRoot == "" {
 		return nil
@@ -721,11 +792,11 @@ func (p *Platform) WorkspaceGitStatus(ctx context.Context, name string) ([]api.S
 	states := []api.SourceState{}
 	for _, slot := range sortedKeys(workspace.Sources) {
 		wsSource := workspace.Sources[slot]
-		source, ok := stack.Sources[wsSource.Source]
+		_, ok := stack.Sources[wsSource.Source]
 		if !ok {
 			return nil, fmt.Errorf("workspace %q source %q references undeclared source %q", name, slot, wsSource.Source)
 		}
-		state, err := p.workspaceSourceState(ctx, name, slot, source, wsSource)
+		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
 		if err != nil {
 			return nil, err
 		}
@@ -742,6 +813,9 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	workspace, ok := stack.Workspaces[name]
 	if !ok {
 		return nil, fmt.Errorf("workspace %q is not declared", name)
+	}
+	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+		return nil, err
 	}
 	client := git.New()
 	states := []api.SourceState{}
@@ -784,7 +858,7 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		if err != nil {
 			return nil, err
 		}
-		state, err := p.workspaceSourceState(ctx, name, slot, source, wsSource)
+		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
 		if err != nil {
 			return nil, err
 		}
@@ -793,30 +867,111 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 	return states, nil
 }
 
-func (p *Platform) workspaceSourceState(ctx context.Context, workspaceName, slot string, source manifest.Source, wsSource manifest.WorkspaceSource) (api.SourceState, error) {
-	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
-	state := api.SourceState{Name: wsSource.Source, Slot: slot, Kind: source.Kind, Path: path}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return state, nil
-		}
-		return state, err
+func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) ([]api.SourceState, error) {
+	stack, err := p.LoadStack()
+	if err != nil {
+		return nil, err
 	}
-	state.Exists = true
-	if source.Kind == "git" {
-		client := git.New()
-		ref, err := client.CurrentRef(ctx, path)
-		if err != nil {
-			return state, err
+	workspace, ok := stack.Workspaces[name]
+	if !ok {
+		return nil, fmt.Errorf("workspace %q is not declared", name)
+	}
+	method = normalizeWorkspaceSyncBaseMethod(method)
+	if method == "" {
+		return nil, fmt.Errorf("workspace sync-base method must be %q or %q", workspaceSyncBaseMerge, workspaceSyncBaseRebase)
+	}
+	if err := p.ensureWorkspaceGitSourcesOnExpectedBranches(ctx, name, workspace, stack); err != nil {
+		return nil, err
+	}
+	client := git.New()
+	states := []api.SourceState{}
+	for _, slot := range sortedKeys(workspace.Sources) {
+		wsSource := workspace.Sources[slot]
+		if wsSource.Mode != "worktree" {
+			continue
 		}
+		source, ok := stack.Sources[wsSource.Source]
+		if !ok || source.Kind != "git" {
+			continue
+		}
+		path := filepath.Join(p.root, "workspaces", name, wsSource.Subpath)
 		dirty, err := client.Dirty(ctx, path)
 		if err != nil {
-			return state, err
+			return nil, err
 		}
-		state.Ref = ref
-		state.Dirty = dirty
+		if dirty {
+			return nil, fmt.Errorf("workspace %q source %q has uncommitted changes", name, slot)
+		}
+		baseRef := workspaceSourceBaseRef(source, wsSource)
+		if baseRef == "" {
+			return nil, fmt.Errorf("workspace %q source %q has no base ref", name, slot)
+		}
+		if err := client.Fetch(ctx, path); err != nil {
+			return nil, err
+		}
+		syncRef, err := client.SyncBaseRef(ctx, path, baseRef)
+		if err != nil {
+			return nil, err
+		}
+		switch method {
+		case workspaceSyncBaseRebase:
+			err = client.Rebase(ctx, path, syncRef)
+		default:
+			err = client.Merge(ctx, path, syncRef)
+		}
+		if err != nil {
+			return nil, err
+		}
+		state, err := p.workspaceSourceState(ctx, name, slot, stack, wsSource)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, state)
 	}
-	return state, nil
+	return states, nil
+}
+
+func normalizeWorkspaceSyncBaseMethod(method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "", workspaceSyncBaseMerge:
+		return workspaceSyncBaseMerge
+	case workspaceSyncBaseRebase:
+		return workspaceSyncBaseRebase
+	default:
+		return ""
+	}
+}
+
+func workspaceSourceBaseRef(source manifest.Source, wsSource manifest.WorkspaceSource) string {
+	if wsSource.Ref != "" {
+		return wsSource.Ref
+	}
+	return source.DefaultRef
+}
+
+func (p *Platform) workspaceSourceState(ctx context.Context, workspaceName, slot string, stack *manifest.Stack, wsSource manifest.WorkspaceSource) (api.SourceState, error) {
+	return sourceStateFromWorkspaceStatus(p.workspaceSourceStatus(ctx, workspaceName, slot, wsSource, stack)), nil
+}
+
+func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.SourceState {
+	return api.SourceState{
+		Name:           status.Source,
+		Slot:           status.Slot,
+		Kind:           status.Kind,
+		Path:           status.Path,
+		Exists:         status.Exists,
+		State:          status.State,
+		Branch:         status.Branch,
+		Ref:            status.Ref,
+		CurrentRef:     status.CurrentRef,
+		Dirty:          status.Dirty,
+		Upstream:       status.Upstream,
+		Ahead:          status.Ahead,
+		Behind:         status.Behind,
+		Pushed:         status.Pushed,
+		UnpushedReason: status.UnpushedReason,
+		Error:          status.Error,
+	}
 }
 
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int) (map[string]manifest.WorkspaceSource, error) {

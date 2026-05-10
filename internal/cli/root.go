@@ -895,6 +895,7 @@ func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *b
 	cmd.AddCommand(workspaceLogsCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceGitCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspacePushCommand(stdout, root, operatorURL, jsonOutput))
+	cmd.AddCommand(workspaceSyncBaseCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceOpenCommand(stdout, root, operatorURL))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "start"))
 	cmd.AddCommand(workspaceLifecycleCommand(stdout, root, operatorURL, "stop"))
@@ -979,11 +980,21 @@ func workspaceGitCommand(stdout io.Writer, root, operatorURL *string, jsonOutput
 				return writeJSON(stdout, states)
 			}
 			for _, state := range states {
-				dirty := "clean"
-				if state.Dirty {
-					dirty = "dirty"
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
 				}
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, state.Ref, dirty, state.Path); err != nil {
+				stateText := state.State
+				if stateText == "" {
+					stateText = "clean"
+					if state.Dirty {
+						stateText = "dirty"
+					}
+				}
+				if state.UnpushedReason != "" {
+					stateText += " " + state.UnpushedReason
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, stateText, state.Path); err != nil {
 					return err
 				}
 			}
@@ -1011,7 +1022,11 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 				return writeJSON(stdout, states)
 			}
 			for _, state := range states {
-				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", state.Slot, state.Ref, state.Path); err != nil {
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\n", state.Slot, ref, state.Path); err != nil {
 					return err
 				}
 			}
@@ -1019,6 +1034,49 @@ func workspacePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutpu
 		},
 	}
 	cmd.Flags().StringVar(&ref, "ref", "", "ref to push")
+	return cmd
+}
+
+func workspaceSyncBaseCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
+	var merge bool
+	var rebase bool
+	cmd := &cobra.Command{
+		Use:   "sync-base [name]",
+		Short: "Update workspace git sources from their base ref without changing branches",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if merge && rebase {
+				return fmt.Errorf("choose only one of --merge or --rebase")
+			}
+			method := "merge"
+			if rebase {
+				method = "rebase"
+			}
+			platform, name, err := workspaceTarget(args, root, operatorURL, "sync-base")
+			if err != nil {
+				return err
+			}
+			states, err := platform.WorkspaceSyncBase(cmd.Context(), name, method)
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return writeJSON(stdout, states)
+			}
+			for _, state := range states {
+				ref := state.CurrentRef
+				if ref == "" {
+					ref = state.Ref
+				}
+				if _, err := fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", state.Slot, ref, state.State, state.Path); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&merge, "merge", false, "merge the base ref into each workspace branch (default)")
+	cmd.Flags().BoolVar(&rebase, "rebase", false, "rebase each workspace branch onto its base ref")
 	return cmd
 }
 
@@ -1131,12 +1189,16 @@ func workspaceStatusCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 }
 
 func workspaceStatusTarget(args []string, root, operatorURL *string) (platformClient, string, error) {
+	return workspaceTarget(args, root, operatorURL, "status")
+}
+
+func workspaceTarget(args []string, root, operatorURL *string, command string) (platformClient, string, error) {
 	if len(args) == 1 {
 		platform, err := localPlatform(root, operatorURL)
 		return platform, args[0], err
 	}
 	if operatorURL != nil && *operatorURL != "" {
-		return nil, "", fmt.Errorf("workspace status requires a workspace name in remote operator mode")
+		return nil, "", fmt.Errorf("workspace %s requires a workspace name in remote operator mode", command)
 	}
 	currentRoot, name, ok, err := enclosingWorkspace()
 	if err != nil {
@@ -1146,7 +1208,7 @@ func workspaceStatusTarget(args []string, root, operatorURL *string) (platformCl
 		platform, err := service.New(currentRoot)
 		return platform, name, err
 	}
-	return nil, "", fmt.Errorf("workspace status requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>")
+	return nil, "", fmt.Errorf("workspace %s requires a workspace name unless run from inside ANGEE_ROOT/workspaces/<name>", command)
 }
 
 func enclosingWorkspace() (root string, name string, ok bool, err error) {

@@ -3,19 +3,30 @@
 This is the canonical agent-instructions file for `angee-go`, the Go CLI,
 operator, and runtime backend implementation for Angee.
 
-> ## For new development work, start in `angee-examples`
+> ## For new development work, start in `angee-django`
 >
 > If you are starting a fresh session and want to make changes to angee-go, use
-> the multi-repo workspace flow from `~/Work/fyltr/angee-examples` rather than
+> the multi-repo workspace flow from `~/Work/fyltr/angee-django` rather than
 > cloning or editing this repository directly:
 >
 > ```sh
-> cd ~/Work/fyltr/angee-examples
+> cd ~/Work/fyltr/angee-django
 > angee workspace create dev-pr-multi --name fix-issue-123 --start
 > ```
 >
-> Shared slash commands and sub-agents live in `angee-examples/.agents/` and
+> Shared slash commands and sub-agents live in `angee-django/.agents/` and
 > operate on the worktrees materialized by that workspace.
+
+> ## Workspace branch identity
+>
+> In a managed Angee workspace, each materialized git source has a manifest
+> branch, normally `workspace/<name>`. Stay on that branch. To update from
+> `main`, merge/rebase `main` into the workspace branch or run
+> `angee workspace sync-base [<name>]` from the host root or current workspace.
+> Do not switch a
+> workspace worktree to `main`, create a `codex/...` branch inside it, or keep
+> working when `angee workspace status [<name>] --json` reports a source state of
+> `branch-mismatch` or a top-level state of `discrepancy`.
 
 ## What Angee Is
 

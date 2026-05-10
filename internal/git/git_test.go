@@ -58,6 +58,41 @@ func TestPushRemoteResolution(t *testing.T) {
 	}
 }
 
+func TestSyncBaseRefPrefersRemoteForSlashBranchNames(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	repo := filepath.Join(base, "repo")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, "", "clone", remote, repo)
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial")
+	runGit(t, repo, "branch", "-M", "main")
+	runGit(t, repo, "push", "-u", "origin", "main")
+	runGit(t, repo, "switch", "-c", "release/2026-05")
+	mustWriteFile(t, filepath.Join(repo, "release.txt"), "release\n")
+	runGit(t, repo, "add", "release.txt")
+	runGit(t, repo, "commit", "-m", "release branch")
+	runGit(t, repo, "push", "-u", "origin", "release/2026-05")
+	runGit(t, repo, "switch", "main")
+	runGit(t, repo, "branch", "-D", "release/2026-05")
+
+	client := New()
+	if err := client.Fetch(ctx, repo); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	got, err := client.SyncBaseRef(ctx, repo, "release/2026-05")
+	if err != nil {
+		t.Fatalf("SyncBaseRef() error = %v", err)
+	}
+	if got != "origin/release/2026-05" {
+		t.Fatalf("SyncBaseRef() = %q, want origin/release/2026-05", got)
+	}
+}
+
 func pushRemote(t *testing.T, client Client, ctx context.Context, repo string) string {
 	t.Helper()
 	remote, err := client.PushRemote(ctx, repo)

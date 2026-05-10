@@ -82,6 +82,7 @@ angee workspace get <name>
 angee workspace status [name]
 angee workspace git <name>
 angee workspace push <name> [--ref ref]
+angee workspace sync-base [name] [--merge|--rebase]
 angee workspace destroy <name> [--purge]
 
 # Operator

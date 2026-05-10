@@ -129,6 +129,7 @@ func NewServer(config Config) (*Server, error) {
 	mux.Handle("POST /workspaces/{name}/destroy", s.auth(http.HandlerFunc(s.workspaceDestroy)))
 	mux.Handle("GET /workspaces/{name}/git", s.auth(http.HandlerFunc(s.workspaceGit)))
 	mux.Handle("POST /workspaces/{name}/push", s.auth(http.HandlerFunc(s.workspacePush)))
+	mux.Handle("POST /workspaces/{name}/sync-base", s.auth(http.HandlerFunc(s.workspaceSyncBase)))
 	mux.Handle("GET /events", s.auth(http.HandlerFunc(s.events)))
 	mux.Handle("GET /mcp", s.auth(http.HandlerFunc(s.mcp)))
 	s.server = &http.Server{
@@ -566,6 +567,20 @@ func (s *Server) workspacePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	states, err := s.platform.WorkspacePush(r.Context(), r.PathValue("name"), req.Ref)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, states)
+}
+
+func (s *Server) workspaceSyncBase(w http.ResponseWriter, r *http.Request) {
+	req, err := decode[api.WorkspaceSyncBaseRequest](r)
+	if err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+	states, err := s.platform.WorkspaceSyncBase(r.Context(), r.PathValue("name"), req.Method)
 	if err != nil {
 		writeError(w, err)
 		return

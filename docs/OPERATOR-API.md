@@ -82,7 +82,15 @@ POST  /workspaces/{name}/restart
 POST  /workspaces/{name}/destroy?purge=true
 GET   /workspaces/{name}/git
 POST  /workspaces/{name}/push
+POST  /workspaces/{name}/sync-base
 ```
+
+Workspace status is the authoritative branch-identity surface for managed git
+worktrees. Each status source includes the manifest `branch`, actual
+`current_ref`, and `state`; `state: "branch-mismatch"` means the worktree is not
+on its manifest branch, and the workspace top-level state is `discrepancy`.
+`sync-base` updates each workspace branch from its base ref without switching
+branches; body: `{"method":"merge"}` or `{"method":"rebase"}`.
 
 Events and MCP descriptor:
 
@@ -112,4 +120,6 @@ curl -s http://127.0.0.1:9000/graphql \
 ```
 
 The GraphQL schema exposes stack, service, job, source, workspace, log snapshot,
-and mutation fields corresponding to the REST operations.
+and mutation fields corresponding to the REST operations. Workspace source types
+use the same branch-identity fields as REST (`branch`, `currentRef`, `state`),
+and `workspaceSyncBase(name:, method:)` mirrors the REST `sync-base` endpoint.

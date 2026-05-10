@@ -234,6 +234,157 @@ func TestWorkspaceDestroyRefusesUnpushedGitSource(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStatusReportsBranchMismatchAndGuardsMutations(t *testing.T) {
+	ctx := context.Background()
+	platform, workspaceName, workspaceSourcePath, cache := setupGitWorkspace(t)
+
+	runGit(t, workspaceSourcePath, "switch", "-c", "codex/feature-a")
+
+	status, err := platform.WorkspaceStatus(ctx, workspaceName)
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if len(status.Sources) != 1 {
+		t.Fatalf("workspace sources = %#v, want one source", status.Sources)
+	}
+	if status.State != "discrepancy" {
+		t.Fatalf("workspace state = %q, want discrepancy", status.State)
+	}
+	source := status.Sources[0]
+	if source.State != workspaceSourceStateBranchMismatch || source.CurrentRef != "codex/feature-a" || source.Pushed {
+		t.Fatalf("workspace source status = %#v, want branch mismatch on codex/feature-a", source)
+	}
+	if !strings.Contains(source.UnpushedReason, "expected workspace branch \"feature-a\"") {
+		t.Fatalf("branch mismatch reason = %q, want expected branch detail", source.UnpushedReason)
+	}
+
+	if _, err := platform.WorkspacePush(ctx, workspaceName, ""); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
+		t.Fatalf("WorkspacePush() error = %v, want branch mismatch", err)
+	}
+	if err := platform.WorkspaceStart(ctx, workspaceName); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
+		t.Fatalf("WorkspaceStart() error = %v, want branch mismatch", err)
+	}
+	if err := platform.WorkspaceDestroy(ctx, workspaceName, true); err == nil || !strings.Contains(err.Error(), "branch mismatch") {
+		t.Fatalf("WorkspaceDestroy() error = %v, want branch mismatch", err)
+	}
+
+	runGit(t, workspaceSourcePath, "switch", workspaceName)
+	runGit(t, cache, "switch", "-c", "cache-holder")
+	runGit(t, workspaceSourcePath, "switch", "main")
+
+	status, err = platform.WorkspaceStatus(ctx, workspaceName)
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() on main error = %v", err)
+	}
+	source = status.Sources[0]
+	if status.State != "discrepancy" || source.State != workspaceSourceStateBranchMismatch || source.CurrentRef != "main" {
+		t.Fatalf("workspace status on main = %#v source = %#v, want branch mismatch", status, source)
+	}
+}
+
+func TestWorkspaceSyncBaseKeepsWorkspaceBranch(t *testing.T) {
+	ctx := context.Background()
+	platform, workspaceName, workspaceSourcePath, cache := setupGitWorkspace(t)
+
+	mustWriteFile(t, filepath.Join(workspaceSourcePath, "workspace.txt"), "workspace update\n")
+	runGit(t, workspaceSourcePath, "add", "workspace.txt")
+	runGit(t, workspaceSourcePath, "commit", "-m", "workspace update")
+	mustWriteFile(t, filepath.Join(cache, "main.txt"), "main update\n")
+	runGit(t, cache, "add", "main.txt")
+	runGit(t, cache, "commit", "-m", "main update")
+	runGit(t, cache, "push", "fork", "main")
+
+	states, err := platform.WorkspaceSyncBase(ctx, workspaceName, "merge")
+	if err != nil {
+		t.Fatalf("WorkspaceSyncBase() error = %v", err)
+	}
+	if len(states) != 1 || states[0].Slot != "app" || states[0].Branch != workspaceName || states[0].CurrentRef != workspaceName {
+		t.Fatalf("WorkspaceSyncBase() states = %#v, want app still on workspace branch", states)
+	}
+	if states[0].State != "ahead" || states[0].Pushed {
+		t.Fatalf("WorkspaceSyncBase() state = %#v, want ahead and not pushed after local base sync", states[0])
+	}
+	branch := strings.TrimSpace(runGitOutput(t, workspaceSourcePath, "branch", "--show-current"))
+	if branch != workspaceName {
+		t.Fatalf("current branch = %q, want %q", branch, workspaceName)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceSourcePath, "main.txt")); err != nil {
+		t.Fatalf("synced file missing after sync-base: %v", err)
+	}
+
+	status, err := platform.WorkspaceStatus(ctx, workspaceName)
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if status.Sources[0].State == workspaceSourceStateBranchMismatch {
+		t.Fatalf("workspace source status = %#v, sync-base should not switch branches", status.Sources[0])
+	}
+}
+
+func setupGitWorkspace(t *testing.T) (*Platform, string, string, string) {
+	t.Helper()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	cache := filepath.Join(base, "cache")
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	workspaceSourcePath := filepath.Join(root, "workspaces", workspaceName, "app")
+
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, "", "clone", remote, cache)
+	runGit(t, cache, "remote", "rename", "origin", "fork")
+	runGit(t, cache, "config", "user.email", "test@example.com")
+	runGit(t, cache, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(cache, "README.md"), "hello\n")
+	runGit(t, cache, "add", "README.md")
+	runGit(t, cache, "commit", "-m", "initial")
+	runGit(t, cache, "branch", "-M", "main")
+	runGit(t, cache, "push", "-u", "fork", "main")
+
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	runGit(t, cache, "worktree", "add", "-b", workspaceName, workspaceSourcePath, "main")
+	runGit(t, workspaceSourcePath, "config", "user.email", "test@example.com")
+	runGit(t, workspaceSourcePath, "config", "user.name", "Test User")
+
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Sources: map[string]manifest.Source{
+			"app": {
+				Kind:       "git",
+				Repo:       remote,
+				DefaultRef: "main",
+				CachePath:  cache,
+			},
+		},
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {
+				Template: "workspaces/dev-pr",
+				Sources: map[string]manifest.WorkspaceSource{
+					"app": {
+						Source:  "app",
+						Mode:    "worktree",
+						Branch:  workspaceName,
+						Ref:     "main",
+						Subpath: "app",
+					},
+				},
+			},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return platform, workspaceName, workspaceSourcePath, cache
+}
+
 func writeWorkspaceTemplate(t *testing.T, base, sourceRoot string) string {
 	t.Helper()
 	templateRoot := filepath.Join(base, ".templates", "workspaces", "dev-pr")

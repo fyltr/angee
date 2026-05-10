@@ -100,6 +100,7 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 			"path":           &gql.Field{Type: gql.NewNonNull(gql.String)},
 			"exists":         &gql.Field{Type: gql.NewNonNull(gql.Boolean)},
 			"state":          &gql.Field{Type: gql.String},
+			"branch":         &gql.Field{Type: gql.String},
 			"ref":            &gql.Field{Type: gql.String},
 			"currentRef":     &gql.Field{Type: gql.String},
 			"dirty":          &gql.Field{Type: gql.Boolean},
@@ -174,17 +175,18 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 	gitOpsSummaryType := gql.NewObject(gql.ObjectConfig{
 		Name: "GitOpsSummary",
 		Fields: gql.Fields{
-			"sources":    &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"workspaces": &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"worktrees":  &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"clean":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"dirty":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"ahead":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"behind":     &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"diverged":   &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"missing":    &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"error":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
-			"unpushed":   &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"sources":        &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"workspaces":     &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"worktrees":      &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"clean":          &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"dirty":          &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"ahead":          &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"behind":         &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"diverged":       &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"branchMismatch": &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"missing":        &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"error":          &gql.Field{Type: gql.NewNonNull(gql.Int)},
+			"unpushed":       &gql.Field{Type: gql.NewNonNull(gql.Int)},
 		},
 	})
 
@@ -716,6 +718,16 @@ func newGraphQLHandler(s *Server) (http.Handler, error) {
 				},
 				Resolve: func(p gql.ResolveParams) (any, error) {
 					return s.platform.WorkspacePush(p.Context, stringArg(p.Args, "name"), stringArg(p.Args, "ref"))
+				},
+			},
+			"workspaceSyncBase": &gql.Field{
+				Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(sourceStateType))),
+				Args: gql.FieldConfigArgument{
+					"name":   &gql.ArgumentConfig{Type: gql.NewNonNull(gql.String)},
+					"method": &gql.ArgumentConfig{Type: gql.String},
+				},
+				Resolve: func(p gql.ResolveParams) (any, error) {
+					return s.platform.WorkspaceSyncBase(p.Context, stringArg(p.Args, "name"), stringArg(p.Args, "method"))
 				},
 			},
 			"workspaceSourceFetch": workspaceSourceMutation(workspaceSourceStatusType, s.platform.WorkspaceSourceFetch),

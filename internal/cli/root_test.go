@@ -252,6 +252,38 @@ func TestWorkspaceStatusInfersCurrentWorkspace(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSyncBaseInfersCurrentWorkspace(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, ".angee")
+	workspaceName := "feature-a"
+	nested := filepath.Join(root, "workspaces", workspaceName, "angee-go", "internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workspace) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "parent-root",
+		Workspaces: map[string]manifest.Workspace{
+			workspaceName: {Template: "workspaces/dev-pr"},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	t.Chdir(nested)
+
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"workspace", "sync-base", "--merge"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Fatalf("workspace sync-base output = %q, want empty output for workspace without git sources", got)
+	}
+}
+
 func writeStackTemplate(t *testing.T, root string) string {
 	t.Helper()
 	templateRoot := filepath.Join(root, ".templates", "stacks", "dev")

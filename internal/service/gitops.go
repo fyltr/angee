@@ -100,7 +100,7 @@ func gitOpsLinkFromWorkspaceSource(workspace string, source api.WorkspaceSourceS
 
 func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
 	normalized := strings.ToLower(state)
-	if !pushed && (normalized == "dirty" || normalized == "ahead" || normalized == "diverged") {
+	if !pushed && (normalized == "dirty" || normalized == "ahead" || normalized == "diverged" || normalized == workspaceSourceStateBranchMismatch) {
 		summary.Unpushed++
 	}
 	switch normalized {
@@ -114,6 +114,8 @@ func countGitOpsState(summary *api.GitOpsSummary, state string, pushed bool) {
 		summary.Behind++
 	case "diverged":
 		summary.Diverged++
+	case workspaceSourceStateBranchMismatch:
+		summary.BranchMismatch++
 	case "missing":
 		summary.Missing++
 	case "error":
@@ -146,6 +148,9 @@ func (p *Platform) WorkspaceSourcePull(ctx context.Context, workspaceName, slot 
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
 	}
+	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
+		return api.WorkspaceSourceStatus{}, err
+	}
 	client := git.New()
 	dirty, err := client.Dirty(ctx, path)
 	if err != nil {
@@ -167,6 +172,9 @@ func (p *Platform) WorkspaceSourcePush(ctx context.Context, workspaceName, slot,
 	}
 	if source.Kind != "git" {
 		return api.WorkspaceSourceStatus{}, fmt.Errorf("workspace %q source %q is not a git source", workspaceName, slot)
+	}
+	if err := p.ensureWorkspaceGitSourceOnExpectedBranch(ctx, workspaceName, slot, source, wsSource); err != nil {
+		return api.WorkspaceSourceStatus{}, err
 	}
 	client := git.New()
 	dirty, err := client.Dirty(ctx, path)
