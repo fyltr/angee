@@ -259,17 +259,23 @@ func (p *Platform) workspaceStatus(ctx context.Context, name string, workspace m
 }
 
 func (p *Platform) workspaceSourceStatus(ctx context.Context, workspaceName, slot string, wsSource manifest.WorkspaceSource, stack *manifest.Stack) api.WorkspaceSourceStatus {
-	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+	subpath, path, pathErr := p.workspaceSourcePath(workspaceName, slot, wsSource)
 	status := api.WorkspaceSourceStatus{
 		Slot:    slot,
 		Source:  wsSource.Source,
 		Mode:    wsSource.Mode,
 		Branch:  wsSource.Branch,
 		Ref:     wsSource.Ref,
-		Subpath: wsSource.Subpath,
+		Subpath: subpath,
 		Path:    path,
 		State:   "missing",
 		Pushed:  true,
+	}
+	if pathErr != nil {
+		status.State = "error"
+		status.Pushed = false
+		status.Error = pathErr.Error()
+		return status
 	}
 	source, ok := stack.Sources[wsSource.Source]
 	if !ok {
@@ -418,7 +424,10 @@ func (p *Platform) ensureWorkspaceGitSourceOnExpectedBranch(ctx context.Context,
 	if source.Kind != "git" || !workspaceSourceRequiresBranch(wsSource) {
 		return nil
 	}
-	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+	_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+	if err != nil {
+		return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -458,7 +467,10 @@ func (p *Platform) ensureWorkspaceGitSourcesPushed(ctx context.Context, workspac
 		if source.Kind != "git" {
 			continue
 		}
-		path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+		_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+		if err != nil {
+			return fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+		}
 		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -869,7 +881,10 @@ func (p *Platform) WorkspacePush(ctx context.Context, name, ref string) ([]api.S
 		if !ok || source.Kind != "git" {
 			continue
 		}
-		path := filepath.Join(p.root, "workspaces", name, wsSource.Subpath)
+		_, path, err := p.workspaceSourcePath(name, slot, wsSource)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q source %q: %w", name, slot, err)
+		}
 		dirty, err := client.Dirty(ctx, path)
 		if err != nil {
 			return nil, err
@@ -935,7 +950,10 @@ func (p *Platform) WorkspaceSyncBase(ctx context.Context, name, method string) (
 		if !ok || source.Kind != "git" {
 			continue
 		}
-		path := filepath.Join(p.root, "workspaces", name, wsSource.Subpath)
+		_, path, err := p.workspaceSourcePath(name, slot, wsSource)
+		if err != nil {
+			return nil, fmt.Errorf("workspace %q source %q: %w", name, slot, err)
+		}
 		dirty, err := client.Dirty(ctx, path)
 		if err != nil {
 			return nil, err
@@ -1017,7 +1035,9 @@ func sourceStateFromWorkspaceStatus(status api.WorkspaceSourceStatus) api.Source
 
 func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manifest.Stack, workspaceName, workspacePath string, metadata copierx.Metadata, inputs map[string]string, alloc map[string]int) (map[string]manifest.WorkspaceSource, error) {
 	result := map[string]manifest.WorkspaceSource{}
-	for slot, spec := range metadata.Sources {
+	items := []workspaceSourceMaterialization{}
+	for _, slot := range sortedKeys(metadata.Sources) {
+		spec := metadata.Sources[slot]
 		sourceName := spec.Source
 		if sourceName == "" {
 			sourceName = slot
@@ -1050,16 +1070,41 @@ func (p *Platform) materializeWorkspaceSources(ctx context.Context, stack *manif
 		if resolved.Subpath == "" {
 			resolved.Subpath = slot
 		}
-		dest := filepath.Join(workspacePath, resolved.Subpath)
-		if err := p.materializeWorkspaceSource(ctx, sourceName, source, resolved, dest); err != nil {
-			if spec.Optional {
+		resolved.Subpath, err = normalizeWorkspaceSubpath(resolved.Subpath)
+		if err != nil {
+			return nil, fmt.Errorf("workspace source %q subpath: %w", slot, err)
+		}
+		items = append(items, workspaceSourceMaterialization{
+			slot:       slot,
+			sourceName: sourceName,
+			source:     source,
+			resolved:   resolved,
+			optional:   spec.Optional,
+		})
+	}
+	orderedItems, err := orderWorkspaceSourceMaterializations(items)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range orderedItems {
+		dest := filepath.Join(workspacePath, filepath.FromSlash(item.resolved.Subpath))
+		if err := p.materializeWorkspaceSource(ctx, item.sourceName, item.source, item.resolved, dest); err != nil {
+			if item.optional {
 				continue
 			}
 			return nil, err
 		}
-		result[slot] = resolved
+		result[item.slot] = item.resolved
 	}
 	return result, nil
+}
+
+type workspaceSourceMaterialization struct {
+	slot       string
+	sourceName string
+	source     manifest.Source
+	resolved   manifest.WorkspaceSource
+	optional   bool
 }
 
 func resolveWorkspaceTemplateSource(spec copierx.TemplateSource, inputs map[string]string, workspaceName string, alloc map[string]int) (manifest.Source, error) {
@@ -1117,8 +1162,19 @@ func (p *Platform) resolveWorkspaceSource(spec copierx.TemplateSource, sourceNam
 }
 
 func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName string, source manifest.Source, ws manifest.WorkspaceSource, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
-		return nil
+	if info, err := os.Stat(dest); err == nil {
+		if source.Kind != "git" || !info.IsDir() {
+			return fmt.Errorf("workspace source destination %s already exists", dest)
+		}
+		empty, err := isEmptyDir(dest)
+		if err != nil {
+			return err
+		}
+		if !empty {
+			return fmt.Errorf("workspace source destination %s already exists and is not empty", dest)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
@@ -1126,6 +1182,14 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 	switch source.Kind {
 	case "git":
 		if ws.Mode == "worktree" {
+			cachePath := p.sourcePath(sourceName, source)
+			insideDest, err := sameOrNestedPath(dest, cachePath)
+			if err != nil {
+				return err
+			}
+			if insideDest {
+				return fmt.Errorf("workspace source cache path %s cannot be inside destination %s", cachePath, dest)
+			}
 			if err := p.materializeSource(ctx, sourceName, source); err != nil {
 				return err
 			}
@@ -1150,6 +1214,77 @@ func (p *Platform) materializeWorkspaceSource(ctx context.Context, sourceName st
 	default:
 		return fmt.Errorf("workspace source kind %q is not implemented", source.Kind)
 	}
+}
+
+func normalizeWorkspaceSubpath(subpath string) (string, error) {
+	subpath = strings.TrimSpace(subpath)
+	if subpath == "" {
+		return "", fmt.Errorf("is required")
+	}
+	clean := filepath.Clean(filepath.FromSlash(subpath))
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q escapes the workspace root", subpath)
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func (p *Platform) workspaceSourcePath(workspaceName, slot string, wsSource manifest.WorkspaceSource) (string, string, error) {
+	subpath := wsSource.Subpath
+	if subpath == "" {
+		subpath = slot
+	}
+	normalized, err := normalizeWorkspaceSubpath(subpath)
+	if err != nil {
+		return subpath, "", fmt.Errorf("invalid subpath: %w", err)
+	}
+	return normalized, filepath.Join(p.root, "workspaces", workspaceName, filepath.FromSlash(normalized)), nil
+}
+
+func orderWorkspaceSourceMaterializations(items []workspaceSourceMaterialization) ([]workspaceSourceMaterialization, error) {
+	ordered := make([]workspaceSourceMaterialization, 0, len(items))
+	rootCount := 0
+	for _, item := range items {
+		if item.resolved.Subpath == "." {
+			if item.source.Kind != "git" {
+				return nil, fmt.Errorf("workspace source %q uses subpath %q, which is only supported for git sources", item.slot, item.resolved.Subpath)
+			}
+			rootCount++
+			ordered = append(ordered, item)
+		}
+	}
+	if rootCount > 1 {
+		return nil, fmt.Errorf("only one workspace source can use subpath %q", ".")
+	}
+	for _, item := range items {
+		if item.resolved.Subpath != "." {
+			ordered = append(ordered, item)
+		}
+	}
+	return ordered, nil
+}
+
+func isEmptyDir(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
+
+func sameOrNestedPath(parent, child string) (bool, error) {
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return false, err
+	}
+	absChild, err := filepath.Abs(child)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(absParent, absChild)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))), nil
 }
 
 func workspaceLocalSymlinkTarget(sourcePath, dest string) (string, error) {

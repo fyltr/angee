@@ -92,6 +92,243 @@ func TestWorkspaceCreateNoHostStackWithTemplateSourceAndRelativeChain(t *testing
 	}
 }
 
+func TestWorkspaceCreateAllowsGitSourceAtWorkspaceRoot(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	helperRemote := filepath.Join(base, "helper.git")
+	seed := filepath.Join(base, "seed")
+	helperSeed := filepath.Join(base, "helper-seed")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplate(t, base, remote, helperRemote)
+
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, "", "clone", remote, seed)
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	runGit(t, seed, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(seed, "README.md"), "repo readme\n")
+	mustWriteFile(t, filepath.Join(seed, ".gitignore"), ".angee/\n.copier-answers.yml\n.dev-sibling\n")
+	writeRootSourceStackTemplate(t, seed)
+	runGit(t, seed, "add", ".")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, "", "init", "--bare", helperRemote)
+	runGit(t, "", "clone", helperRemote, helperSeed)
+	runGit(t, helperSeed, "config", "user.email", "test@example.com")
+	runGit(t, helperSeed, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(helperSeed, "helper.txt"), "helper\n")
+	runGit(t, helperSeed, "add", ".")
+	runGit(t, helperSeed, "commit", "-m", "initial")
+	runGit(t, helperSeed, "branch", "-M", "main")
+	runGit(t, helperSeed, "push", "-u", "origin", "main")
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ref, err := platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "feature-a",
+		Inputs: map[string]string{
+			"branch": "feature-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("WorkspaceCreate() error = %v", err)
+	}
+	workspacePath := filepath.Join(root, "workspaces", "feature-a")
+	if ref.Path != workspacePath {
+		t.Fatalf("workspace path = %q, want %q", ref.Path, workspacePath)
+	}
+	readme, err := os.ReadFile(filepath.Join(workspacePath, "README.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(workspace README.md) error = %v", err)
+	}
+	if string(readme) != "repo readme\n" {
+		t.Fatalf("workspace README.md = %q, want source checkout content", readme)
+	}
+	if _, err := os.Stat(filepath.Join(workspacePath, ".copier-answers.yml")); err != nil {
+		t.Fatalf("workspace root .copier-answers.yml was not rendered: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspacePath, ".angee", "angee.yaml")); err != nil {
+		t.Fatalf("inner stack manifest was not rendered under .angee: %v", err)
+	}
+	siblingLink := filepath.Join(workspacePath, ".dev-sibling")
+	if _, err := os.Stat(filepath.Join(siblingLink, "helper.txt")); err != nil {
+		t.Fatalf("sibling source was not materialized under root source: %v", err)
+	}
+
+	stack, err := manifest.LoadFile(manifest.Path(root))
+	if err != nil {
+		t.Fatalf("LoadFile(angee.yaml) error = %v", err)
+	}
+	workspace := stack.Workspaces["feature-a"]
+	if workspace.Sources["app"].Subpath != "." {
+		t.Fatalf("workspace source subpath = %q, want .", workspace.Sources["app"].Subpath)
+	}
+	if workspace.Sources["helper"].Subpath != ".dev-sibling" {
+		t.Fatalf("workspace sibling subpath = %q, want .dev-sibling", workspace.Sources["helper"].Subpath)
+	}
+	if workspace.Resolved.ChainRoot != ".angee" {
+		t.Fatalf("chain root = %q, want .angee", workspace.Resolved.ChainRoot)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "branch", "--show-current")); got != "feature-a" {
+		t.Fatalf("workspace git branch = %q, want feature-a", got)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, workspacePath, "status", "--porcelain")); got != "" {
+		t.Fatalf("workspace git status = %q, want clean", got)
+	}
+
+	status, err := platform.WorkspaceStatus(ctx, "feature-a")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if len(status.Sources) != 2 {
+		t.Fatalf("workspace status sources = %#v, want two sources", status.Sources)
+	}
+	foundRoot := false
+	foundSibling := false
+	for _, source := range status.Sources {
+		switch source.Slot {
+		case "app":
+			foundRoot = true
+			if source.Path != workspacePath || source.State != "clean" || source.Dirty {
+				t.Fatalf("workspace root source status = %#v, want clean source at workspace root", source)
+			}
+		case "helper":
+			foundSibling = true
+			if source.Path != siblingLink || source.State != "clean" || source.Dirty {
+				t.Fatalf("workspace sibling source status = %#v, want clean git source at sibling path", source)
+			}
+		}
+	}
+	if !foundRoot || !foundSibling {
+		t.Fatalf("workspace sources = %#v, want app and helper", status.Sources)
+	}
+}
+
+func TestOrderWorkspaceSourceMaterializationsRejectsImpossibleRootLayouts(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []workspaceSourceMaterialization
+		want  string
+	}{
+		{
+			name: "root local source",
+			items: []workspaceSourceMaterialization{
+				{slot: "app", source: manifest.Source{Kind: "local"}, resolved: manifest.WorkspaceSource{Subpath: "."}},
+			},
+			want: "only supported for git sources",
+		},
+		{
+			name: "multiple roots",
+			items: []workspaceSourceMaterialization{
+				{slot: "app", source: manifest.Source{Kind: "git"}, resolved: manifest.WorkspaceSource{Subpath: "."}},
+				{slot: "docs", source: manifest.Source{Kind: "git"}, resolved: manifest.WorkspaceSource{Subpath: "."}},
+			},
+			want: "only one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := orderWorkspaceSourceMaterializations(tt.items)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("orderWorkspaceSourceMaterializations() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	ordered, err := orderWorkspaceSourceMaterializations([]workspaceSourceMaterialization{
+		{slot: "helper", source: manifest.Source{Kind: "local"}, resolved: manifest.WorkspaceSource{Subpath: ".dev-sibling"}},
+		{slot: "app", source: manifest.Source{Kind: "git"}, resolved: manifest.WorkspaceSource{Subpath: "."}},
+	})
+	if err != nil {
+		t.Fatalf("orderWorkspaceSourceMaterializations(root+sibling) error = %v", err)
+	}
+	if len(ordered) != 2 || ordered[0].slot != "app" || ordered[1].slot != "helper" {
+		t.Fatalf("ordered materializations = %#v, want root source first", ordered)
+	}
+	if _, err := normalizeWorkspaceSubpath("../outside"); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("normalizeWorkspaceSubpath(../outside) error = %v, want escape error", err)
+	}
+}
+
+func TestWorkspaceSourceStatusRejectsPersistedEscapingSubpath(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), ".angee")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root) error = %v", err)
+	}
+	stack := &manifest.Stack{
+		Version: manifest.VersionCurrent,
+		Kind:    manifest.KindStack,
+		Name:    "test",
+		Sources: map[string]manifest.Source{
+			"app": {Kind: "git", Repo: "https://example.invalid/app.git"},
+		},
+		Workspaces: map[string]manifest.Workspace{
+			"feature-a": {
+				Template: "workspaces/dev-pr",
+				Sources: map[string]manifest.WorkspaceSource{
+					"app": {Source: "app", Mode: "worktree", Branch: "feature-a", Subpath: "../outside"},
+				},
+			},
+		},
+	}
+	if err := manifest.SaveFile(manifest.Path(root), stack); err != nil {
+		t.Fatalf("SaveFile(angee.yaml) error = %v", err)
+	}
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	status, err := platform.WorkspaceStatus(ctx, "feature-a")
+	if err != nil {
+		t.Fatalf("WorkspaceStatus() error = %v", err)
+	}
+	if len(status.Sources) != 1 || status.Sources[0].State != "error" || !strings.Contains(status.Sources[0].Error, "escapes") {
+		t.Fatalf("workspace source status = %#v, want escaping subpath error", status.Sources)
+	}
+	if err := platform.WorkspaceStart(ctx, "feature-a"); err == nil || !strings.Contains(err.Error(), "escapes") {
+		t.Fatalf("WorkspaceStart() error = %v, want escaping subpath error", err)
+	}
+}
+
+func TestWorkspaceCreateRejectsRootWorktreeCacheInsideDestination(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.git")
+	seed := filepath.Join(base, "seed")
+	root := filepath.Join(base, ".angee")
+	workspaceTemplate := writeRootGitWorkspaceTemplateWithCachePath(t, base, remote, "workspaces/feature-a/.cache/app")
+
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, "", "clone", remote, seed)
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	runGit(t, seed, "config", "user.name", "Test User")
+	mustWriteFile(t, filepath.Join(seed, "README.md"), "repo readme\n")
+	runGit(t, seed, "add", ".")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+
+	platform, err := New(root)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = platform.WorkspaceCreate(ctx, api.WorkspaceCreateRequest{
+		Template: workspaceTemplate,
+		Name:     "feature-a",
+		Inputs: map[string]string{
+			"branch": "feature-a",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cache path") {
+		t.Fatalf("WorkspaceCreate() error = %v, want cache path overlap error", err)
+	}
+}
+
 func TestWorkspaceStatusIncludesRuntimeFacts(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".angee")
 	if err := os.MkdirAll(filepath.Join(root, "workspaces", "feature-storage"), 0o755); err != nil {
@@ -558,6 +795,116 @@ name: chained
 `
 	if err := os.WriteFile(filepath.Join(manifestDir, "angee.yaml.jinja"), []byte(manifestYAML), 0o644); err != nil {
 		t.Fatalf("WriteFile(angee.yaml.jinja) error = %v", err)
+	}
+}
+
+func writeRootGitWorkspaceTemplate(t *testing.T, base, repo, helperRepo string) string {
+	t.Helper()
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "root-pr")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root workspace template) error = %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: root-pr
+  inputs:
+    branch:
+      type: str
+      default: feature-a
+  sources:
+    app:
+      kind: git
+      repo: ` + repo + `
+      default_ref: main
+      mode: worktree
+      branch: "${inputs.branch}"
+      ref: main
+      subpath: .
+    helper:
+      kind: git
+      repo: ` + helperRepo + `
+      default_ref: main
+      mode: worktree
+      branch: "${inputs.branch}-helper"
+      ref: main
+      subpath: .dev-sibling
+  chain_root: .angee
+  chain:
+    - template: .templates/stacks/dev
+      root: .angee
+branch:
+  type: str
+  default: feature-a
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(root workspace copier.yml) error = %v", err)
+	}
+	return templateRoot
+}
+
+func writeRootGitWorkspaceTemplateWithCachePath(t *testing.T, base, repo, cachePath string) string {
+	t.Helper()
+	templateRoot := filepath.Join(base, ".templates", "workspaces", "root-cache")
+	templateDir := filepath.Join(templateRoot, "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root cache workspace template) error = %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: workspace
+  name: root-cache
+  inputs:
+    branch:
+      type: str
+      default: feature-a
+  sources:
+    app:
+      kind: git
+      repo: ` + repo + `
+      default_ref: main
+      cache_path: ` + cachePath + `
+      mode: worktree
+      branch: "${inputs.branch}"
+      ref: main
+      subpath: .
+branch:
+  type: str
+  default: feature-a
+`
+	if err := os.WriteFile(filepath.Join(templateRoot, "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(root cache workspace copier.yml) error = %v", err)
+	}
+	return templateRoot
+}
+
+func writeRootSourceStackTemplate(t *testing.T, sourceRoot string) {
+	t.Helper()
+	templateDir := filepath.Join(sourceRoot, ".templates", "stacks", "dev", "template")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(root source stack template) error = %v", err)
+	}
+	copierYAML := `_subdirectory: template
+_templates_suffix: .jinja
+_answers_file: .copier-answers.yml
+_angee:
+  kind: stack
+  name: dev
+`
+	if err := os.WriteFile(filepath.Join(sourceRoot, ".templates", "stacks", "dev", "copier.yml"), []byte(copierYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(root source stack copier.yml) error = %v", err)
+	}
+	manifestYAML := `version: 1
+kind: stack
+name: root-source-dev
+`
+	if err := os.WriteFile(filepath.Join(templateDir, "angee.yaml.jinja"), []byte(manifestYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile(root source stack angee.yaml.jinja) error = %v", err)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/fyltr/angee/api"
@@ -229,6 +228,9 @@ func (p *Platform) workspaceSourceTarget(ctx context.Context, workspaceName, slo
 	if !ok {
 		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", &NotFoundError{Kind: "source", Name: wsSource.Source}
 	}
-	path := filepath.Join(p.root, "workspaces", workspaceName, wsSource.Subpath)
+	_, path, err := p.workspaceSourcePath(workspaceName, slot, wsSource)
+	if err != nil {
+		return nil, manifest.WorkspaceSource{}, manifest.Source{}, "", fmt.Errorf("workspace %q source %q: %w", workspaceName, slot, err)
+	}
 	return stack, wsSource, source, path, nil
 }
