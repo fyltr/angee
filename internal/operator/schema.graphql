@@ -1,0 +1,258 @@
+scalar JSON
+
+type KeyValue {
+  key: String!
+  value: String!
+}
+
+type ServiceState {
+  name: String!
+  runtime: String!
+  status: String!
+}
+
+type JobState {
+  name: String!
+  runtime: String!
+}
+
+type WorkspaceRef {
+  name: String!
+  path: String!
+  template: String!
+  ttl: String
+  ttlExpiresAt: String
+}
+
+type SourceState {
+  name: String!
+  slot: String
+  kind: String!
+  path: String!
+  exists: Boolean!
+  state: String
+  branch: String
+  ref: String
+  currentRef: String
+  dirty: Boolean
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean
+  unpushedReason: String
+  error: String
+}
+
+type WorkspaceSourceStatus {
+  slot: String!
+  source: String!
+  kind: String!
+  mode: String
+  branch: String
+  ref: String
+  subpath: String
+  path: String!
+  exists: Boolean!
+  state: String!
+  currentRef: String
+  dirty: Boolean!
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean!
+  unpushedReason: String
+  error: String
+}
+
+type WorkspaceMountRef {
+  kind: String!
+  name: String!
+  field: String!
+  value: String!
+}
+
+type GitOpsLink {
+  id: String!
+  source: String!
+  workspace: String!
+  slot: String!
+  kind: String!
+  mode: String
+  branch: String
+  ref: String
+  path: String!
+  exists: Boolean!
+  state: String!
+  currentRef: String
+  dirty: Boolean!
+  upstream: String
+  ahead: Int
+  behind: Int
+  pushed: Boolean!
+  unpushedReason: String
+  error: String
+}
+
+type GitOpsSummary {
+  sources: Int!
+  workspaces: Int!
+  worktrees: Int!
+  clean: Int!
+  dirty: Int!
+  ahead: Int!
+  behind: Int!
+  diverged: Int!
+  branchMismatch: Int!
+  missing: Int!
+  error: Int!
+  unpushed: Int!
+}
+
+type StackStatus {
+  root: String!
+  name: String!
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  workspaces: [WorkspaceRef!]!
+}
+
+type WorkspaceStatus {
+  name: String!
+  path: String!
+  exists: Boolean!
+  state: String!
+  error: String
+  template: String!
+  inputs: JSON
+  sources: [WorkspaceSourceStatus!]!
+  chain: [String!]!
+  chainRoot: String
+  lifecycle: String
+  allocations: JSON
+  persistPaths: JSON
+  ttl: String
+  ttlExpiresAt: String
+  expired: Boolean!
+  mountedBy: [WorkspaceMountRef!]!
+  innerStack: StackStatus
+  innerError: String
+}
+
+type GitOpsTopology {
+  root: String!
+  name: String!
+  sources: [SourceState!]!
+  workspaces: [WorkspaceStatus!]!
+  links: [GitOpsLink!]!
+  summary: GitOpsSummary!
+}
+
+type CompiledStack {
+  compose: JSON
+  processCompose: JSON
+  secretEnvVars: [KeyValue!]!
+}
+
+type MutationResult {
+  status: String!
+  name: String
+  message: String
+}
+
+type StackInitResult {
+  status: String!
+  template: String!
+  root: String!
+}
+
+input KeyValueInput {
+  key: String!
+  value: String!
+}
+
+input StackInitInput {
+  template: String!
+  path: String
+  inputs: [KeyValueInput!]
+  force: Boolean
+}
+
+input StackRuntimeInput {
+  services: [String!]
+  build: Boolean
+}
+
+input ServiceInput {
+  name: String
+  runtime: String
+  image: String
+  command: [String!]
+  mounts: [String!]
+  env: [KeyValueInput!]
+  ports: [String!]
+  workdir: String
+  start: Boolean
+}
+
+input WorkspaceCreateInput {
+  template: String!
+  name: String
+  inputs: [KeyValueInput!]
+  ttl: String
+  start: Boolean
+}
+
+input WorkspaceUpdateInput {
+  inputs: [KeyValueInput!]
+  ttl: String
+}
+
+type Query {
+  health: MutationResult
+  stackStatus: StackStatus
+  services: [ServiceState!]!
+  jobs: [JobState!]!
+  sources: [SourceState!]!
+  source(name: String!): SourceState
+  workspaces: [WorkspaceRef!]!
+  workspace(name: String!): WorkspaceRef
+  workspaceStatus(name: String!): WorkspaceStatus
+  workspaceGit(name: String!): [SourceState!]!
+  gitOpsTopology: GitOpsTopology
+  stackLogs(services: [String!], limit: Int): String!
+  serviceLogs(name: String!, limit: Int): String!
+  workspaceLogs(name: String!, limit: Int): String!
+  mcpDescriptor: JSON
+}
+
+type Mutation {
+  stackInit(input: StackInitInput!): StackInitResult
+  stackUpdate: MutationResult
+  stackPrepare: CompiledStack
+  stackBuild(input: StackRuntimeInput): MutationResult
+  stackUp(input: StackRuntimeInput): MutationResult
+  stackDev(input: StackRuntimeInput): MutationResult
+  stackDown: MutationResult
+  stackDestroy(purge: Boolean): MutationResult
+  jobRun(name: String!, inputs: [KeyValueInput!]): String!
+  serviceInit(input: ServiceInput!): MutationResult
+  serviceUpdate(name: String!, input: ServiceInput!): MutationResult
+  serviceStart(name: String!): MutationResult
+  serviceStop(name: String!): MutationResult
+  serviceRestart(name: String!): MutationResult
+  serviceDestroy(name: String!): MutationResult
+  sourceFetch(name: String!): SourceState
+  sourcePull(name: String!): SourceState
+  sourcePush(name: String!, ref: String): SourceState
+  workspaceCreate(input: WorkspaceCreateInput!): WorkspaceRef
+  workspaceUpdate(name: String!, input: WorkspaceUpdateInput!): WorkspaceRef
+  workspaceStart(name: String!): MutationResult
+  workspaceStop(name: String!): MutationResult
+  workspaceRestart(name: String!): MutationResult
+  workspaceDestroy(name: String!, purge: Boolean): MutationResult
+  workspacePush(name: String!, ref: String): [SourceState!]!
+  workspaceSyncBase(name: String!, method: String): [SourceState!]!
+  workspaceSourceFetch(workspace: String!, slot: String!): WorkspaceSourceStatus
+  workspaceSourcePull(workspace: String!, slot: String!): WorkspaceSourceStatus
+  workspaceSourcePush(workspace: String!, slot: String!, ref: String): WorkspaceSourceStatus
+}

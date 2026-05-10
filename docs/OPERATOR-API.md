@@ -126,3 +126,6 @@ The GraphQL schema exposes stack, service, job, source, workspace, log snapshot,
 and mutation fields corresponding to the REST operations. Workspace source types
 use the same branch-identity fields as REST (`branch`, `currentRef`, `state`),
 and `workspaceSyncBase(name:, method:)` mirrors the REST `sync-base` endpoint.
+
+The schema source lives at `internal/operator/schema.graphql`; generated gqlgen
+runtime files live under `internal/operator/gql/`.

@@ -13,6 +13,8 @@ Requirements:
 make build
 make build-cli
 make build-operator
+make generate
+make check-generated
 make test
 make fmt
 make vet
@@ -26,6 +28,10 @@ make clean
 ```sh
 go test -v -race ./...
 ```
+
+`make generate` refreshes gqlgen output for the operator GraphQL schema.
+`make check-generated` runs generation and fails if `internal/operator/gql/`
+is not committed fresh.
 
 `make install` builds both binaries and runs `scripts/install.sh` with
 `ANGEE_DIST_DIR` pointing at this checkout's `dist/`.
@@ -55,6 +61,7 @@ go test -v -race ./...
 ```sh
 go test ./...
 go test -race ./...
+make check-generated
 make build
 ```
 

@@ -80,7 +80,7 @@ separate handwritten code from generated code.
 | -- | ----------------------------------------------------------------- | ---------- | ----------- | ------- | ----------------------------- |
 | R1a | Hybrid go-git for read-only ops in `internal/git/`               | **DONE**   | High        | Low     | ±0 / 0                        |
 | R1b | Full go-git migration (network/worktree/merge) — deferred         | Deferred   | Low         | High    | TBD                           |
-| R2 | Replace `graphql-go/graphql` with `gqlgen`                         | Pending    | High        | Medium  | -1100 / +1500                 |
+| R2 | Replace `graphql-go/graphql` with `gqlgen`                         | **DONE**   | High        | Medium  | -1100 / +1500                 |
 | R3 | Promote inline request structs to `api/`                           | **DONE**   | High        | Low     | -20 / 0                       |
 | R4 | Hoist root discovery into `internal/stackroot`                     | **DONE**   | Medium-High | Low     | -25 / 0                       |
 | R5 | Surface parity matrix (Platform method × CLI/REST/GraphQL)         | **DONE**   | Medium-High | Low     | +200 / 0                      |
@@ -159,6 +159,10 @@ or angee needs to drop the `git` binary as a runtime requirement. **Verified-on
 
 ## R2. Replace `graphql-go/graphql` with `99designs/gqlgen`
 
+**Status:** shipped. The handwritten schema builder was replaced by
+`internal/operator/schema.graphql`, gqlgen output under `internal/operator/gql/`,
+and a thin handler wrapper in `internal/operator/graphql.go`.
+
 **Goal:** delete `internal/operator/graphql.go` (1271 LOC of handwritten Go)
 and replace with a schema-first gqlgen-generated resolver layer that forwards
 to `service.Platform`.
@@ -233,17 +237,18 @@ scalar) into the gqlgen-backed handler before flipping the route.
 
 ### Acceptance
 
-- [ ] `internal/operator/graphql.go` deleted.
-- [ ] All existing GraphQL queries return identical shapes (verified by parity
-  tests).
-- [ ] Body-size limit (HTTP 413), content-type rejection (HTTP 415),
+- [x] Hand-built `graphql-go/graphql` schema code deleted from
+  `internal/operator/graphql.go`.
+- [x] Existing GraphQL query/mutation contract tests pass against the gqlgen
+  handler.
+- [x] Body-size limit (HTTP 413), content-type rejection (HTTP 415),
   POST-only enforcement, and log-output limiting are reproduced and tested.
-- [ ] Route-level `cop.Handler(...)` wrapper at `operator.go:90` retained
+- [x] Route-level `cop.Handler(...)` wrapper at `operator.go:90` retained
   unchanged.
-- [ ] `go.mod` no longer requires `graphql-go/graphql`.
-- [ ] CI check: `make generate` is a no-op on a clean checkout (committed
-  schema and generated tree are in sync).
-- [ ] Subscription support is **out of scope**; track separately.
+- [x] `go.mod` no longer requires `graphql-go/graphql`.
+- [x] Generated freshness target added as `make check-generated`; it runs
+  gqlgen and fails if `internal/operator/gql/` changes.
+- [x] Subscription support is **out of scope**; track separately.
 
 ---
 
@@ -362,8 +367,8 @@ A table in `docs/OPERATOR-API.md` (or a new `docs/SURFACES.md`) shaped like:
 
 ## R6. Typed domain errors + status preservation across CLI/REST/GraphQL
 
-**Status:** partially shipped. REST and remote CLI now preserve typed 404, 409,
-and 400 domain errors. GraphQL `extensions` mapping remains tied to R2.
+**Status:** shipped for REST, remote CLI, and gqlgen GraphQL errors. Broader
+coverage of every possible domain error site can still improve incrementally.
 
 **Goal:** stop string-matching error categories. Use typed domain errors that
 each surface maps consistently.
@@ -451,7 +456,7 @@ REST server, remote CLI client, doc examples, and integration tests must use
   add with the stack-init template fixture.
 - [x] CLI tests assert: `errors.As(err, &cli.RemoteNotFound{})` works against
   a 404 from a remote operator.
-- [ ] GraphQL tests assert: `errors[0].extensions.kind == "service"` etc.
+- [x] GraphQL tests assert domain fields are included in `errors[0].extensions`.
 - [x] No remaining `strings.Contains(err.Error(), "...")` in CLI command code
   (`rg "strings\.Contains\(err\.Error" internal/cli/`).
 

@@ -1,4 +1,4 @@
-.PHONY: init build build-cli build-operator test fmt vet check clean
+.PHONY: init build build-cli build-operator generate check-generated test fmt vet check clean
 
 VERSION ?= dev
 LDFLAGS := -s -w -X github.com/fyltr/angee/internal/cli.Version=$(VERSION)
@@ -13,6 +13,12 @@ build-cli:
 
 build-operator:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o dist/angee-operator ./cmd/operator
+
+generate:
+	go generate ./internal/operator
+
+check-generated: generate
+	git diff --exit-code -- internal/operator/gql
 
 test:
 	go test -v -race ./...

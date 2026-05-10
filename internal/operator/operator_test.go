@@ -396,6 +396,40 @@ services:
 	}
 }
 
+func TestGraphQLErrorsIncludeDomainExtensions(t *testing.T) {
+	root := t.TempDir()
+	writeTestStack(t, root, `version: 1
+kind: stack
+name: test
+services:
+  api:
+    runtime: container
+    image: nginx:latest
+`)
+	server, err := NewServer(Config{Root: root, Bind: "127.0.0.1", Port: 9000})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp := doGraphQL(t, server, map[string]any{
+		"query": `{ workspace(name: "missing") { name } }`,
+	})
+	if len(resp.Errors) != 1 {
+		t.Fatalf("GraphQL errors = %#v, want one domain error", resp.Errors)
+	}
+	errObj, ok := resp.Errors[0].(map[string]any)
+	if !ok {
+		t.Fatalf("GraphQL error = %#v, want object", resp.Errors[0])
+	}
+	extensions, ok := errObj["extensions"].(map[string]any)
+	if !ok {
+		t.Fatalf("GraphQL error extensions = %#v, want object", errObj["extensions"])
+	}
+	if extensions["kind"] != "workspace" || extensions["name"] != "missing" {
+		t.Fatalf("GraphQL error extensions = %#v, want workspace missing", extensions)
+	}
+}
+
 func TestGraphQLServiceInit(t *testing.T) {
 	root := t.TempDir()
 	writeTestStack(t, root, `version: 1
