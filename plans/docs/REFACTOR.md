@@ -121,9 +121,10 @@ Implementation changes:
   `stop`, `restart`, and `logs` all pass `--address 127.0.0.1 --port
   <process_compose_port>`; `angee workspace start|stop|restart|logs` must use
   the rendered inner stack port, never implicit `8080`.
-- Fix workspace data paths: add a stack input for `data_root`; for workspaces,
-  render it as absolute `<workspace>/.angee/data`; use that for `ANGEE_DATA` and
-  Playwright `--user-data-dir`.
+- Fix workspace Playwright profile paths: keep Django `ANGEE_DATA` on the
+  stack template's existing `.angee/data` convention, and pass an explicit
+  workspace-rooted Playwright `--user-data-dir` so browser state lives under
+  `<workspace>/.angee/data/chrome`.
 - Fix status authority: replace or fallback the go-git read-only calls used by
   workspace status/guards with native git CLI calls for worktrees;
   `angee workspace status --json` must report `branch-mismatch` only when
@@ -162,9 +163,9 @@ Progress in this session:
 - The `angee-django` dev stack template now renders
   `ports.process_compose.value`, defaults root stacks to `8080`, and receives
   `${alloc.custom}` from `dev-pr` and `dev-pr-multi` workspace templates.
-- The dev stack now accepts `data_root`; workspace templates render it as the
-  absolute `${workspace.path}/.angee/data` path and use it for `ANGEE_DATA` plus
-  the Playwright `--user-data-dir`.
+- The dev stack now accepts a `playwright_user_data_dir`; workspace templates
+  render it as absolute `${workspace.path}/.angee/data/chrome`, while Django
+  `ANGEE_DATA` remains `{{ ANGEE_ROOT }}/data`.
 - The application asset loader now adopts an existing target row when exactly
   one matching unique field exists and creates the missing ledger row instead
   of attempting a duplicate insert.
