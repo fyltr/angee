@@ -143,6 +143,52 @@ func TestOperatorHTTPErrorPreservesStatusAndFields(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAliasWithoutSubcommandShowsWorkspaceHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"ws"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Manage workspaces") || !strings.Contains(output, "angee workspace [command]") {
+		t.Fatalf("workspace alias output = %q, want workspace help", output)
+	}
+}
+
+func TestListAliasesShowCommandHelp(t *testing.T) {
+	cases := [][]string{
+		{"service", "ls", "--help"},
+		{"job", "ls", "--help"},
+		{"source", "ls", "--help"},
+		{"workspace", "ls", "--help"},
+	}
+	for _, args := range cases {
+		var stdout, stderr bytes.Buffer
+		cmd := NewRoot(&stdout, &stderr)
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+		if got := stdout.String(); !strings.Contains(got, "Aliases:") || !strings.Contains(got, "ls") {
+			t.Fatalf("help for %v = %q, want ls alias", args, got)
+		}
+	}
+}
+
+func TestWorkspaceCreateRequiresTemplateFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := NewRoot(&stdout, &stderr)
+	cmd.SetArgs([]string{"workspace", "create", "feature-a"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("Execute() error is nil")
+	}
+	if got := err.Error(); got != "--template is required" {
+		t.Fatalf("workspace create error = %q, want --template requirement", got)
+	}
+}
+
 func TestStatusUsesOperatorURLFlag(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,9 +272,9 @@ func TestWorkspaceCreateUsesDotAngeeForTemplatesDirectory(t *testing.T) {
 	cmd.SetArgs([]string{
 		"workspace",
 		"create",
-		"dev-pr",
-		"--name",
 		"feature-a",
+		"--template",
+		"dev-pr",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)

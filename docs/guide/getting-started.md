@@ -66,7 +66,7 @@ Host that ships a `dev` Stack template is
 
 ```sh
 # Develop a feature in an isolated Workspace
-angee workspace create dev-pr --name fix-issue-123 --start
+angee workspace create fix-issue-123 --template dev-pr --start
 angee workspace status fix-issue-123
 
 # Iterate. Each Source is a git worktree on workspace/fix-issue-123.

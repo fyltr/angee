@@ -433,9 +433,10 @@ func jobCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *
 
 func jobListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List jobs",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List jobs",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -571,9 +572,10 @@ func serviceDestroyCommand(stdout io.Writer, root, operatorURL *string) *cobra.C
 
 func serviceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List services",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List services",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -752,9 +754,10 @@ func localPlatformForRoot(root, operatorURL *string, resolveControlRoot bool) (p
 func sourceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	cmd := &cobra.Command{Use: "source", Short: "Manage sources"}
 	cmd.AddCommand(&cobra.Command{
-		Use:   "list",
-		Short: "List sources",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List sources",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {
@@ -848,7 +851,7 @@ func sourcePushCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *
 }
 
 func workspaceCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
-	cmd := &cobra.Command{Use: "workspace", Short: "Manage workspaces"}
+	cmd := &cobra.Command{Use: "workspace", Aliases: []string{"ws"}, Short: "Manage workspaces"}
 	cmd.AddCommand(workspaceCreateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceUpdateCommand(stdout, root, operatorURL, jsonOutput))
 	cmd.AddCommand(workspaceListCommand(stdout, root, operatorURL, jsonOutput))
@@ -1047,11 +1050,14 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 	var req api.WorkspaceCreateRequest
 	var inputs []string
 	cmd := &cobra.Command{
-		Use:   "create <template>",
+		Use:   "create <name> --template <template>",
 		Short: "Create a workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req.Template = args[0]
+			req.Name = args[0]
+			if req.Template == "" {
+				return fmt.Errorf("--template is required")
+			}
 			parsedInputs, err := parseKeyValues(inputs)
 			if err != nil {
 				return err
@@ -1073,7 +1079,7 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 		},
 	}
 	cmd.Flags().StringArrayVar(&inputs, "input", nil, "template input K=V")
-	cmd.Flags().StringVar(&req.Name, "name", "", "workspace name")
+	cmd.Flags().StringVarP(&req.Template, "template", "t", "", "template ref, URL, or path")
 	cmd.Flags().StringVar(&req.TTL, "ttl", "", "workspace TTL")
 	cmd.Flags().BoolVar(&req.Start, "start", false, "start workspace after creating it")
 	return cmd
@@ -1081,9 +1087,10 @@ func workspaceCreateCommand(stdout io.Writer, root, operatorURL *string, jsonOut
 
 func workspaceListCommand(stdout io.Writer, root, operatorURL *string, jsonOutput *bool) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List workspaces",
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List workspaces",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			platform, err := localPlatform(root, operatorURL)
 			if err != nil {

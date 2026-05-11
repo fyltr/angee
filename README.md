@@ -66,18 +66,18 @@ angee logs [service...] [--follow]
 angee service init <name> [--runtime container|local] [--image image] [--command arg ...]
 angee service update <name>
 angee service destroy <name> [--stop=false]
-angee service list
-angee job list
+angee service list  # or: angee service ls
+angee job list      # or: angee job ls
 angee job run <name> [--input key=value ...]
 
 # Sources and workspaces
-angee source list
+angee source list   # or: angee source ls
 angee source fetch <name>
 angee source status <name>
 angee source pull <name>
 angee source push <name> [--ref ref]
-angee workspace create <template> [--name name] [--ttl duration] [--input key=value ...] [--start]
-angee workspace list
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--start]
+angee workspace list  # or: angee ws ls
 angee workspace get <name>
 angee workspace status [name]
 angee workspace git <name>

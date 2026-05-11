@@ -52,7 +52,7 @@ and local-process services. Runtime actions are routed by each service's
 angee service init <name> [flags]
 angee service update <name> [flags]
 angee service destroy <name> [--stop=false]
-angee service list
+angee service list  # alias: ls
 angee service start <service>...
 angee service stop <service>...
 angee service restart <service>...
@@ -78,7 +78,7 @@ If `--runtime` is omitted, `--image` creates a container service and
 ## Jobs
 
 ```sh
-angee job list
+angee job list  # alias: ls
 angee job run <name> [--input key=value ...]
 ```
 
@@ -87,7 +87,7 @@ angee job run <name> [--input key=value ...]
 ## Sources
 
 ```sh
-angee source list
+angee source list  # alias: ls
 angee source fetch <name>
 angee source status <name>
 angee source pull <name>
@@ -99,9 +99,9 @@ Implemented source materialization is `git` and `local`.
 ## Workspaces
 
 ```sh
-angee workspace create <template> [--name name] [--ttl duration] [--input key=value ...] [--start]
+angee workspace create <name> --template <template> [--ttl duration] [--input key=value ...] [--start]
 angee workspace update <name> [--ttl duration] [--input key=value ...]
-angee workspace list
+angee workspace list  # alias: ls
 angee workspace get <name>
 angee workspace status [name]
 angee workspace logs <name> [--follow]
@@ -114,6 +114,9 @@ angee workspace sync-base [name] [--merge|--rebase]
 angee workspace open <name> [--editor vscode|idea|gh-desktop]
 angee workspace destroy <name> [--purge]
 ```
+
+`angee ws` is an alias for `angee workspace`, so `angee ws ls` and
+`angee ws status <name>` are equivalent to their long forms.
 
 Workspaces are rendered from Copier templates with `_angee` metadata. A
 workspace can also render and control an inner stack when the template declares

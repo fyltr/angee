@@ -33,7 +33,8 @@ _angee:
 ```
 
 `angee stack init <template>` resolves stack templates.
-`angee workspace create <template>` resolves workspace templates.
+`angee workspace create <name> --template <template>` resolves workspace
+templates.
 
 ## Local Resolution
 
@@ -67,7 +68,7 @@ template path.
 
 ```sh
 angee stack init https://github.com/example/templates/tree/main/.templates/stacks/dev
-angee workspace create https://github.com/example/templates/tree/main/.templates/workspaces/pr
+angee workspace create fix-issue-123 --template https://github.com/example/templates/tree/main/.templates/workspaces/pr
 ```
 
 The resolver clones the repository into the user cache, checks out the

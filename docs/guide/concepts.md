@@ -95,8 +95,9 @@ that produces a working Django + GraphQL + React application:
 
 `angee-django` ships its own Stack and Workspace Copier templates under
 `templates/stacks/dev/` and `templates/workspaces/dev-pr/` — those
-templates are what `angee init --dev` and `angee workspace create dev-pr`
-render when you work on a Django consumer.
+templates are what `angee init --dev` and
+`angee workspace create <name> --template dev-pr` render when you work on a
+Django consumer.
 
 Other Hosts (a Node service, a Go API, a static site, anything that runs
 in a container or as a local process) plug in the same way: ship a Stack
@@ -109,7 +110,7 @@ Putting the pieces together, a typical loop looks like this:
 
 1. **Declare Sources.** Your app repos go into `angee.yaml` under
    `sources:`. Angee fetches them into a shared cache.
-2. **Render a Workspace.** `angee workspace create dev-pr --name fix-issue-123`
+2. **Render a Workspace.** `angee workspace create fix-issue-123 --template dev-pr`
    renders a Copier template, materializes each Source as a worktree on
    `workspace/fix-issue-123`, allocates ports from the configured pool,
    and chains an inner Stack template so you have a runnable environment
