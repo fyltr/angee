@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/fyltr/angee/api"
@@ -143,12 +142,12 @@ func NewServer(config Config) (*Server, error) {
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	// Register SIGHUP before starting the listener so a hangup arriving in
+	// Register SIGINT before starting the listener so a Ctrl-C arriving in
 	// the brief startup window isn't delivered with its default disposition
 	// (process termination).
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
-	defer signal.Stop(hup)
+	sigint := make(chan os.Signal, 1)
+	signal.Notify(sigint, os.Interrupt)
+	defer signal.Stop(sigint)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -163,10 +162,22 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	var tearDown bool
 	select {
 	case <-ctx.Done():
-	case <-hup:
+	case <-sigint:
 		tearDown = true
 	case err := <-errCh:
 		return err
+	}
+
+	// If the parent ctx (e.g. `angee operator` via cli/root.go) also cancels
+	// on SIGINT, the select above may have woken on ctx.Done() while SIGINT
+	// was simultaneously delivered to our own channel. Drain to make the
+	// teardown decision deterministic.
+	if !tearDown {
+		select {
+		case <-sigint:
+			tearDown = true
+		default:
+		}
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -182,7 +193,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 }
 
 // tearDownStack brings the local stack down when the operator receives
-// SIGHUP. Errors are logged but do not fail the operator's exit — by the
+// SIGINT. Errors are logged but do not fail the operator's exit — by the
 // time we get here the HTTP server is already closed and we want shutdown
 // to make best-effort progress. The fresh background context is intentional:
 // we want teardown to have its own deadline rather than inheriting one that
@@ -191,7 +202,7 @@ func (s *Server) tearDownStack() {
 	if s.platform == nil {
 		return
 	}
-	fmt.Fprintln(os.Stderr, "operator: tearing down stack on SIGHUP")
+	fmt.Fprintln(os.Stderr, "operator: tearing down stack on SIGINT")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := s.platform.StackDown(ctx); err != nil {

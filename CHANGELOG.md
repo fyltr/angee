@@ -6,6 +6,16 @@ latest tag.
 
 ## Unreleased
 
+## v0.4.12 — 2026-05-15
+
+### Operator
+
+- Moved the stack-teardown shutdown trigger from SIGHUP to SIGINT (Ctrl-C
+  in a foreground operator, or what process-compose forwards when a dev
+  stack is interrupted). SIGTERM still performs a graceful HTTP shutdown
+  only, and SIGHUP is back to its default disposition. This supersedes the
+  SIGHUP-based behavior shipped in v0.4.11.
+
 ## v0.4.11 — 2026-05-15
 
 ### Operator
@@ -14,7 +24,7 @@ latest tag.
   down with you": after the HTTP server has shut down it runs
   `platform.StackDown`, terminating docker-compose services and
   process-compose-managed local processes. SIGINT and SIGTERM keep their
-  prior behavior of stopping only the HTTP server.
+  prior behavior of stopping only the HTTP server. (Superseded by v0.4.12.)
 
 ## v0.4.7 — 2026-05-10
 
